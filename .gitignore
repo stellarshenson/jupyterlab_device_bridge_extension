@@ -132,3 +132,6 @@ dmypy.json
 logs/
 
 tmp/
+
+# Jest junit reporter output
+junit.xml
