@@ -1,0 +1,8 @@
+{
+  "jupyter.lab.shortcuts": [],
+  "title": "jupyterlab_device_bridge_extension",
+  "description": "jupyterlab_device_bridge_extension settings.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

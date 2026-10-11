@@ -1,0 +1,18 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: v4.6.5
+_src_path: https://github.com/jupyterlab/extension-template
+advanced: false
+author_email: konrad.jelen@gmail.com
+author_name: Stellars Henson
+has_ai_rules: false
+has_binder: false
+has_settings: true
+kind: frontend-and-server
+labextension_name: jupyterlab_device_bridge_extension
+project_short_description: Bridge serial (COM) ports and USB devices of the browser's
+    computer into the JupyterLab container, so terminal programs and AI agents can
+    program and read microcontroller boards
+python_name: jupyterlab_device_bridge_extension
+repository: https://github.com/stellarshenson/jupyterlab_device_bridge_extension
+test: true
+

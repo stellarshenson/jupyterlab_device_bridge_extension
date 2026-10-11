@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/lib
+**/package.json
+!/package.json
+jupyterlab_device_bridge_extension
+eslint.config.mjs
+.venv
+.claude
+tmp
+docs/brief.md
+docs/acc-crit*.md
+docs/defects*.md
+.agents
