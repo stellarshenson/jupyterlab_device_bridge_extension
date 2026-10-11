@@ -23,21 +23,21 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "jupyter_server>=2.13.0,<3"
+    "jupyter_server>=2.21,<3"
 ]
 dynamic = ["version", "description", "authors", "urls", "keywords"]
 
 [project.optional-dependencies]
 dev = [
-    "jupyterlab>=4",
-    "jupyter-builder>=1.2.0",
+    "jupyterlab>=4.6,<5",
+    "jupyter-builder>=1.2,<2",
 ]
 test = [
-    "coverage",
-    "pytest",
-    "pytest-asyncio",
-    "pytest-cov",
-    "pytest-jupyter[server]>=0.6.0"
+    "coverage>=7.16,<8",
+    "pytest>=9.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "pytest-cov>=7.1,<8",
+    "pytest-jupyter[server]>=0.11,<1"
 ]
 
 [tool.hatch.version]
