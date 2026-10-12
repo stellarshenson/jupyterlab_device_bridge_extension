@@ -1,5 +1,368 @@
 /*
-    See the JupyterLab Developer Guide for useful CSS Patterns:
+ * Device bridge - the Devices panel of the sidebar and the status bar item.
+ * Structure and tokens follow jupyterlab_share_files_extension, so the panels
+ * of the family read alike. Every colour is a JupyterLab variable: a theme
+ * change recolours the panel with the lab.
+ */
 
-    https://jupyterlab.readthedocs.io/en/stable/developer/css.html
-*/
+.jp-DeviceBridgePanel {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--jp-layout-color1);
+  color: var(--jp-ui-font-color1);
+  font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size1);
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* A button, a line or a section that is not offered has the attribute hidden.
+   This rule outranks the display rules below, which would show it again. */
+.jp-DeviceBridgePanel [hidden] {
+  display: none;
+}
+
+/* Panel header */
+.jp-DeviceBridgePanel-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--jp-border-color2);
+  background: var(--jp-layout-color2);
+  flex: 0 0 auto;
+  min-height: 24px;
+}
+
+.jp-DeviceBridgePanel-headerTitle {
+  flex: 1 1 auto;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-size: var(--jp-ui-font-size0);
+  color: var(--jp-ui-font-color1);
+}
+
+/* The row of the two add buttons */
+.jp-DeviceBridgePanel-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--jp-border-color3);
+  flex: 0 0 auto;
+}
+
+/* Buttons */
+.jp-DeviceBridgePanel-button {
+  background: var(--jp-layout-color1);
+  border: 1px solid var(--jp-border-color2);
+  border-radius: var(--jp-border-radius);
+  padding: 2px 8px;
+  font-size: var(--jp-ui-font-size0);
+  font-family: var(--jp-ui-font-family);
+  cursor: pointer;
+  color: var(--jp-ui-font-color1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jp-DeviceBridgePanel-button:hover {
+  background: var(--jp-layout-color2);
+  border-color: var(--jp-border-color1);
+}
+
+.jp-DeviceBridgePanel-button:focus-visible {
+  outline: 1px solid var(--jp-brand-color1);
+  outline-offset: 1px;
+}
+
+/* faded by opacity, as the lab's own disabled buttons are */
+.jp-DeviceBridgePanel-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Grant: the one filled button of the panel */
+.jp-DeviceBridgePanel-button.jp-mod-accept {
+  background: var(--jp-brand-color1);
+  border-color: var(--jp-brand-color1);
+  color: var(--jp-ui-inverse-font-color1);
+}
+
+.jp-DeviceBridgePanel-button.jp-mod-accept:hover {
+  background: var(--jp-brand-color0);
+  border-color: var(--jp-brand-color0);
+}
+
+/* Forget, not armed: an outline, so that the fill of the armed button is the
+   signal */
+.jp-DeviceBridgePanel-button.jp-mod-warn {
+  border-color: var(--jp-error-color1);
+}
+
+/* Forget, armed: the next click removes the grant */
+.jp-DeviceBridgePanel-button.jp-mod-warn.jp-mod-confirm {
+  background: var(--jp-error-color1);
+  color: var(--jp-ui-inverse-font-color1);
+}
+
+/* each add button takes half the width of the panel */
+.jp-DeviceBridgePanel-toolbar .jp-DeviceBridgePanel-button {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The message for a browser without the device interfaces */
+.jp-DeviceBridgePanel-banner {
+  display: block;
+  flex: 0 0 auto;
+  margin: 8px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--jp-warn-color1) 35%, transparent);
+  border-radius: var(--jp-border-radius);
+  background: color-mix(in srgb, var(--jp-warn-color1) 15%, transparent);
+  line-height: 1.4;
+}
+
+/* Body: the scrolling area with the sections */
+.jp-DeviceBridgePanel-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.jp-DeviceBridgePanel-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--jp-border-color3);
+}
+
+.jp-DeviceBridgePanel-sectionHeader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size0);
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  overflow: hidden;
+}
+
+.jp-DeviceBridgePanel-sectionTitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jp-DeviceBridgePanel-sectionCount {
+  flex: 0 0 auto;
+  color: var(--jp-ui-font-color2);
+  font-weight: normal;
+  margin-left: 6px;
+}
+
+.jp-DeviceBridgePanel-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.jp-DeviceBridgePanel-empty {
+  padding: 6px 10px 8px;
+  color: var(--jp-ui-font-color2);
+  font-style: italic;
+  font-size: var(--jp-ui-font-size0);
+}
+
+/* Rows: one per device, one per device request */
+.jp-DeviceBridgePanel-item {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 8px 8px;
+  border-top: 1px solid var(--jp-border-color3);
+}
+
+.jp-DeviceBridgePanel-itemHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  line-height: 24px;
+}
+
+/* serial or USB: an outlined tag */
+.jp-DeviceBridgePanel-kind {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--jp-border-color1);
+  border-radius: var(--jp-border-radius);
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+/* the name programs use: an identifier, so in the code font */
+.jp-DeviceBridgePanel-itemName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-ui-font-size1);
+}
+
+/* attached, detached or held by another tab: the word carries the meaning,
+   the dot repeats it in colour */
+.jp-DeviceBridgePanel-state {
+  flex: 0 0 auto;
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+}
+
+.jp-DeviceBridgePanel-state::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--jp-ui-font-color3);
+}
+
+.jp-DeviceBridgePanel-item[data-owner='this']
+  .jp-DeviceBridgePanel-state::before {
+  background: var(--jp-success-color1);
+}
+
+.jp-DeviceBridgePanel-item[data-owner='other']
+  .jp-DeviceBridgePanel-state::before {
+  background: var(--jp-warn-color1);
+}
+
+/* a line of a row: the fixed words dim, the values in the text colour */
+.jp-DeviceBridgePanel-detail {
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.jp-DeviceBridgePanel-value {
+  color: var(--jp-ui-font-color1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the reason text of the browser */
+.jp-DeviceBridgePanel-error {
+  display: block;
+  color: var(--jp-error-color1);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.jp-DeviceBridgePanel-itemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+/* Profile editor of a serial port: closed until the user opens it */
+.jp-DeviceBridgePanel-profile {
+  padding-top: 6px;
+  font-size: var(--jp-ui-font-size0);
+}
+
+.jp-DeviceBridgePanel-profileSummary {
+  color: var(--jp-ui-font-color2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.jp-DeviceBridgePanel-profileSummary:hover {
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-DeviceBridgePanel-profileSummary:focus-visible {
+  outline: 1px solid var(--jp-brand-color1);
+  outline-offset: 1px;
+}
+
+.jp-DeviceBridgePanel-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.jp-DeviceBridgePanel-fieldLabel {
+  flex: 1 1 50%;
+  min-width: 0;
+  color: var(--jp-ui-font-color2);
+}
+
+/* an input keeps its intrinsic width as a flex item; min-width 0 lets it
+   shrink in a narrow sidebar */
+.jp-DeviceBridgePanel-input {
+  flex: 1 1 50%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: var(--jp-border-radius);
+  background: var(--jp-input-background, var(--jp-layout-color1));
+  color: var(--jp-ui-font-color1);
+  font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size0);
+  outline: none;
+}
+
+.jp-DeviceBridgePanel-input:focus {
+  border-color: var(--jp-brand-color1);
+}
+
+/* Footer: the round trip between the browser and the server */
+.jp-DeviceBridgePanel-footer {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-top: 1px solid var(--jp-border-color2);
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+}
+
+/* Status bar item: the icon of the bridge and the number of attached devices.
+   The status bar gives the item its height, padding and text colour. */
+.jp-DeviceBridgeStatus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: var(--jp-ui-font-size1);
+}
+
+.jp-DeviceBridgeStatus-icon {
+  display: flex;
+  align-items: center;
+}
+
+.jp-DeviceBridgeStatus-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.jp-DeviceBridgeStatus-count {
+  font-variant-numeric: tabular-nums;
+}

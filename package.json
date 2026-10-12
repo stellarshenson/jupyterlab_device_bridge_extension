@@ -1,6 +1,6 @@
 {
     "name": "jupyterlab_device_bridge_extension",
-    "version": "0.1.0",
+    "version": "0.6.16",
     "description": "Bridge serial (COM) ports and USB devices of the browser's computer into the JupyterLab container, so terminal programs and AI agents can program and read microcontroller boards",
     "keywords": [
         "jupyter",
@@ -58,9 +58,18 @@
     },
     "dependencies": {
         "@jupyterlab/application": "^4.6.0",
+        "@jupyterlab/apputils": "^4.7.0",
         "@jupyterlab/coreutils": "^6.6.0",
+        "@jupyterlab/mainmenu": "^4.6.0",
         "@jupyterlab/services": "^7.6.0",
-        "@jupyterlab/settingregistry": "^4.6.0"
+        "@jupyterlab/settingregistry": "^4.6.0",
+        "@jupyterlab/statusbar": "^4.6.0",
+        "@jupyterlab/ui-components": "^4.6.0",
+        "@lumino/coreutils": "^2.2.0",
+        "@lumino/disposable": "^2.1.0",
+        "@lumino/messaging": "^2.0.0",
+        "@lumino/signaling": "^2.1.0",
+        "@lumino/widgets": "^2.8.0"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.0",
@@ -71,6 +80,8 @@
         "@types/json-schema": "^7.0.11",
         "@types/react": "^18.3.0",
         "@types/react-addons-linked-state-mixin": "^0.14.22",
+        "@types/w3c-web-serial": "^1.0.0",
+        "@types/w3c-web-usb": "^1.0.0",
         "eslint": "^9.39.0",
         "eslint-config-prettier": "^9.1.0",
         "eslint-plugin-prettier": "^5.5.0",

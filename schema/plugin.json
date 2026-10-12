@@ -1,8 +1,122 @@
 {
   "jupyter.lab.shortcuts": [],
-  "title": "jupyterlab_device_bridge_extension",
-  "description": "jupyterlab_device_bridge_extension settings.",
+  "jupyter.lab.menus": {
+    "main": [
+      {
+        "id": "jp-mainmenu-view",
+        "items": [
+          {
+            "command": "device-bridge:show-panel",
+            "rank": 9.97
+          }
+        ]
+      }
+    ]
+  },
+  "title": "Device Bridge",
+  "description": "Settings of the device bridge, which gives programs in the container access to serial ports and USB devices of the computer where the browser runs.",
   "type": "object",
-  "properties": {},
+  "properties": {
+    "showPanel": {
+      "type": "boolean",
+      "title": "Show the Devices panel",
+      "description": "Put the Devices panel into the left sidebar. The menu item View → Show Devices Panel changes this same setting. Hiding the panel detaches no device. The change takes effect at once.",
+      "default": false
+    },
+    "showMenu": {
+      "type": "boolean",
+      "title": "Show the Devices menu",
+      "description": "Add a Devices menu to the menu bar of the lab, with the commands Connect Serial Port, Connect USB Device, Serial Terminal and Show Devices Panel. The change takes effect at once.",
+      "default": false
+    },
+    "defaultBaudRate": {
+      "type": "integer",
+      "title": "Default baud rate",
+      "description": "The baud rate a serial port gets when it is added. A port that is already in the Devices panel keeps its baud rate. A profile chosen later for the port replaces this value.",
+      "minimum": 1,
+      "maximum": 4294967295,
+      "default": 115200
+    },
+    "defaultDataBits": {
+      "type": "integer",
+      "title": "Default data bits",
+      "description": "The number of data bits a serial port gets when it is added. A port that is already in the Devices panel keeps its value. A profile chosen later for the port replaces this value.",
+      "oneOf": [
+        {
+          "const": 7,
+          "title": "7"
+        },
+        {
+          "const": 8,
+          "title": "8"
+        }
+      ],
+      "default": 8
+    },
+    "defaultParity": {
+      "type": "string",
+      "title": "Default parity",
+      "description": "The parity a serial port gets when it is added. A port that is already in the Devices panel keeps its value. A profile chosen later for the port replaces this value.",
+      "oneOf": [
+        {
+          "const": "none",
+          "title": "None"
+        },
+        {
+          "const": "even",
+          "title": "Even"
+        },
+        {
+          "const": "odd",
+          "title": "Odd"
+        }
+      ],
+      "default": "none"
+    },
+    "defaultStopBits": {
+      "type": "integer",
+      "title": "Default stop bits",
+      "description": "The number of stop bits a serial port gets when it is added. A port that is already in the Devices panel keeps its value. A profile chosen later for the port replaces this value.",
+      "oneOf": [
+        {
+          "const": 1,
+          "title": "1"
+        },
+        {
+          "const": 2,
+          "title": "2"
+        }
+      ],
+      "default": 1
+    },
+    "defaultOnOpen": {
+      "type": "string",
+      "title": "Default action when a program opens the port",
+      "description": "The action that runs on a serial port each time a program opens its virtual device, set when the port is added. A port that is already in the Devices panel keeps its action. A profile chosen later for the port replaces this value.",
+      "oneOf": [
+        {
+          "const": "none",
+          "title": "Do nothing"
+        },
+        {
+          "const": "pulse-dtr",
+          "title": "Pulse DTR"
+        },
+        {
+          "const": "pulse-rts",
+          "title": "Pulse RTS"
+        },
+        {
+          "const": "esp-bootloader",
+          "title": "Enter the ESP bootloader"
+        },
+        {
+          "const": "touch-1200",
+          "title": "Open at 1200 baud and close"
+        }
+      ],
+      "default": "none"
+    }
+  },
   "additionalProperties": false
 }
