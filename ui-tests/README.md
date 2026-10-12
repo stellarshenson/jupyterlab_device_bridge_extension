@@ -12,6 +12,21 @@ in [jupyter_server_test_config.py](./jupyter_server_test_config.py).
 
 The default configuration will produce video for failing tests and an HTML report.
 
+## What the suite tests
+
+No hardware is used. `tests/device-sim.js` simulates `navigator.serial` and `navigator.usb`
+in the page and in the worker of the extension. Everything else is real: the lab, the
+worker, the Jupyter server, the virtual serial devices, the `jupyterlab-device` command
+and a serial tool (`tests/serial_tool.py`), the last two as child processes.
+
+- The suite needs the installed extension, `python3`, and a C compiler (`cc` or `gcc`) for the preload shim
+- `JUPYTER_TEST_PORT` moves the test server off port 8888: `JUPYTER_TEST_PORT=8895 jlpm playwright test`
+- The test server lists itself in a private runtime directory, `.tmp-runtime/`, so that the `jupyterlab-device` command finds the test server and no other; the port the command falls back on is one where nothing listens, so a failed search fails the test
+- The test server keeps its virtual serial devices in `/tmp/jupyterlab-device-galata-<port>`
+- `sweep-scratch.js` removes both directories before and after a run
+- Every test title starts with the id of the criterion it proves, see `docs/acc-crit-device-bridge.md`
+- One run at a time: every run uses the one runtime directory, and the sweep of a second run removes the server record of the first
+
 > There is a UI mode that you may like; see [that video](https://www.youtube.com/watch?v=jF0yA-JLQW0).
 
 ## Run the tests

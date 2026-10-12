@@ -1,0 +1,2 @@
+# The private Jupyter runtime directory of the test server
+.tmp-runtime/

@@ -17,7 +17,14 @@ c.LabApp.user_settings_dir = mkdtemp(prefix="galata-settings-")
 
 # `or`, not a get() default: JavaScript's `||` reads "" as absent and falls back, so an
 # exported-but-empty JUPYTER_TEST_PORT must fall back here too (playwright.config.js)
-c.ServerApp.port = int(os.environ.get("JUPYTER_TEST_PORT") or "8888")
+port = int(os.environ.get("JUPYTER_TEST_PORT") or "8888")
+c.ServerApp.port = port
+
+# The virtual serial devices and the shim sockets of the test server get their own
+# directory, so the suite never shares one with a lab of this machine. It is under /tmp
+# like the default, because the path of a Unix socket holds about 100 characters.
+# sweep-scratch.js removes the same path.
+c.DeviceBridge.device_dir = f"/tmp/jupyterlab-device-galata-{port}"
 
 # The GalaxaHub message-of-the-day extension, where installed, opens its own tab at lab
 # start. Galata waits for the Launcher tab to be active, so every test would time out in
