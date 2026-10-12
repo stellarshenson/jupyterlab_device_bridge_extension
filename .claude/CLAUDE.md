@@ -50,20 +50,66 @@ Read their README, `docs/`, Python package and `src/` before designing:
 
 **The three parts the brief requires**: a frontend plugin (panel, status bar item, Web Serial and
 WebUSB, the byte path in a dedicated Web Worker), a server extension (websocket from the tab, one
-virtual serial device per attached port, a USB relay, a monitor buffer), and one CLI (suggested
-name `jupyterlab-device`) with a Python client module, a pyusb backend and a preload shim.
+virtual serial device per attached port, a USB relay, a monitor buffer), and one CLI,
+`jupyterlab-device`, with a Python client module, a pyusb backend and a preload shim.
 
-**State at project creation**: the code is the template's placeholder (one `hello` route, one
-activation message). No part of the brief is implemented. Update this section when that changes.
+**State**: the three parts are built to `docs/design.md`, the contract between them, and tested
+against simulated devices only. No test used a physical board: the criteria that need one
+(`ACC-BOARD-98` to `ACC-BOARD-107`, test tag `MANUAL`) are open. Update this section when the
+architecture changes.
+
+**Architecture**:
+
+- **Server** (Python, `jupyterlab_device_bridge_extension/`)
+  - `__init__.py` - the settings `DeviceBridge.device_dir` and `DeviceBridge.monitor_bytes`, one
+    `DeviceManager` per server, handler registration, release of the devices when the server ends
+  - `manager.py` - `DeviceManager`: tabs, claims and ownership, device names, commands to the tab
+    with `seq` and ack, device requests, the table broadcast; `SerialDevice` joins the profile, the
+    pty, the shim socket and the monitor buffer of one port
+  - `vserial.py` - `VirtualSerial`: the pty, its symlink in the device directory, tool open and
+    close, the holder, the baud rate, the queue to the tool; Linux only
+  - `monitor.py` - `MonitorBuffer`, the ring buffer of the bytes a port sent
+  - `profiles.py` - the five built-in profiles, the actions, the check of a profile change
+  - `usb.py` - the USB record and the plan of one USB operation
+  - `shim.py` - the Unix socket of one pty that the preload shim talks to
+  - `routes.py` - the WebSocket of the lab tabs (`@ws_authenticated`) and the REST API
+    (`@tornado.web.authenticated`), under `jupyterlab-device-bridge-extension/`
+- **CLI and client** (Python, same package)
+  - `cli.py` - `jupyterlab-device`, the one console script; its `--help` is written for agents
+  - `client.py` - `DeviceBridgeClient`, `SerialDevice`, `UsbDevice`, `DeviceBridgeError`; finds the
+    server and its token as the passkey extension does; importing it needs the package and with it
+    `jupyter_server`
+  - `pyusb_backend.py` - `get_backend()` and `install()`; the only module that imports pyusb
+  - `shim_build.py`, `shim/devshim.c` - the preload shim: the C source ships in the wheel and is
+    compiled on first use into `~/.cache/jupyterlab-device-bridge/`
+- **Frontend** (TypeScript, `src/`)
+  - `index.ts` - the plugin: four commands, the palette, the Devices menu (setting `showMenu`), the
+    notifications of device requests, the command that opens the serial terminal
+  - `model.ts` - `DeviceBridgeModel`: starts the worker, keeps what it reports, and is the only
+    caller of the grant dialogs `requestPort` and `requestDevice`
+  - `worker.ts` - `workerMain(scope)`, one self-contained function started from a Blob URL: the
+    WebSocket and every serial port and USB device
+  - `protocol.ts` - the types of the messages and the records; no code
+  - `panel.ts`, `status.ts`, `icons.ts` - the Devices panel, the status bar item, the icon
+  - `request.ts` - the REST helper and the WebSocket URL
+- **Serial terminal** - no code of this extension: `jupyterlab-device terminal` becomes pyserial's
+  miniterm, and the lab command types that command line into a JupyterLab terminal
+- **Schema** (`schema/plugin.json`) - the settings `showPanel` (the Devices panel is in the left sidebar
+  only while it is true; default false), `showMenu` and the five default serial settings of a new
+  port; the item Show Devices Panel of the View menu
+- **Tests** - pytest in `jupyterlab_device_bridge_extension/tests/` (fixtures in `conftest.py`,
+  `fake_tab.py` plays the browser tab, `test_readme.py` holds the README to the brief); Jest in
+  `src/__tests__/` (`sim.ts` simulates `navigator.serial`, `navigator.usb` and the WebSocket);
+  Playwright/Galata in `ui-tests/` (`tests/device-sim.js` simulates both interfaces in the page and
+  in the worker; the lab, the server, the CLI and miniterm are real)
+- **Agent skill** (`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`) - tells an agent
+  to read `jupyterlab-device --help` first; the wheel installs it under `share/jupyter/agents/skills/`
+- **CI/CD** - GitHub Actions plus jupyter-releaser under `.github/workflows/`
 
 **Terms**: a **grant** is the user's permission for one device in Chrome's dialog; **attached**
 means the tab holds the device and the server exposes it to container programs; a **profile** is
 the serial settings (parity, data bits, stop bits) plus the action on open; the **shim** is the
 `LD_PRELOAD` library that passes a tool's DTR, RTS and parity calls to the bridge.
-
-**Tests** - pytest in `jupyterlab_device_bridge_extension/tests/`, Jest in `src/__tests__/`,
-Playwright/Galata in `ui-tests/`. **CI/CD** - GitHub Actions plus jupyter-releaser under
-`.github/workflows/`.
 
 ## Build Lifecycle - Makefile Only
 
@@ -157,6 +203,9 @@ A command-line tool the extension ships (an entry point under `[project.scripts]
 - Run `graphify affected` before editing existing code to learn its callers and dependents; that
   affected set is the change budget, and an edit outside it needs the Star Colonel's word
 - Run `graphify update` after every edit
+- The graph lives in `tmp/graphify-out/`, not in graphify's default `graphify-out/`: prefix every
+  graphify command with `GRAPHIFY_OUT=tmp/graphify-out`, for example
+  `GRAPHIFY_OUT=tmp/graphify-out graphify update .`
 - `tmp/` is gitignored, so the graph never ships
 
 ## Required Skills

@@ -1,0 +1,793 @@
+# Acceptance Criteria - jupyterlab_device_bridge_extension
+
+Programs in the lab container reach a serial port or a USB device of the browser's computer. The browser tab holds the device through Web Serial and WebUSB, a Web Worker moves the bytes over one WebSocket, and the server gives each serial port a virtual serial device and each USB device a relay. Design: `docs/design.md`.
+
+## Authors
+
+- `@kj` Konrad Jelen
+
+## Serial ports `SERIAL`
+
+Attach a port, its virtual serial device, bytes both ways, baud rate, tool open and close
+
+- [x] `ACC-SERIAL-1` **Add port from the panel** - HIGH; the panel's add serial port button opens the browser's port dialog; the granted port is listed as attached
+  - evidence: verify round 1: galata serial.spec.ts ACC-SERIAL-1 passed in the Galata suite; red under 'the serial record always says detached' (galata)
+  - test: galata serial.spec.ts: click add with a simulated port, assert the row shows attached
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:48:56Z @kj closed: verified
+- [x] `ACC-SERIAL-2` **Granted port attached on load** - HIGH; a port granted earlier is attached after a page load without a click
+  - evidence: verify round 1: galata serial.spec.ts ACC-SERIAL-2 passed in the Galata suite; red under 'the worker does not list the granted devices when it connects' (galata)
+  - test: galata serial.spec.ts: grant, reload the page, assert the row is attached with no click
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:02Z @kj closed: verified
+- [x] `ACC-SERIAL-3` **Virtual device per port** - CRITICAL; each attached port has one path under the device directory, outside /dev, that opens as a terminal device
+  - evidence: verify round 1: pytest test_vserial.py::test_acc_serial_3_one_path_outside_dev_that_opens_as_a_terminal passed in make test; red under 'the path of the device links to /dev/null, which is no terminal device' (pytest)
+  - test: pytest test_vserial.py: create a device, open its path, assert os.isatty and the path is outside /dev
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:02Z @kj closed: verified
+- [x] `ACC-SERIAL-4` **Stable path** - HIGH; the same port keeps its name and path after detach and attach, and after the owning tab reconnects
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_4_same_name_and_path_after_detach_and_after_reconnect passed in make test; red under 'a key gets a new name at every claim' (pytest)
+  - test: pytest test_manager.py: claim, release, claim the same key, assert equal name and path
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:02Z @kj closed: verified
+- [x] `ACC-SERIAL-5` **Tool to port bytes** - CRITICAL; all 256 byte values a tool writes to the virtual device reach the port, in order
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_5_all_256_byte_values_reach_the_port_in_order; galata serial.spec.ts ACC-SERIAL-5 passed in make test and the Galata suite; red under 'the byte value 0x00 of a tool is not sent to the tab' (pytest); 'the bytes of a tool are sent to the tab in reverse order' (galata)
+  - test: pytest test_manager.py: write bytes 0-255 to the path, assert the fake tab received them in order; galata serial.spec.ts: same through the simulated port
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:02Z @kj closed: verified
+- [x] `ACC-SERIAL-6` **Port to tool bytes** - CRITICAL; all 256 byte values the port sends reach the tool that holds the virtual device, in order
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_6_all_256_byte_values_reach_the_tool_in_order; galata serial.spec.ts ACC-SERIAL-6 passed in make test and the Galata suite; red under 'the byte value 0x03 from the port reaches the tool as 0x04' (pytest, galata)
+  - test: pytest test_manager.py: fake tab sends bytes 0-255, assert the tool reads them in order; galata serial.spec.ts: echo of 0-255 returns
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:02Z @kj closed: verified
+- [x] `ACC-SERIAL-7` **No loss at volume** - HIGH; 1 MiB written by a tool and echoed by the port returns identical
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_7_1_mib_echoed_by_the_port_returns_identical passed in make test; red under 'of a chunk a tool wrote, only the first 2048 bytes are passed on' (pytest)
+  - test: pytest test_manager.py: echo 1 MiB through the fake tab, compare sha256
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:02Z @kj closed: verified
+- [x] `ACC-SERIAL-8` **Raw device** - HIGH; before a tool sets anything the virtual device has no echo and no CR or LF translation
+  - evidence: verify round 1: pytest test_vserial.py::test_acc_serial_8_a_fresh_device_is_raw passed in make test; red under 'the pty keeps echo: bytes of the port come back to the port' (pytest)
+  - test: pytest test_vserial.py: write CR LF bytes to the master with no tool settings, assert the slave reads them unchanged and the master reads nothing back
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-9` **Baud rate applied** - CRITICAL; the baud rate a tool sets on the virtual device is the baud rate the port is opened with
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_9_the_baud_rate_a_tool_sets_is_sent_to_the_port; jest worker.spec.ts 'ACC-SERIAL-9 a reconfigure ...'; galata serial.spec.ts ACC-SERIAL-9 passed in make test and the Galata suite; red under 'the baud rate a tool sets is not put into the settings of the port' (pytest, galata); 'the port is always opened at 115200 baud' (jest)
+  - test: pytest test_manager.py: tool sets 57600, assert serial-configure 57600; galata serial.spec.ts: assert the simulated port recorded 57600
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-10` **Baud before bytes** - HIGH; bytes a tool writes right after a baud change reach the port only after the reopen at the new baud
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_10_the_baud_change_reaches_the_tab_before_the_bytes; jest worker.spec.ts 'ACC-SERIAL-10 bytes issued ...' passed in make test; red under 'the bytes of a tool are passed on before its new baud rate is read' (pytest); 'bytes of a data frame are written at once, not after the jobs issued before them' (jest)
+  - test: jest worker.spec.ts: configure then write, assert the simulated port got the bytes at the new baud; pytest test_manager.py: assert configure precedes the data frame
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:41Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-11` **Tool open detected** - HIGH; when a tool opens the virtual device the device record shows the tool's pid and program name within 1 s
+  - evidence: verify round 1: pytest test_vserial.py::test_acc_serial_11_holder_pid_and_name_within_1_s passed in make test; red under 'the holder of the device is not looked up' (pytest)
+  - test: pytest test_vserial.py: open the path from a child process, assert holder pid and name within 1 s
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-12` **Tool close detected** - HIGH; when the tool closes the device the holder is cleared and the port returns to the profile's baud rate
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_12_after_the_tool_closed_the_port_returns_to_the_profile_baud passed in make test; red under 'after a tool close the port is not set back to the profile' (pytest)
+  - test: pytest test_manager.py: close the path, assert holder null and serial-configure with the profile baud
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-13` **No stale bytes** - HIGH; bytes the port sent while no tool held the device are not delivered to the next tool
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_13_bytes_sent_with_no_tool_are_not_delivered_to_the_next_tool passed in make test; red under 'bytes of the port are queued also while no tool holds the device' (pytest)
+  - test: pytest test_manager.py: fake tab sends bytes with no tool, then a tool opens and reads, assert it gets only later bytes
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-14` **Bytes move in a worker** - HIGH; the port streams and the WebSocket live in a dedicated Web Worker, not in the page
+  - evidence: verify round 1: galata serial.spec.ts ACC-SERIAL-14 passed in the Galata suite; red under 'the page itself opens a WebSocket to the bridge' (galata)
+  - test: galata serial.spec.ts: assert a worker exists and the page itself opened no bridge WebSocket
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-15` **Round trip shown** - MEDIUM; the panel shows the measured browser to server round trip in milliseconds
+  - evidence: verify round 1: galata panel.spec.ts ACC-SERIAL-15 passed in the Galata suite; red under 'the server does not answer the ping of the tab' (galata)
+  - test: galata panel.spec.ts: assert the round trip field holds a number of ms
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-16` **Edge: port removed** - MEDIUM; when the port is unplugged the device becomes detached with reason removed; its path stays
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_16_a_removed_port_is_detached_and_keeps_its_path; jest worker.spec.ts 'ACC-SERIAL-16 an unplugged port is ...'; galata serial.spec.ts ACC-SERIAL-16 passed in make test and the Galata suite; red under 'a removed device is detached without the reason removed' (pytest, galata); 'an unplugged device is released with reason detach' (jest)
+  - test: jest worker.spec.ts: fire disconnect, assert release removed; pytest test_manager.py: assert state detached and the path exists
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-17` **Edge: port open fails** - MEDIUM; when the browser cannot open the port the device shows an error with the browser's reason text
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-SERIAL-17 a port the browser ...'; galata serial.spec.ts ACC-SERIAL-17 passed in make test and the Galata suite; red under 'the reason text of the browser is not reported' (jest); 'the reason text of the browser is not kept in the record' (galata)
+  - test: jest worker.spec.ts: simulated open rejects, assert serial-state error with the message; galata serial.spec.ts: assert the row shows the text
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-18` **Detach** - MEDIUM; detach closes the port and keeps the grant; the device is listed as detached
+  - evidence: verify round 1: galata serial.spec.ts ACC-SERIAL-18 passed in the Galata suite; red under 'the server does not carry out a release with reason detach' (galata)
+  - test: galata serial.spec.ts: click detach, assert the simulated port is closed, still granted, row detached
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-19` **Forget** - MEDIUM; forget revokes the grant and removes the device and its path
+  - evidence: verify round 1: galata serial.spec.ts ACC-SERIAL-19 passed in the Galata suite; red under 'forget leaves the virtual serial device and its path' (galata)
+  - test: galata serial.spec.ts: click forget, assert the grant is gone and the path does not exist
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-20` **Edge: tab closes** - MEDIUM; when the owning tab disconnects its devices become detached and their paths stay
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_20_devices_of_a_closed_tab_are_detached_and_keep_their_paths passed in make test; red under 'the devices of a closed tab stay attached' (pytest)
+  - test: pytest test_manager.py: close the fake tab socket, assert state detached and the path exists
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-21` **Edge: tool writes while detached** - MEDIUM; bytes a tool writes to a detached device are dropped and the tool is not blocked
+  - evidence: verify round 1: pytest test_manager.py::test_acc_serial_21_a_tool_that_writes_to_a_detached_device_is_not_blocked passed in make test; red under 'bytes for a detached device are sent to another connected tab' (pytest)
+  - test: pytest test_manager.py: detach, write 64 KiB to the path, assert the write returns and nothing reaches a tab
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+
+## Port profiles `PROF`
+
+Serial settings and the action on open, built-in profiles
+
+- [x] `ACC-PROF-22` **Built-in profiles** - HIGH; five built-in profiles exist: monitor, arduino-upload (pulse-dtr), arduino-isp (no action), stm32-bootloader (8E1), esp-upload (esp-bootloader)
+  - evidence: verify round 1: pytest test_profiles.py::test_acc_prof_22_five_built_in_profiles passed in make test; red under 'the profile stm32-bootloader has no parity' (pytest)
+  - test: pytest test_profiles.py: assert the five ids and those fields
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-PROF-23` **Profile set from the panel** - HIGH; parity, data bits, stop bits and the action on open of a serial port are set in the panel
+  - evidence: verify round 1: galata panel.spec.ts ACC-PROF-23 passed in the Galata suite; red under 'the profile stm32-bootloader has no parity' (galata)
+  - test: galata panel.spec.ts: choose stm32-bootloader in the row, assert the device record and the simulated port show even parity
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-24` **Profile set from the CLI** - HIGH; the profile command sets a device's profile and single fields
+  - evidence: verify round 1: pytest test_cli.py::test_acc_prof_24_profile_sets_the_profile_and_single_fields; galata cli.spec.ts ACC-PROF-24 passed in make test and the Galata suite; red under 'the profile command does not send --parity' (pytest, galata)
+  - test: pytest test_cli.py: run profile with an id and --parity, assert the device record; galata cli.spec.ts: same against the real server
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-25` **Profile settings reach the port** - HIGH; the profile's parity, data bits and stop bits are what the port is opened with
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-PROF-25 a port claimed with ...' passed in make test; red under 'the port is always opened without parity' (jest)
+  - test: jest worker.spec.ts: claimed with 8E1, assert the simulated port opened with even parity
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:42Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-26` **Action pulse-dtr** - HIGH; on tool open with pulse-dtr the port sees DTR false, then DTR true
+  - evidence: verify round 1: pytest test_manager.py::test_acc_prof_26_pulse_dtr_is_run_when_a_tool_opens_the_device; jest worker.spec.ts 'ACC-PROF-26 pulse-dtr sets DTR false, ...' passed in make test; red under 'no action is sent when a tool opens the device' (pytest); 'pulse-dtr sets DTR true, then false' (jest)
+  - test: jest worker.spec.ts: run pulse-dtr, assert the recorded signal order; pytest test_manager.py: assert serial-action pulse-dtr on tool open
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-27` **Action pulse-rts** - MEDIUM; on tool open with pulse-rts the port sees RTS false, then RTS true
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-PROF-27 pulse-rts sets RTS false, ...' passed in make test; red under 'pulse-rts does not wait between RTS false and RTS true' (jest)
+  - test: jest worker.spec.ts: run pulse-rts, assert the recorded signal order
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-28` **Action esp-bootloader** - HIGH; the port sees DTR false with RTS true, then DTR true with RTS false, then both false
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-PROF-28 esp-bootloader sets DTR false ...' passed in make test; red under 'the second step of esp-bootloader leaves RTS true' (jest)
+  - test: jest worker.spec.ts: run esp-bootloader, assert the three recorded states in order
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-29` **Action touch-1200** - MEDIUM; the port is opened at 1200 baud and closed, then reopened with the previous settings when it still exists
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-PROF-29 touch-1200 opens the port ...' passed in make test; red under 'touch-1200 opens the port at 2400 baud' (jest)
+  - test: jest worker.spec.ts: run touch-1200, assert the recorded open at 1200, the close and the reopen
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-30` **No action on open** - HIGH; with arduino-isp or monitor a tool open changes no control line
+  - evidence: verify round 1: pytest test_manager.py::test_acc_prof_30_no_action_and_no_signal_with_on_open_none; jest worker.spec.ts 'ACC-PROF-30 a claim, a reconfigure ...' passed in make test; red under 'an action is sent on tool open also when the profile says none' (pytest); 'the action none sets DTR' (jest)
+  - test: jest worker.spec.ts and pytest test_manager.py: tool open with onOpen none, assert no signal call and no serial-action
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-31` **Usable with profiles alone** - HIGH; a tool whose DTR call is refused still exchanges bytes with the port and gets the profile's action, with no shim
+  - evidence: verify round 1: galata serial.spec.ts ACC-PROF-31 passed in the Galata suite; red under 'no action is sent when a tool opens the device' (galata)
+  - test: galata serial.spec.ts: python tool without shim opens the path with arduino-upload, assert the DTR pulse was recorded and the echo returns
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-32` **Edge: invalid profile input** - MEDIUM; an unknown profile id, action, parity or bit count is refused with status 400 and a message naming the field
+  - evidence: verify round 1: pytest test_routes.py -k test_acc_prof_32_invalid_profile_input_is_400_and_names_the_field passed in make test; red under 'the parity `mark` is accepted' (pytest)
+  - test: pytest test_routes.py: PUT each bad value, assert 400 and the field name
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-PROF-118` **Default serial settings** - HIGH; settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record lists the values that differ from profile monitor as overrides
+  - evidence: pytest test_manager.py and test_profiles.py 'acc_prof_118', jest worker, model and index specs, galata serial.spec.ts 'ACC-PROF-118' pass (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red when the server ignores the defaults, the worker drops them, or a USB claim carries them (checks 1-3, 15-20, 41-44, 47, 65)
+  - test: pytest test_manager.py: first claim with defaults, assert settings and overrides; jest worker.spec.ts: the claim carries the defaults; galata serial.spec.ts: set 9600 7 even 2 pulse-dtr, add a port, assert the open options and the row
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T14:06:46Z @kj added
+  - log: 2026-10-12T17:04:16Z @kj closed
+- [x] `ACC-PROF-119` **Defaults apply to new ports only** - HIGH; a changed default changes no existing record; a port added after the change gets the new values without a reload
+  - evidence: pytest test_acc_prof_119_a_later_claim_with_other_defaults_keeps_the_record, jest worker, model and index specs, galata serial.spec.ts 'ACC-PROF-119' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red when a later claim applies its defaults or a change does not reach the model (checks 4-6, 18, 21, 45, 48, 66)
+  - test: pytest test_manager.py: a second claim of a key with other defaults keeps the record; galata serial.spec.ts: change defaultBaudRate, add a second port, assert its baud rate and the first port unchanged
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T14:06:46Z @kj added
+  - log: 2026-10-12T16:43:49Z @kj closed
+- [x] `ACC-PROF-120` **Edge: refused defaults** - MEDIUM; a claim whose defaults hold an unknown field, a profile id or a value outside the profile choices is refused and makes no record
+  - evidence: pytest test_manager.py 13 cases and test_profiles.py 8 cases 'acc_prof_120' pass (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red when a profile id is accepted, values are not checked, or the check runs after the key got its name (checks 7-10)
+  - test: pytest test_manager.py: claims with baudRate 0, parity mark, a field profile and an unknown field, assert claimed ok false and an empty table
+  - test-tags: UNIT
+  - log: 2026-10-12T14:06:46Z @kj added
+  - log: 2026-10-12T17:04:16Z @kj closed
+- [x] `ACC-PROF-121` **Settings schema matches the server** - MEDIUM; the defaults and choices of the five default settings in schema/plugin.json equal profile monitor and the choices of profiles.py
+  - evidence: pytest test_acc_prof_121_the_default_settings_of_the_schema_equal_profile_monitor_and_the_choices_of_the_server passes (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red with schema default 9600, parity mark, a sixth action (checks 11-13) and with the baud maximum removed from the schema
+  - test: pytest test_profiles.py: read schema/plugin.json, compare the defaults with profile monitor and the enums with the choices
+  - test-tags: UNIT
+  - log: 2026-10-12T14:06:46Z @kj added
+  - log: 2026-10-12T17:04:16Z @kj closed
+- [x] `ACC-PROF-123` **Settings choices carry the panel's labels** - MEDIUM; the choices of the four default settings with fixed values are oneOf entries with const and title; the titles of default parity and default action on open equal the labels the panel shows for the same values
+  - evidence: jest panel.spec.ts, pytest test_acc_prof_123_each_choice_of_the_schema_is_a_value_of_the_server_with_a_title, galata serial.spec.ts 'ACC-PROF-123' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red with an enum, a raw value as title, a title that stores another value (checks 101-103, 111-113, 125-127)
+  - test: jest panel.spec.ts: read schema/plugin.json, compare the titles of defaultParity and defaultOnOpen with the option labels of the profile editor; pytest test_profiles.py: the const values equal the choices
+  - test-tags: UNIT
+  - log: 2026-10-12T15:18:24Z @kj added
+  - log: 2026-10-12T16:43:49Z @kj closed
+
+## Preload shim `SHIM`
+
+A tool's own DTR, RTS and parity calls passed to the bridge
+
+- [x] `ACC-SHIM-33` **DTR and RTS passed** - HIGH; DTR and RTS calls of a tool started with run reach the port in the tool's order
+  - evidence: verify round 1: pytest test_shim.py::test_acc_shim_33_dtr_and_rts_calls_reach_the_port_in_the_tools_order; galata cli.spec.ts ACC-SHIM-33 passed in make test and the Galata suite; red under 'the shim reports DTR inverted' (pytest); 'the bridge takes DTR for RTS and RTS for DTR' (galata)
+  - test: pytest test_shim.py: compiled shim, python tool sets and clears DTR and RTS, assert the fake tab got the same states in order; galata cli.spec.ts: same through the simulated port
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-SHIM-34` **Parity kept** - HIGH; a tool that sets 8E1 reads back 8E1, and the port is reopened with even parity
+  - evidence: verify round 1: pytest test_shim.py::test_acc_shim_34_a_tool_that_sets_8e1_reads_it_back_and_the_port_gets_even_parity passed in make test; red under 'tcgetattr under the shim does not give back the tool's frame format' (pytest)
+  - test: pytest test_shim.py: tool sets 8E1 with tcsetattr, assert tcgetattr shows PARENB and serial-configure has parity even
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-SHIM-35` **Run form** - HIGH; run -- CMD starts CMD with the shim loaded and exits with CMD's exit status
+  - evidence: verify round 1: pytest test_cli.py::test_acc_shim_35_run_starts_the_tool_with_the_shim_and_exits_with_its_status passed in make test; red under 'run starts the tool without the shim in LD_PRELOAD' (pytest)
+  - test: pytest test_cli.py: run -- sh -c 'exit 7', assert exit 7 and LD_PRELOAD set in the child
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-SHIM-36` **Built on first use** - MEDIUM; the shim is built from the shipped C source with the system compiler on first run and reused after
+  - evidence: verify round 1: pytest test_shim.py::test_acc_shim_36_the_shim_is_built_on_first_use_and_reused passed in make test; red under 'the shim is compiled on every call' (pytest)
+  - test: pytest test_shim.py: empty cache, build twice, assert one compiler call and the same file
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:04Z @kj closed: verified
+- [x] `ACC-SHIM-37` **Edge: no compiler** - MEDIUM; without a C compiler run exits non-zero and its message says profiles need no shim
+  - evidence: verify round 1: pytest test_cli.py::test_acc_shim_37_run_without_a_c_compiler_names_profiles passed in make test; red under 'the message without a compiler does not say that a profile needs no shim' (pytest)
+  - test: pytest test_cli.py: PATH without cc and gcc, assert exit code and the message
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-SHIM-38` **Other descriptors untouched** - MEDIUM; under the shim a terminal call on a descriptor that is not a bridge device behaves as without the shim
+  - evidence: verify round 1: pytest test_shim.py::test_acc_shim_38_descriptors_that_are_no_bridge_device_behave_as_without_the_shim passed in make test; red under 'the shim takes every pty for a bridge device' (pytest)
+  - test: pytest test_shim.py: tool calls tcgetattr and TIOCMGET on a plain pty and a file, assert the same results as without LD_PRELOAD
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+
+## Monitor `MON`
+
+Recent port output kept on the server, read and written from the CLI
+
+- [x] `ACC-MON-39` **Output kept before the call** - CRITICAL; bytes the port sent before a CLI call are printed by monitor read
+  - evidence: verify round 1: pytest test_cli.py::test_acc_mon_39_monitor_read_prints_what_the_port_sent_before_the_call; galata cli.spec.ts ACC-MON-39 passed in make test and the Galata suite; red under 'monitor read starts at the newest byte, so earlier output is not printed' (pytest, galata)
+  - test: pytest test_cli.py: fake tab sends lines, then monitor read prints them; galata cli.spec.ts: same with the simulated port
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-MON-40` **Buffer bound** - MEDIUM; the buffer keeps at most its configured size and drops the oldest bytes first
+  - evidence: verify round 1: pytest test_monitor.py::test_acc_mon_40_buffer_keeps_its_size_and_drops_the_oldest_bytes passed in make test; red under 'the buffer drops no byte' (pytest)
+  - test: pytest test_monitor.py: append twice the size, assert length, content and the dropped flag
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:43Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-MON-41` **Last N lines** - HIGH; monitor read --lines N prints the last N lines
+  - evidence: verify round 1: pytest test_cli.py::test_acc_mon_41_lines_prints_the_last_lines passed in make test; red under '--lines N prints the first N lines' (pytest)
+  - test: pytest test_cli.py: buffer of 10 lines, --lines 3, assert the last three
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-MON-42` **Follow with a time limit** - HIGH; monitor read --follow --timeout S prints bytes as they arrive and exits 0 when the time ends
+  - evidence: verify round 1: pytest test_cli.py::test_acc_mon_42_follow_prints_new_bytes_until_the_timeout passed in make test; red under '--follow prints no byte that arrives after the call' (pytest)
+  - test: pytest test_cli.py: follow for 2 s while the fake tab sends, assert the output and exit 0 after the limit
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-MON-43` **Write** - HIGH; monitor write sends the given bytes to the port
+  - evidence: verify round 1: pytest test_cli.py::test_acc_mon_43_monitor_write_sends_the_bytes_to_the_port; jest worker.spec.ts 'ACC-MON-43 serial-write writes the base64 ...'; galata cli.spec.ts ACC-MON-43 passed in make test and the Galata suite; red under 'monitor write sends the bytes in reverse order' (pytest, galata); 'serial-write drops the first byte' (jest)
+  - test: pytest test_cli.py: monitor write, assert the fake tab got the bytes; galata cli.spec.ts: write then read the echo
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-MON-44` **Recorded while a tool holds the device** - MEDIUM; port output is also kept in the buffer while a tool holds the virtual device
+  - evidence: verify round 1: pytest test_manager.py::test_acc_mon_44_port_output_is_recorded_while_a_tool_holds_the_device passed in make test; red under 'port output is not recorded while a tool holds the device' (pytest)
+  - test: pytest test_manager.py: tool holds the path, fake tab sends, assert the tool and the buffer both have the bytes
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+
+## USB devices `USB`
+
+Attach, device requests, operations, Python client, pyusb backend, errors
+
+- [x] `ACC-USB-45` **Add device from the panel** - HIGH; the panel's add USB device button opens the browser's device dialog; the granted device is listed as attached
+  - evidence: verify round 1: galata usb.spec.ts ACC-USB-45 passed in the Galata suite; red under 'the USB record always says detached' (galata)
+  - test: galata usb.spec.ts: click add with a simulated device, assert the row shows attached
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-USB-46` **Granted device attached on load** - HIGH; a USB device granted earlier is attached after a page load without a click
+  - evidence: verify round 1: galata usb.spec.ts ACC-USB-46 passed in the Galata suite; red under 'the worker does not list the granted devices when it connects' (galata)
+  - test: galata usb.spec.ts: grant, reload, assert the row is attached with no click
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-USB-47` **Device request shown** - HIGH; a request from a container program appears in the panel with the program name, the vendor and product id and the reason
+  - evidence: verify round 1: galata usb.spec.ts ACC-USB-47 passed in the Galata suite; red under 'the request command names another program' (galata)
+  - test: galata usb.spec.ts: CLI request usb, assert the pending row text
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-USB-48` **Grant opens the filtered dialog** - HIGH; the grant click opens the device dialog with the requested vendor and product filter, attaches the device and ends the request as granted
+  - evidence: verify round 1: galata usb.spec.ts ACC-USB-48 passed in the Galata suite; red under 'a granted request is ended as denied' (galata)
+  - test: galata usb.spec.ts: click grant, assert the recorded filter, the attached row and CLI exit 0
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-USB-49` **Edge: request refused** - MEDIUM; when the user cancels the dialog the request ends as denied and the CLI exits 1 with the reason
+  - evidence: verify round 1: galata usb.spec.ts ACC-USB-49 passed in the Galata suite; red under 'a denied request keeps no reason' (galata)
+  - test: galata usb.spec.ts: simulated dialog rejects, assert CLI exit 1 and stderr text
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-USB-50` **Edge: request not answered** - MEDIUM; a request with no answer makes the CLI exit 2 at its timeout
+  - evidence: verify round 1: pytest test_cli.py::test_acc_usb_50_request_exits_2_when_nobody_answers passed in make test; red under 'request exits 1 when nobody answers' (pytest)
+  - test: pytest test_cli.py: request with --timeout 1 and no tab answer, assert exit 2
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-51` **Descriptors listed** - HIGH; a device lists its configurations, interfaces, endpoints and strings
+  - evidence: verify round 1: pytest test_usb.py::test_acc_usb_51_descriptors_list_configurations_interfaces_endpoints_and_strings; galata cli.spec.ts ACC-USB-51 passed in make test and the Galata suite; red under 'the descriptors keep no configuration' (pytest, galata)
+  - test: pytest test_usb.py: fake tab device, GET usb/<name>, assert all four; galata cli.spec.ts: usb describe prints them
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-52` **Open and close** - HIGH; open and close reach the browser device
+  - evidence: verify round 1: pytest test_usb.py::test_acc_usb_52_open_and_close_reach_the_browser_device; jest worker.spec.ts 'ACC-USB-52 open and close reach ...' passed in make test; red under 'the record does not follow open and close of a USB device' (pytest); 'the operation close does not close the browser device' (jest)
+  - test: jest worker.spec.ts: usb open then close, assert the simulated device state; pytest test_usb.py: relay round trip
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-53` **Configuration, interface, alternate** - HIGH; select configuration, claim interface, release interface and select alternate setting reach the browser device with their numbers
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-USB-53 select configuration, claim interface, ...' passed in make test; red under 'claim-interface claims the next interface number' (jest)
+  - test: jest worker.spec.ts: each op, assert the recorded call and argument
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-54` **Control transfers** - HIGH; control transfer in returns the device's bytes and control transfer out delivers the caller's bytes
+  - evidence: verify round 1: pytest test_usb.py::test_acc_usb_54_control_transfers_carry_the_bytes_both_ways; jest worker.spec.ts 'ACC-USB-54 control transfer in returns ...'; galata cli.spec.ts ACC-USB-54 passed in make test and the Galata suite; red under 'the result of a USB operation is not returned to the caller' (pytest, galata); 'a control transfer out carries no data' (jest)
+  - test: jest worker.spec.ts and pytest test_usb.py: GET_DESCRIPTOR in, vendor request out, assert bytes; galata cli.spec.ts: usb control against the simulated device
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-55` **Bulk transfers** - HIGH; bulk transfer out delivers the caller's bytes and bulk transfer in returns the device's bytes
+  - evidence: verify round 1: pytest test_usb.py::test_acc_usb_55_bulk_transfers_carry_the_bytes_both_ways; jest worker.spec.ts 'ACC-USB-55 bulk transfer ...'; galata cli.spec.ts ACC-USB-55 passed in make test and the Galata suite; red under 'a transfer in carries no timeout to the tab' (pytest); 'a transfer out drops the first byte' (jest); 'transfer_out of the client sends no data' (galata)
+  - test: jest worker.spec.ts and pytest test_usb.py: loopback endpoint, assert bytes; galata cli.spec.ts: usb transfer out then in
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-56` **Interrupt transfers** - MEDIUM; interrupt transfer in and out work through the same calls as bulk
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-USB-56 interrupt transfer out and ...' passed in make test; red under 'a transfer out drops the first byte (interrupt endpoint)' (jest)
+  - test: jest worker.spec.ts: interrupt endpoint of the simulated device, assert bytes both ways
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:44Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-57` **Clear halt and reset** - MEDIUM; clear halt and reset reach the browser device
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-USB-57 clear halt and reset ...' passed in make test; red under 'the operation reset does not reset the browser device' (jest)
+  - test: jest worker.spec.ts: each op, assert the recorded call
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-58` **Python client** - HIGH; the client module has one method per USB operation and returns bytes for transfers
+  - evidence: verify round 1: pytest test_client.py::test_acc_usb_58_one_method_per_usb_operation passed in make test; red under 'transfer_in of the client returns the base64 text, not bytes' (pytest)
+  - test: pytest test_client.py: each method against the fake tab, assert results
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-59` **pyusb backend** - HIGH; a pyusb program finds a bridged device through the backend and runs a control transfer, a write and a read
+  - evidence: verify round 1: pytest test_pyusb_backend.py::test_acc_usb_59_a_pyusb_program_finds_the_device_and_transfers passed in make test; red under 'transfer_out of the client sends no data' (pytest)
+  - test: pytest test_pyusb_backend.py: usb.core.find with the backend against the fake tab, ctrl_transfer, write, read
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-60` **Browser error text reaches the caller** - HIGH; when the browser refuses an operation the caller gets the browser's error name and message
+  - evidence: verify round 1: pytest test_client.py::test_acc_usb_60_browser_error_reaches_the_caller; jest worker.spec.ts 'ACC-USB-60 a call ...'; galata cli.spec.ts ACC-USB-60 passed in make test and the Galata suite; red under 'the error name of the browser is dropped' (pytest, galata); 'a refused command is answered with a fixed error, not the one of the browser' (jest)
+  - test: pytest test_client.py: fake tab answers NetworkError with a message, assert both in the exception; galata cli.spec.ts: assert both on CLI stderr
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-61` **Stall reported** - MEDIUM; a stalled transfer reaches the caller as a stall, and through pyusb as a pipe error
+  - evidence: verify round 1: pytest test_pyusb_backend.py::test_acc_usb_61_a_stall_is_a_pipe_error; jest worker.spec.ts 'ACC-USB-61 a stalled transfer is ...' passed in make test; red under 'a stall is an EIO error, not a pipe error' (pytest); 'a stalled transfer out is answered with status ok' (jest)
+  - test: pytest test_pyusb_backend.py: fake tab answers status stall, assert USBError with errno EPIPE
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-62` **Edge: timed-out read loses nothing** - HIGH; after a transfer in that timed out, the next transfer in on that endpoint returns the bytes that arrived meanwhile
+  - evidence: verify round 1: jest worker.spec.ts 'ACC-USB-62 after a transfer in ...' passed in make test; red under 'a transfer in never takes over the transfer that an earlier call left pending' (jest)
+  - test: jest worker.spec.ts: pending transferIn, timeout, device sends, next transferIn returns those bytes
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+- [x] `ACC-USB-63` **Edge: device removed** - MEDIUM; after the device is unplugged an operation fails with a message that says the device is detached, and the list shows it detached
+  - evidence: verify round 1: pytest test_usb.py::test_acc_usb_63_an_operation_on_a_removed_device_is_409; jest worker.spec.ts 'ACC-USB-63 an unplugged USB device ...' passed in make test; red under 'an operation on a detached device is answered 404' (pytest); 'an unplugged device is released with reason detach' (jest)
+  - test: jest worker.spec.ts: fire disconnect, assert release removed; pytest test_usb.py: op on a detached device, assert status 409
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:06Z @kj closed: verified
+
+## Panel, commands and menu `PANEL`
+
+Device list, buttons, status bar item, commands, optional Devices menu
+
+- [x] `ACC-PANEL-64` **Device rows** - HIGH; the panel lists every attached device with kind, name, state, holding program, and for a serial port baud rate and profile
+  - evidence: verify round 2: galata panel.spec.ts ACC-PANEL-64 passed in the Galata suite (39 passed, build 0.6.7); red under 7 changes, among them 'the USB record never names a program', 'the serial row always shows 115200 baud', 'the serial row does not show the profile' (galata)
+  - test: galata panel.spec.ts: one serial and one USB device, tool holds the port, assert each field in its row
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T09:31:50Z @kj closed: verified
+- [x] `ACC-PANEL-65` **Byte counters** - MEDIUM; each row shows byte counters that grow with traffic
+  - evidence: verify round 1: galata panel.spec.ts ACC-PANEL-65 passed in the Galata suite; red under 'the byte counters of the tab are not kept' (galata)
+  - test: galata panel.spec.ts: read counters, send bytes, assert both counters grew
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-66` **Status bar item** - HIGH; a status bar item is visible while a device is attached and absent when none is
+  - evidence: verify round 1: jest index.spec.ts 'ACC-PANEL-66 the status item is ...'; galata panel.spec.ts ACC-PANEL-66 passed in make test and the Galata suite; red under 'the status bar item is always active' (jest); 'the status bar item is active also while no device is attached' (galata)
+  - test: galata panel.spec.ts: assert absent, attach, assert visible with count 1, forget, assert absent
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-67` **Commands** - HIGH; connect serial port, connect USB device, open serial terminal and show device panel run from the command palette
+  - evidence: verify round 1: galata panel.spec.ts ACC-PANEL-67 passed in the Galata suite; red under 'the command show-panel has another id' (galata)
+  - test: galata panel.spec.ts: execute each command id, assert the dialog call, the terminal and the panel
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-68` **Menu off by default** - MEDIUM; with default settings the lab has no Devices menu
+  - evidence: verify round 1: galata panel.spec.ts ACC-PANEL-68 passed in the Galata suite; red under 'the default of the setting showMenu is true' (galata)
+  - test: galata panel.spec.ts: assert no Devices entry in the menu bar
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-69` **Menu on by setting** - HIGH; with showMenu true the lab shows a Devices menu with Connect Serial Port, Connect USB Device and Serial Terminal, without a reload
+  - evidence: verify round 1: galata panel.spec.ts ACC-PANEL-69 passed in the Galata suite; red under 'the Devices menu is shown while showMenu is false and removed while it is true' (galata)
+  - test: galata panel.spec.ts: set showMenu, assert the menu and its three entries, click Connect Serial Port, assert the dialog call
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-70` **Interfaces absent** - HIGH; when the browser has neither interface the panel says the lab must be opened over HTTPS or at localhost and disables both add buttons
+  - evidence: verify round 1: jest panel.spec.ts 'ACC-PANEL-70 without the device interfaces ...'; galata panel.spec.ts ACC-PANEL-70 passed in make test and the Galata suite; red under 'the message for absent interfaces is never shown' (jest, galata)
+  - test: galata panel.spec.ts: remove navigator.serial and navigator.usb, assert the message and disabled buttons
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-71` **Second tab** - HIGH; a second lab tab shows a device owned by the first tab as held by the other tab, with no detach and no forget
+  - evidence: verify round 1: galata panel.spec.ts ACC-PANEL-71 passed in the Galata suite; red under 'a claim on a device another tab holds is granted' (galata)
+  - test: galata panel.spec.ts: two pages, attach in the first, assert the second row text and missing buttons
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:45Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-72` **Edge: grant call without a user gesture** - MEDIUM; when the browser refuses the dialog for lack of a user gesture the lab shows a notification that says to use the button
+  - evidence: verify round 1: jest index.spec.ts 'ACC-PANEL-72 a port dialog the ...' passed in make test; red under 'a dialog refused for lack of a user gesture gets the general error notification' (jest)
+  - test: jest index.spec.ts: requestPort rejects with SecurityError, assert the notification text
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-73` **Theme colours only** - LOW; the stylesheet uses JupyterLab CSS variables and no literal colour
+  - evidence: verify round 1: jest panel.spec.ts 'ACC-PANEL-73 the stylesheet has no ...' passed in make test; red under 'the stylesheet has one literal colour' (jest)
+  - test: jest panel.spec.ts: read style/base.css, assert no hex, rgb or hsl colour
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-PANEL-112` **USB row names the program that opened the device** - MEDIUM; a USB device that a program has open carries `holder` with that program's name in its record, and the panel row shows the name; after close, removal of the device or loss of its tab the record has no holder
+  - evidence: verify round 2: pytest test_usb.py -k test_acc_panel_112 (11 passed), jest panel.spec.ts 'ACC-PANEL-112 a USB row names ...', galata usb.spec.ts ACC-PANEL-112 passed in make test and the Galata suite; red under 10 changes, e.g. 'the USB record never names a program' (pytest, jest, galata)
+  - related: ACC-PANEL-64 - the row fields; a USB row had no holding program
+  - test: pytest test_usb.py: open with a program name, assert holder in the record, close, assert none; jest panel.spec.ts: a USB row shows the holder; galata usb.spec.ts: CLI usb open, assert the row names jupyterlab-device
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-12T06:50:09Z @kj the Python client sends its program name as program in the body of POST usb/<name>/open; the server keeps it out of the WebUSB arguments and stores it as holder on the USB record until the device is closed
+  - log: 2026-10-12T06:50:09Z @kj added
+  - log: 2026-10-12T09:31:50Z @kj closed: verified
+- [x] `ACC-PANEL-113` **Panel off by default** - HIGH; with default settings the left sidebar has no Devices panel; the setting showPanel is false
+  - evidence: jest index.spec.ts 2 tests and galata panel.spec.ts 2 tests 'ACC-PANEL-113' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red with schema default true and with the layout restorer told at activation (mutation checks 25-27, 53, 54)
+  - test: galata panel.spec.ts: load the lab with default settings, assert no Devices tab in the left sidebar and showPanel false
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T14:06:39Z @kj added
+  - log: 2026-10-12T16:43:48Z @kj closed
+- [x] `ACC-PANEL-114` **View menu item** - HIGH; the View menu has the item Show Devices Panel; choosing it puts the Devices panel into the left sidebar, opens it and marks the item; choosing it again removes the panel and the mark
+  - evidence: jest index.spec.ts 4 tests and galata panel.spec.ts 'ACC-PANEL-114' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red with no View menu entry, rank 50, command never toggled, never hiding, setting not written (checks 30-34, 39, 40, 56-59, 67)
+  - test: galata panel.spec.ts: click the item, assert the panel visible and the item toggled; click again, assert no Devices tab and no mark
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T14:06:39Z @kj added
+  - log: 2026-10-12T16:43:48Z @kj closed
+- [x] `ACC-PANEL-115` **Menu item and setting are one option** - HIGH; the View menu item writes the setting showPanel; a change of showPanel in the settings shows or hides the panel and sets the mark, without a reload; the value holds after a reload
+  - evidence: jest index.spec.ts 2 tests and galata panel.spec.ts 2 tests 'ACC-PANEL-115' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red when the command writes no setting, a settings change is not applied, the restorer never learns the panel (checks 28, 29, 35, 55, 60, 61)
+  - test: galata panel.spec.ts: click the item, read showPanel true; set it false in the registry, assert panel and mark gone; set true, reload, assert the panel; jest index.spec.ts: the settings changed signal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T14:06:39Z @kj added
+  - log: 2026-10-12T16:43:48Z @kj closed
+- [x] `ACC-PANEL-116` **Hiding the panel keeps the devices** - HIGH; hiding the panel detaches no device: an attached serial port stays attached, bytes a tool writes still reach the port, and the status bar item still counts the device
+  - evidence: jest index.spec.ts and galata panel.spec.ts 'ACC-PANEL-116' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log): port stays attached and open, tool bytes reach it, status item counts it; red when hiding stops the model and its worker (checks 36, 62)
+  - test: galata panel.spec.ts: attach a port, hide the panel with the menu item, write through the virtual device, assert the bytes at the port, state attached and status count 1
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T14:06:39Z @kj added
+  - log: 2026-10-12T16:43:49Z @kj closed
+- [x] `ACC-PANEL-117` **Status bar item shows a hidden panel** - MEDIUM; a click on the status bar item while the panel is hidden sets showPanel true and opens the panel
+  - evidence: jest index.spec.ts and galata panel.spec.ts 'ACC-PANEL-117' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red when the click only opens the panel or toggles the option (checks 37, 38, 63)
+  - test: galata panel.spec.ts: attach a port, hide the panel, click the status bar item, assert the panel visible and showPanel true
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T14:06:39Z @kj added
+  - log: 2026-10-12T16:43:49Z @kj closed
+- [x] `ACC-PANEL-122` **Edge: the setting cannot be saved** - MEDIUM; the command and the status bar item show or hide the panel at once and then save showPanel; when the lab cannot save it the panel stays as chosen and a warning names the reason
+  - evidence: jest index.spec.ts 4 tests and galata panel.spec.ts 'ACC-PANEL-122' (settings PUT answered 500: panel shown, item marked, toast displayed, setting false) pass (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red when the panel waits for the save, no warning is raised, or the promise rejects (checks 114-120)
+  - test: jest index.spec.ts: a registry whose set rejects, execute the command, assert the panel in the sidebar, the mark and one warning notification with the reason
+  - test-tags: UNIT
+  - log: 2026-10-12T15:18:24Z @kj added
+  - log: 2026-10-12T17:04:16Z @kj closed
+
+## Serial terminal `TERM`
+
+A terminal in the lab on one attached port
+
+- [x] `ACC-TERM-74` **Terminal shows port output** - HIGH; the serial terminal command opens a JupyterLab terminal that runs the terminal program on the port's virtual device, and the port's output appears in it
+  - evidence: verify round 1: jest index.spec.ts 'ACC-TERM-74 with one ...'; galata terminal.spec.ts ACC-TERM-74 passed in make test and the Galata suite; red under 'the lab types another command than the terminal command of the CLI' (jest); 'bytes of the port are not given to the tool that holds the device' (galata)
+  - test: galata terminal.spec.ts: execute the command, simulated port sends a line, assert the line in the lab terminal
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T00:50:41Z @kj amended title "Terminal shows port output" -> "Terminal shows port output"; text "the serial terminal of an attached port shows the bytes the port sends" -> "HIGH; the serial terminal command opens a JupyterLab terminal that runs the terminal program on the port's virtual device, and the port's output appears in it"
+  - log: 2026-10-12T00:50:41Z @kj edited test "galata terminal.spec.ts: open the terminal, simulated port sends a line, assert the line in the terminal" -> "galata terminal.spec.ts: execute the command, simulated port sends a line, assert the line in the lab terminal"
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-TERM-75` **Typing reaches the port** - HIGH; what the user types in that terminal is written to the port
+  - evidence: verify round 1: galata terminal.spec.ts ACC-TERM-75 passed in the Galata suite; red under 'bytes of the tool are not sent to the tab' (galata)
+  - test: galata terminal.spec.ts: type abc in the lab terminal, assert the simulated port received abc
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T00:50:41Z @kj amended text "what the user types in the terminal is written to the port" -> "HIGH; what the user types in that terminal is written to the port"
+  - log: 2026-10-12T00:50:41Z @kj edited test "galata terminal.spec.ts: type abc, assert the simulated port received abc and the echo shows" -> "galata terminal.spec.ts: type abc in the lab terminal, assert the simulated port received abc"
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [-] `ACC-TERM-76` **Baud rate selector** - MEDIUM; choosing a baud rate in the terminal reopens the port at that rate
+  - test: galata terminal.spec.ts: choose 9600, assert the simulated port recorded an open at 9600
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T00:50:41Z @kj rejected: cut on the Star Colonel's order of 2026-10-12: the terminal is a ready program, pyserial miniterm; no custom baud selector is built
+- [-] `ACC-TERM-77` **No input while a program holds the port** - MEDIUM; while a container program holds the port the terminal sends nothing and names the program
+  - test: galata terminal.spec.ts: tool holds the path, type, assert nothing reached the port and the holder name shows
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T00:50:41Z @kj rejected: cut with the custom terminal widget: the terminal program is itself the holder of the device
+- [-] `ACC-TERM-78` **Terminal does not take bytes from the monitor** - MEDIUM; with a terminal open the server's monitor buffer still gets every byte
+  - test: jest worker.spec.ts: tap on, port sends, assert the page and the socket both got the chunk
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T00:50:41Z @kj rejected: cut with the custom terminal widget: there is no tap, the worker sends each byte to the server only
+- [x] `ACC-TERM-79` **Edge: no port attached** - MEDIUM; open serial terminal with no attached port shows a message and opens no terminal
+  - evidence: verify round 1: jest index.spec.ts 'ACC-TERM-79 with no attached port ...' passed in make test; red under 'the terminal command does not stop when no port is attached' (jest)
+  - test: jest index.spec.ts: execute the command with no devices, assert the notification and that no lab terminal was opened
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T00:50:41Z @kj edited test "jest index.spec.ts: execute the command with no devices, assert the notification and no widget" -> "jest index.spec.ts: execute the command with no devices, assert the notification and that no lab terminal was opened"
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-TERM-108` **Ready terminal program** - HIGH; the serial terminal is pyserial's miniterm, a dependency of the wheel; the extension has no terminal emulator of its own
+  - evidence: verify round 1: pytest test_cli.py::test_acc_term_108_terminal_becomes_pyserial_miniterm passed in make test; red under 'terminal starts another program than miniterm' (pytest)
+  - test: pytest test_cli.py: terminal with exec replaced, assert the argv is python -m serial.tools.miniterm with the device path and baud; assert serial.tools.miniterm imports
+  - test-tags: UNIT
+  - log: 2026-10-12T00:50:41Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-TERM-109` **Terminal command of the CLI** - HIGH; jupyterlab-device terminal runs the terminal program on the device's path at the profile's baud rate, or at --baud
+  - evidence: verify round 1: pytest test_cli.py::test_acc_term_109_terminal_uses_the_profile_baud_or_the_flag passed in make test; red under 'terminal ignores --baud' (pytest)
+  - test: pytest test_cli.py: profile baud 9600, run terminal with exec replaced, assert baud 9600; with --baud 57600 assert 57600
+  - test-tags: UNIT
+  - log: 2026-10-12T00:50:41Z @kj added
+  - log: 2026-10-12T07:49:07Z @kj closed: verified
+- [x] `ACC-TERM-110` **Edge: device already held** - MEDIUM; jupyterlab-device terminal on a device another program holds exits non-zero and names that program
+  - evidence: verify round 1: pytest test_cli.py::test_acc_term_110_terminal_refuses_a_device_another_program_holds passed in make test; red under 'terminal starts on a device another program holds' (pytest)
+  - test: pytest test_cli.py: a child process holds the path, run terminal, assert exit code and the holder's name on stderr
+  - test-tags: UNIT
+  - log: 2026-10-12T00:50:42Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-TERM-111` **Edge: server has no terminals** - MEDIUM; when the server offers no terminals the lab shows the command line to run instead of opening one
+  - evidence: verify round 1: jest index.spec.ts 'ACC-TERM-111 where the server offers ...' passed in make test; red under 'the terminal command opens a lab terminal also where the server offers none' (jest)
+  - test: jest index.spec.ts: terminals unavailable, execute the command, assert the notification holds the command line
+  - test-tags: UNIT
+  - log: 2026-10-12T00:50:42Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+
+## Command line and agent documents `CLI`
+
+The jupyterlab-device CLI, its help, the agent skill, the README
+
+- [x] `ACC-CLI-80` **One CLI** - HIGH; the wheel installs one command, jupyterlab-device
+  - evidence: verify round 1: pytest test_cli.py::test_acc_cli_80_the_project_declares_one_command passed in make test; red under 'the project declares a second console script' (pytest)
+  - test: pytest test_cli.py: assert the console script entry point resolves to cli:main
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-81` **Help on every subcommand** - HIGH; every subcommand prints help with a description and an example
+  - evidence: verify round 1: pytest test_cli.py -k test_acc_cli_81_help_of_every_subcommand passed in make test; red under 'the help of a subcommand has no examples block' (pytest)
+  - test: pytest test_cli.py: walk the parser, run --help on each, assert exit 0, a description and an examples block
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-82` **Machine-readable list and status** - HIGH; list --json and status --json print one JSON document
+  - evidence: verify round 1: pytest test_cli.py::test_acc_cli_82_list_and_status_print_one_json_document passed in make test; red under 'list --json prints the serial devices only' (pytest)
+  - test: pytest test_cli.py: run both, json.loads the output, assert the keys
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-83` **Authentication as the reference extensions** - HIGH; the CLI takes the hub token first, then the token of the listed server, then JUPYTER_TOKEN, and talks to loopback without a proxy
+  - evidence: verify round 1: pytest test_client.py::test_acc_cli_83_token_order passed in make test; red under 'JUPYTER_TOKEN outranks the token of the listed server' (pytest)
+  - test: pytest test_client.py: each environment, assert the chosen token and that http_proxy is ignored
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-84` **Errors name the next step** - MEDIUM; no server, no connected tab and unknown device each give one stderr line that says what to do
+  - evidence: verify round 1: pytest test_cli.py::test_acc_cli_84_no_server passed in make test; red under 'the error for no server names no next step' (pytest)
+  - test: pytest test_cli.py: each case, assert exit non-zero and the message
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-85` **USB commands** - MEDIUM; usb list, describe, control and transfer print the device's answers; binary output is hex
+  - evidence: verify round 1: pytest test_cli.py::test_acc_cli_85_usb_commands_print_the_devices_answers passed in make test; red under 'the bytes of a transfer are printed as a Python bytes text, not as hex' (pytest)
+  - test: pytest test_cli.py: each command against the fake tab, assert the output
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:46Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-86` **Agent skill shipped** - MEDIUM; the agent skill is in .agents/skills/jupyterlab-device-bridge-extension and the wheel installs an identical copy
+  - evidence: verify round 1: pytest test_agent_skill.py::test_acc_cli_86_the_installed_skill_is_the_repository_copy passed in make test; red under 'the repository copy of the agent skill differs from the installed copy' (pytest)
+  - test: pytest test_agent_skill.py: compare the repository file with the copy under sys.prefix
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-87` **README for agents** - MEDIUM; the README has the section Working with an AI agent with upload and monitor commands for AVR, STM32 and ESP boards
+  - evidence: verify round 1: pytest test_readme.py::test_acc_cli_87_the_agent_section_has_upload_and_monitor_commands_for_each_board_family passed in make test; red under 'the README section for AI agents has another heading' (pytest)
+  - test: pytest test_readme.py: assert the heading and one command per board family
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-88` **README driver table** - MEDIUM; the README has a table from device kind to the Windows driver it needs
+  - evidence: verify round 1: pytest test_readme.py::test_acc_cli_88_the_readme_has_a_table_from_device_kind_to_windows_driver passed in make test; red under 'the driver table of the README has no column for the Windows driver' (pytest)
+  - test: pytest test_readme.py: assert the table header and at least five rows
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-89` **README limits** - MEDIUM; the README lists the six limits of the first version
+  - evidence: verify round 1: pytest test_readme.py::test_acc_cli_89_the_readme_lists_the_six_limits_of_the_first_version passed in make test; red under 'the README does not list the limit WebHID' (pytest)
+  - test: pytest test_readme.py: assert the six phrases
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-90` **README shim and backend** - LOW; the README says how the shim is packaged and how a pyusb program, pyOCD named, is pointed at the backend
+  - evidence: verify round 1: pytest test_readme.py::test_acc_cli_90_the_readme_says_how_the_shim_is_packaged passed in make test; red under 'the README does not say that the wheel stays pure Python' (pytest)
+  - test: pytest test_readme.py: assert both passages
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-CLI-124` **Texts say how to show the panel** - MEDIUM; each text of the CLI, the agent skill and the lab that sends the user to the Devices panel names the View menu item Show Devices Panel, because the panel is hidden by default
+  - evidence: 3 pytest test_acc_cli_124_* (test_cli.py 2, test_agent_skill.py 1) and 2 Jest ACC-CLI-124 tests pass, build 0.6.16, logs/review-r6-fix-make-test.log; red when one of the seven texts loses the menu item or its condition (9 of 9 reversions)
+  - test: pytest test_cli.py: the help text and the message of list with no device name the item; test_agent_skill.py: the skill names it; jest index.spec.ts: the two notifications name it
+  - test-tags: UNIT
+  - log: 2026-10-12T15:18:24Z @kj added
+  - log: 2026-10-12T17:15:24Z @kj closed
+- [x] `ACC-CLI-125` **List names a port's own action on open** - MEDIUM; the serial line of list has 'on open <action>' after the profile when the record overrides onOpen, by a default of the lab's settings or by profile --on-open; a port with the action of its profile has no such part
+  - evidence: pytest test_acc_cli_125_list_names_an_action_on_open_that_is_not_the_profiles passes (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red when cmd_list prints no action part
+  - mechanism: 2026-10-12T16:56:26Z @kj cmd_list prints the part whenever the overrides of the record hold onOpen, also when that value equals the action of the profile; the printed action is the one that runs
+  - test: pytest test_cli.py: claim with defaults onOpen pulse-dtr, then profile arduino-upload, then --on-open none; assert the three lines of list
+  - test-tags: UNIT
+  - log: 2026-10-12T16:36:19Z @kj added
+  - log: 2026-10-12T17:04:16Z @kj closed
+
+## Grants, authentication and ownership `SEC`
+
+A device opens only after the user's grant, endpoints sit behind Jupyter authentication, one tab owns a device
+
+- [x] `ACC-SEC-91` **HTTP endpoints authenticated** - CRITICAL; every HTTP endpoint refuses a request without credentials
+  - evidence: verify round 2: pytest test_routes.py -k test_acc_sec_91 (14 passed) and check_auth.py passed in make test; with @tornado.web.authenticated removed from each of the 11 handler methods in turn the test went red each time (assert 200, 400 or 404 == 403), and the gate too
+  - test: pytest test_routes.py: each route without a token, assert 403; make test: check_auth.py passes
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T09:31:50Z @kj closed: verified
+- [x] `ACC-SEC-92` **WebSocket authenticated** - CRITICAL; the WebSocket refuses a connection without credentials
+  - evidence: verify round 1: pytest test_routes.py::test_acc_sec_92_the_websocket_refuses_a_connection_without_credentials passed in make test; red under 'the WebSocket handler has no @ws_authenticated' (pytest)
+  - test: pytest test_routes.py: connect without a token, assert the handshake is refused
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-SEC-93` **Opened only after a grant** - HIGH; the extension opens only devices the browser lists as granted, and asks for a grant only from a command or a button
+  - evidence: verify round 2: jest worker.spec.ts 'ACC-SEC-93 a port that getPorts() does not list ...' and the three ACC-SEC-93 tests of index.spec.ts passed in make test; red under 8 changes, among them 'the plugin opens the port dialog at every change of the setting showMenu' (jest)
+  - test: jest worker.spec.ts: a port absent from getPorts is never opened; jest index.spec.ts: requestPort is called only by the two connect handlers
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T09:31:50Z @kj closed: verified
+- [x] `ACC-SEC-94` **One tab owns a device** - HIGH; a claim on a key that another connected tab holds is refused and names the holder
+  - evidence: verify round 1: pytest test_manager.py::test_acc_sec_94_a_key_another_tab_holds_is_refused; jest worker.spec.ts 'ACC-SEC-94 a port whose claim ...' passed in make test; red under 'a claim on a device another tab holds is granted' (pytest); 'a refused claim is taken as held' (jest)
+  - test: pytest test_manager.py: two fake tabs claim one key, assert the second gets ok false and heldBy
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:09Z @kj closed: verified
+- [x] `ACC-SEC-95` **Device directory guarded** - HIGH; the device directory is created 0700, and a directory owned by another user or a symlink is refused
+  - evidence: verify round 1: pytest test_vserial.py::test_acc_sec_95_the_device_directory_is_made_0700 passed in make test; red under 'the device directory is made with mode 0755' (pytest)
+  - test: pytest test_vserial.py: assert the mode; point at a symlink, assert the refusal
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:09Z @kj closed: verified
+- [x] `ACC-SEC-96` **Names validated** - HIGH; a device name outside the pattern is refused before any file is touched
+  - evidence: verify round 1: pytest test_routes.py -k test_acc_sec_96_a_name_outside_the_pattern passed in make test; red under 'a device name is not checked against the pattern' (pytest)
+  - test: pytest test_routes.py: names with slash and dot-dot, assert 400 or 404 and no file created
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:09Z @kj closed: verified
+- [x] `ACC-SEC-97` **Unprivileged** - MEDIUM; the bridge needs no sudo, no kernel module and no device node
+  - evidence: verify round 1: pytest test_vserial.py::test_acc_sec_97_only_symlinks_sockets_and_ptys passed in make test; red under 'the bridge makes a regular file beside the link' (pytest)
+  - test: pytest test_vserial.py: the suite runs as the lab user and creates only symlinks, sockets and ptys under the device directory
+  - test-tags: UNIT
+  - log: 2026-10-12T00:27:47Z @kj added
+  - log: 2026-10-12T07:49:09Z @kj closed: verified
+
+## Physical boards `BOARD`
+
+Behaviour that needs a real board, tested by the user, tag MANUAL
+
+- [ ] `ACC-BOARD-98` **Arduino Uno upload** - HIGH; avrdude uploads a sketch to an Arduino Uno through the virtual device with the arduino-upload profile
+  - test: connect an Uno, set arduino-upload, run avrdude -c arduino on the path, assert the upload verifies
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:47Z @kj added
+- [ ] `ACC-BOARD-99` **Arduino Nano and Mega upload** - MEDIUM; avrdude uploads to a Nano and to a Mega with the arduino-upload profile
+  - test: connect each board, run avrdude with its part and baud rate, assert the upload verifies
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:47Z @kj added
+- [ ] `ACC-BOARD-100` **ATtiny through Arduino as ISP** - MEDIUM; avrdude programs an ATtiny through an Arduino running ArduinoISP with the arduino-isp profile, and the Arduino is not reset on open
+  - test: wire the ISP, run avrdude -c stk500v1, assert the upload verifies
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:47Z @kj added
+- [ ] `ACC-BOARD-101` **STM32 serial bootloader** - MEDIUM; stm32flash writes an STM32 through the virtual device, with the stm32-bootloader profile and with the shim
+  - test: board in bootloader mode, run stm32flash on the path, then again under run, assert both write and verify
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-102` **ESP upload** - HIGH; esptool writes an ESP32 and an ESP8266, with the esp-upload profile and --before no-reset, and under the shim with its own reset
+  - test: connect each board, run both forms, assert the flash verifies
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-103` **Board output in the monitor** - HIGH; the serial output of a running board is read with monitor read and in the serial terminal
+  - test: board prints a counter, assert the lines in both
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-104` **CMSIS-DAP v2 probe with pyOCD** - MEDIUM; pyOCD lists and uses a CMSIS-DAP v2 probe through the pyusb backend
+  - test: attach the probe over USB, run pyOCD list through the backend, assert the probe is listed
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-105` **ST-Link with pyOCD** - MEDIUM; pyOCD lists and uses an ST-Link through the pyusb backend on Windows with ST's driver
+  - test: attach the ST-Link over USB, run pyOCD list through the backend, assert the probe is listed
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-106` **Real browser dialogs** - MEDIUM; Chrome and Edge open the port dialog and the device dialog from the panel buttons, the commands, the menu and the grant button
+  - test: click each in desktop Chrome and Edge, assert the dialog opens
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-107` **Board that changes identity** - LOW; a board that enters bootloader mode as another device is attached after its own grant
+  - test: touch a Leonardo at 1200 baud, grant the bootloader port, assert the upload runs
+  - test-tags: MANUAL
+  - log: 2026-10-12T00:27:48Z @kj added
+
