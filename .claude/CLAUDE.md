@@ -104,6 +104,9 @@ architecture changes.
   in the worker; the lab, the server, the CLI and miniterm are real)
 - **Agent skill** (`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`) - tells an agent
   to read `jupyterlab-device --help` first; the wheel installs it under `share/jupyter/agents/skills/`
+- **Resources** (`resources/envs/`) - copies of the three firmware environment installers and of
+  `firmware_env.py`, the module they import; the originals are in `~/.local/lab-utils/envs/`, no
+  code of the extension uses the copies and the wheel does not install them
 - **CI/CD** - GitHub Actions plus jupyter-releaser under `.github/workflows/`
 
 **Terms**: a **grant** is the user's permission for one device in Chrome's dialog; **attached**

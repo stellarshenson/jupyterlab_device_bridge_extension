@@ -275,6 +275,16 @@ For every board:
 - `monitor read` shows readable text only when the port is open at the baud rate of the firmware. While no tool holds the device that is the profile's baud rate, and `jupyterlab-device profile <device> --baud <n>` sets it
 - `jupyterlab-device terminal` needs a person at a terminal. An agent reads with `monitor read` and writes with `monitor write`
 
+### Installers of the firmware tools
+
+The folder `resources/envs/` of the repository holds three proposed installers. Each one creates one conda environment with the tools that build firmware and upload it:
+
+- `firmware-avr.py` - environment `firmware-avr`: nightly Rust with its source, avr-gcc, avrdude
+- `firmware-stm32.py` - environment `firmware-stm32`: Rust with six Cortex-M targets, cargo-binutils, stm32flash
+- `firmware-esp.py` - environment `firmware-esp`: Rust for the ESP32 chips, espflash, esptool, arduino-cli with the ESP8266 core
+
+The three import `firmware_env.py`, so the four files must be in one folder. An installer is a `uv` script and runs as a program, for example `resources/envs/firmware-avr.py`. It needs `uv`, x86-64 Linux, access to the internet, and conda at `/opt/conda/bin/conda` or at the path in the variable `CONDA_CMD`. The wheel does not install these files, and no test of this extension ran an installer.
+
 ### AVR boards with avrdude
 
 The profile `arduino-upload` pulses DTR when avrdude opens the virtual device. The virtual device refuses avrdude's own DTR call; avrdude prints a warning and continues (from knowledge).
