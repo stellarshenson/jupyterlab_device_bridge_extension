@@ -135,3 +135,9 @@ tmp/
 
 # Jest junit reporter output
 junit.xml
+
+# Agent definitions, workflows and agent memory of this workstation - kept out of the
+# repository and out of the sdist, which takes every file that git does not ignore
+.claude/agents/
+.claude/workflows/
+.claude/agent-memory/
