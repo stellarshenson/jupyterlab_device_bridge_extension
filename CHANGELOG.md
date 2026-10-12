@@ -2,6 +2,19 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [0.6.20] - 2026-10-12
+
+The repository and the wheel now hold three proposed installers of the firmware tools, and the agent skill names them. No test of this extension ran an installer.
+
+### Added
+
+- Installers of the firmware tools in `resources/envs/`: `firmware-avr.py`, `firmware-stm32.py` and `firmware-esp.py`, each for one conda environment with the tools that build firmware and upload it, and `firmware_env.py`, the module they import. The README describes them in the subsection `Installers of the firmware tools`
+- The wheel installs the four files in `envs/` beside the agent skill, at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/envs/`
+
+### Changed
+
+- Agent skill: one new rule names the installers and both folders, and tells the agent to ask the user before it runs one. The description of the skill names the installation of the tools
+
 ## [0.6.18] - 2026-10-12
 
 First release. Bridges serial ports and USB devices of the browser's computer into the JupyterLab container. The extension is tested against simulated devices in the browser; no test used a physical board.

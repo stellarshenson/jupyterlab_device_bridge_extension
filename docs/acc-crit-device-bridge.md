@@ -698,6 +698,13 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-12T16:36:19Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
+- [x] `ACC-CLI-126` **Skill covers the firmware installers** - MEDIUM; the wheel installs the four files of resources/envs in envs/ beside the installed skill, identical to the repository's, the three installers executable; one rule of the skill names the three installers and both folders and tells the agent to ask the user before running one
+  - evidence: pytest test_agent_skill.py on build 0.6.19: both ACC-CLI-126 tests pass, 351 pytest tests pass; each test failed under a temporary change (ask sentence removed, executable bit removed, one byte added); wheel 0.6.19 lists the four files under the skill's envs/, installers mode 755
+  - test: pytest test_agent_skill.py: the shared-data entry, the installed files against resources/envs, the executable bit, the rule of the skill
+  - test-tags: UNIT
+  - mechanism: 2026-10-12T19:00:09Z @kj a shared-data entry of pyproject.toml maps resources/envs into the folder of the installed skill
+  - log: 2026-10-12T19:00:09Z @kj added
+  - log: 2026-10-12T19:04:28Z @kj closed
 
 ## Grants, authentication and ownership `SEC`
 

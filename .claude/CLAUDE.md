@@ -106,7 +106,8 @@ architecture changes.
   to read `jupyterlab-device --help` first; the wheel installs it under `share/jupyter/agents/skills/`
 - **Resources** (`resources/envs/`) - copies of the three firmware environment installers and of
   `firmware_env.py`, the module they import; the originals are in `~/.local/lab-utils/envs/`, no
-  code of the extension uses the copies and the wheel does not install them
+  code of the extension uses the copies; the wheel installs them in `envs/` beside the agent skill,
+  and one rule of the skill names them
 - **CI/CD** - GitHub Actions plus jupyter-releaser under `.github/workflows/`
 
 **Terms**: a **grant** is the user's permission for one device in Chrome's dialog; **attached**

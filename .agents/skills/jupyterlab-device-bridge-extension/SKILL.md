@@ -1,6 +1,6 @@
 ---
 name: jupyterlab-device-bridge-extension
-description: Reach a serial port (COM port) or a USB device plugged into the user's computer from a JupyterLab container, through the `jupyterlab-device` CLI of jupyterlab_device_bridge_extension. Use when uploading firmware to a board (Arduino, STM32, ESP), reading or writing a board's serial output, running a pyusb program against a USB probe, or "flash the board".
+description: Reach a serial port (COM port) or a USB device plugged into the user's computer from a JupyterLab container, through the `jupyterlab-device` CLI of jupyterlab_device_bridge_extension. Use when uploading firmware to a board (Arduino, STM32, ESP), installing the tools that build or upload it, reading or writing a board's serial output, running a pyusb program against a USB probe, or "flash the board".
 ---
 
 # jupyterlab-device
@@ -19,3 +19,4 @@ Runs in a lab terminal. Device sits on the user's computer, lab tab in Chrome or
 - Tool sets DTR, RTS or parity itself (esptool, stm32flash, pyserial with parity): start it under `run --`. Without it the device refuses or drops those calls. Static binary does not load the shim: profile only
 - Action `touch-1200` may bring the board back as another USB device. Needs a new grant from user
 - `usb open` and `usb claim` last until `usb close`. pyusb program: module `jupyterlab_device_bridge_extension.pyusb_backend`, `get_backend()` or `install()`
+- Build or upload tool missing (cargo, avr-gcc, avrdude, stm32flash, espflash, esptool): installers `firmware-avr.py`, `firmware-stm32.py`, `firmware-esp.py` in `envs/` beside this file, in a clone `resources/envs/` of the repository. Each is a `uv` script, run it as a program: makes one conda environment, named as the file without `.py`, and downloads its toolchain. Needs `uv`, x86-64 Linux, internet, conda at `/opt/conda/bin/conda` or in `CONDA_CMD`. Ask user before running one. This extension's tests never ran one

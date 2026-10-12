@@ -283,7 +283,7 @@ The folder `resources/envs/` of the repository holds three proposed installers. 
 - `firmware-stm32.py` - environment `firmware-stm32`: Rust with six Cortex-M targets, cargo-binutils, stm32flash
 - `firmware-esp.py` - environment `firmware-esp`: Rust for the ESP32 chips, espflash, esptool, arduino-cli with the ESP8266 core
 
-The three import `firmware_env.py`, so the four files must be in one folder. An installer is a `uv` script and runs as a program, for example `resources/envs/firmware-avr.py`. It needs `uv`, x86-64 Linux, access to the internet, and conda at `/opt/conda/bin/conda` or at the path in the variable `CONDA_CMD`. The wheel does not install these files, and no test of this extension ran an installer.
+The three import `firmware_env.py`, so the four files must be in one folder. An installer is a `uv` script and runs as a program, for example `resources/envs/firmware-avr.py`. It needs `uv`, x86-64 Linux, access to the internet, and conda at `/opt/conda/bin/conda` or at the path in the variable `CONDA_CMD`. The wheel installs the four files in `envs/` beside the agent skill, at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/envs/`. No test of this extension ran an installer.
 
 ### AVR boards with avrdude
 
@@ -358,7 +358,7 @@ jupyterlab-device monitor read tty-10c4-ea60 --lines 20
 
 ### Agent skill
 
-The agent skill, [`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`](.agents/skills/jupyterlab-device-bridge-extension/SKILL.md), tells an agent to read `jupyterlab-device --help` first and adds only the rules the help cannot state. The skill is in the repository and in the wheel, which installs it at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/SKILL.md`. No agent reads that directory, so one of the two links below makes the skill readable.
+The agent skill, [`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`](.agents/skills/jupyterlab-device-bridge-extension/SKILL.md), tells an agent to read `jupyterlab-device --help` first and adds only the rules the help cannot state. One rule names the installers of the firmware tools, which the wheel installs in `envs/` beside the skill. The skill is in the repository and in the wheel, which installs it at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/SKILL.md`. No agent reads that directory, so one of the two links below makes the skill readable.
 
 After `pip install`, with the Python that runs the lab:
 

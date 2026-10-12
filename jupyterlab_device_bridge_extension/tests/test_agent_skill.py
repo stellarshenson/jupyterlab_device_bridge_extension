@@ -2,9 +2,11 @@
 
 The skill ships twice: the repository copy an agent reads from a clone, and the copy
 the wheel's shared-data mapping puts under `sys.prefix`. Two copies drift, so they are
-compared byte for byte here.
+compared byte for byte here. The same holds for the firmware installers of
+`resources/envs`, which the wheel puts in `envs/` beside the installed skill.
 """
 
+import os
 import pathlib
 import re
 import sys
@@ -18,6 +20,9 @@ SKILL_NAME = "jupyterlab-device-bridge-extension"
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
 REPOSITORY_COPY = REPOSITORY / ".agents" / "skills" / SKILL_NAME / "SKILL.md"
 INSTALLED_COPY = pathlib.Path(sys.prefix) / "share" / "jupyter" / "agents" / "skills" / SKILL_NAME / "SKILL.md"
+ENVS = REPOSITORY / "resources" / "envs"
+INSTALLED_ENVS = INSTALLED_COPY.parent / "envs"
+INSTALLERS = ("firmware-avr.py", "firmware-stm32.py", "firmware-esp.py")
 
 pytestmark = pytest.mark.skipif(
     not REPOSITORY_COPY.is_file(),
@@ -70,3 +75,34 @@ def test_acc_cli_86_the_installed_skill_is_the_repository_copy():
         "pyproject.toml mapped the skill into the wheel - run make install")
     assert INSTALLED_COPY.read_bytes() == REPOSITORY_COPY.read_bytes(), (
         "the installed agent skill differs from the repository copy - run make install")
+
+
+def test_acc_cli_126_one_rule_of_the_skill_names_the_firmware_installers_and_asks_the_user_first():
+    """ACC-CLI-126 one rule of the skill names the three installers and both folders, and tells the agent to ask the user before running one."""
+    rules = REPOSITORY_COPY.read_text().split("## Rules", 1)[1]
+    lines = [line for line in rules.splitlines() if "firmware-" in line]
+
+    assert len(lines) == 1, f"{len(lines)} rules of the skill name a firmware installer"
+    (rule,) = lines
+    for name in INSTALLERS:
+        assert f"`{name}`" in rule and (ENVS / name).is_file(), name
+    assert "`envs/` beside this file" in rule and "`resources/envs/`" in rule
+    assert "Ask user before running one" in rule
+
+
+def test_acc_cli_126_the_wheel_installs_the_firmware_installers_beside_the_skill():
+    """ACC-CLI-126 pyproject.toml maps resources/envs into the folder of the installed skill, and the installed files are the repository's, the installers executable."""
+    shared = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())[
+        "tool"]["hatch"]["build"]["targets"]["wheel"]["shared-data"]
+    names = sorted(path.name for path in ENVS.iterdir() if path.is_file())
+
+    assert shared.get("resources/envs") == f"share/jupyter/agents/skills/{SKILL_NAME}/envs"
+    assert names == sorted([*INSTALLERS, "firmware_env.py"])
+    for name in names:
+        assert (INSTALLED_ENVS / name).is_file(), (
+            f"{INSTALLED_ENVS / name} is missing: the package in this environment was installed "
+            "before pyproject.toml mapped resources/envs into the wheel - run make install")
+        assert (INSTALLED_ENVS / name).read_bytes() == (ENVS / name).read_bytes(), (
+            f"the installed {name} differs from the repository copy - run make install")
+    for name in INSTALLERS:
+        assert os.access(INSTALLED_ENVS / name, os.X_OK), f"the installed {name} is not executable"
