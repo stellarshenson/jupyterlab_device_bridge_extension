@@ -4,12 +4,16 @@
  *
  * The tests read and click the panel through the hooks listed at the top of
  * `src/panel.ts`, as the functional tests do in a browser. The lab packages that Jest
- * cannot load are replaced: the notifications by a recorder, the icon by its SVG text.
+ * cannot load are replaced: the notifications by a recorder, the icon of the panel by
+ * its SVG text. The plus icon and its menu are those of the lab.
  */
 
 import { Notification } from '@jupyterlab/apputils';
 import { ServerConnection } from '@jupyterlab/services';
+import { MenuSvg } from '@jupyterlab/ui-components';
 
+import { CommandRegistry } from '@lumino/commands';
+import { MessageLoop } from '@lumino/messaging';
 import { Widget } from '@lumino/widgets';
 
 import { DeviceBridgeModel } from '../model';
@@ -39,12 +43,21 @@ jest.mock('@jupyterlab/apputils', () => ({
 jest.mock('@jupyterlab/ui-components', () => ({
   LabIcon: class {
     constructor(readonly options: { name: string; svgstr: string }) {}
-  }
+  },
+  // Jest cannot load the index of the package. It loads these two modules of it.
+  addIcon: jest.requireActual('@jupyterlab/ui-components/lib/icon/iconimports')
+    .addIcon,
+  MenuSvg: jest.requireActual(
+    '@jupyterlab/ui-components/lib/icon/widgets/menusvg'
+  ).MenuSvg
 }));
 jest.mock('../worker', () => ({
   ...jest.requireActual('../worker'),
   createWorker: jest.fn()
 }));
+
+const CONNECT_SERIAL = 'device-bridge:connect-serial';
+const CONNECT_USB = 'device-bridge:connect-usb';
 
 const UNO = { usbVendorId: 0x2341, usbProductId: 0x0043 };
 const UNO_KEY = 's:2341:0043:0';
@@ -114,6 +127,9 @@ interface ILab {
   fetch: jest.Mock;
   model: DeviceBridgeModel;
   panel: DeviceBridgePanel;
+  /** The menu that the panel got for its plus icon: the two connect commands. */
+  addMenu: MenuSvg;
+  /** Recorders: the two connect commands of the plus menu, then what the panel calls. */
   handlers: {
     connectSerial: jest.Mock;
     connectUsb: jest.Mock;
@@ -196,7 +212,22 @@ function newLab(options: ILabOptions = {}): ILab {
     startRun: jest.fn(),
     showRunInfo: jest.fn()
   };
-  const panel = new DeviceBridgePanel({ model, ...handlers });
+  // A plus menu with the two connect commands of a registry. Here each command calls
+  // a recorder. The plugin leaves out the entry of an interface the browser lacks.
+  const commands = new CommandRegistry();
+  commands.addCommand(CONNECT_SERIAL, { execute: handlers.connectSerial });
+  commands.addCommand(CONNECT_USB, { execute: handlers.connectUsb });
+  const addMenu = new MenuSvg({ commands });
+  addMenu.addItem({ command: CONNECT_SERIAL });
+  addMenu.addItem({ command: CONNECT_USB });
+  const panel = new DeviceBridgePanel({
+    model,
+    addMenu,
+    grantRequest: handlers.grantRequest,
+    openTerminal: handlers.openTerminal,
+    startRun: handlers.startRun,
+    showRunInfo: handlers.showRunInfo
+  });
   Widget.attach(panel, document.body);
   const all: ILab = {
     server,
@@ -209,6 +240,7 @@ function newLab(options: ILabOptions = {}): ILab {
     fetch,
     model,
     panel,
+    addMenu,
     handlers
   };
   return all;
@@ -251,6 +283,41 @@ const control = (
   name: keyof IProfileChange
 ): HTMLInputElement | HTMLSelectElement =>
   one<HTMLInputElement>(root, `[data-profile-field="${name}"]`);
+
+/** The plus icon of the panel header. */
+const plus = (all: ILab): HTMLButtonElement =>
+  action(all.panel.node, 'add-device');
+
+/** Whether the plus menu is open: the page then holds its one menu. */
+const menuOpen = (): boolean =>
+  document.body.querySelectorAll('.lm-Menu').length === 1;
+
+/**
+ * Choose an entry of the open plus menu as a click does: the pointer goes up over the
+ * entry. Lumino finds the entry under the pointer by its rectangle, and jsdom gives
+ * every element an empty rectangle, so the entry gets one first. jsdom has no
+ * PointerEvent; Lumino reads the type, the button and the place of the event.
+ */
+function pick(command: string): void {
+  const entry = one(
+    document.body,
+    `li.lm-Menu-item[data-command="${command}"]`
+  );
+  const rectangle = jest
+    .spyOn(entry, 'getBoundingClientRect')
+    .mockReturnValue({ left: 0, right: 100, top: 0, bottom: 20 } as DOMRect);
+  entry.dispatchEvent(
+    new MouseEvent('pointerup', { bubbles: true, clientX: 1, clientY: 1 })
+  );
+  rectangle.mockRestore();
+}
+
+/** Press the Escape key in the open plus menu. Lumino reads the key code. */
+function pressEscape(all: ILab): void {
+  all.addMenu.node.dispatchEvent(
+    new KeyboardEvent('keydown', { bubbles: true, keyCode: 27 })
+  );
+}
 
 /** Set a field of the profile editor as the user does: the value, then the change event. */
 function choose(root: ParentNode, name: keyof IProfileChange, value: string) {
@@ -1335,27 +1402,141 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
   });
 });
 
-describe('DeviceBridgePanel: buttons that go to the plugin', () => {
-  it('ACC-SERIAL-1 the add serial port button calls the connect handler of the plugin once per click', async () => {
+describe('DeviceBridgePanel: the plus icon of the header', () => {
+  it('ACC-PANEL-153 the header holds the title and one plus icon button with the add icon of the lab, and the panel has no add buttons', async () => {
+    const all = await lab();
+    const header = one(all.panel.node, '.jp-DeviceBridgePanel-header');
+    const add = plus(all);
+
+    expect(Array.from(header.children, child => child.tagName)).toEqual([
+      'SPAN',
+      'BUTTON'
+    ]);
+    expect(header.lastElementChild === add).toBe(true);
+    expect(add.type).toBe('button');
+    expect(add.className).toBe('jp-DeviceBridgePanel-iconButton');
+    expect(add.textContent).toBe('');
+    expect(one(add, 'svg').dataset.icon).toBe('ui-components:add');
+
+    for (const gone of [
+      '[data-action="connect-serial"]',
+      '[data-action="connect-usb"]',
+      '.jp-DeviceBridgePanel-toolbar'
+    ]) {
+      expect(all.panel.node.querySelector(gone)).toBeNull();
+    }
+    // The text of the empty list names the icon and no button.
+    expect(
+      one(
+        all.panel.node,
+        '[data-section="devices"] .jp-DeviceBridgePanel-empty'
+      ).textContent
+    ).toBe(
+      'No device yet. Add a serial port or a USB device of this computer with the plus icon above.'
+    );
+  });
+
+  it('ACC-PANEL-153 a click on the plus icon opens the menu at the left edge and the bottom edge of the icon, with one entry per connect command', async () => {
+    const all = await lab();
+    const add = plus(all);
+    add.getBoundingClientRect = () =>
+      ({ left: 40, right: 64, top: 4, bottom: 28 }) as DOMRect;
+    const open = jest.spyOn(all.addMenu, 'open');
+
+    expect(menuOpen()).toBe(false);
+    add.click();
+
+    expect(open.mock.calls).toEqual([[40, 28]]);
+    expect(menuOpen()).toBe(true);
+    expect(all.addMenu.isAttached).toBe(true);
+    expect(
+      Array.from(
+        document.body.querySelectorAll<HTMLElement>('li.lm-Menu-item'),
+        entry => entry.dataset.command
+      )
+    ).toEqual([CONNECT_SERIAL, CONNECT_USB]);
+    // The menu alone runs no command.
+    expect(all.handlers.connectSerial).not.toHaveBeenCalled();
+    expect(all.handlers.connectUsb).not.toHaveBeenCalled();
+
+    all.addMenu.close();
+  });
+
+  it('ACC-PANEL-153 an entry of the plus menu runs its command once and not the other command, and the menu closes', async () => {
     const all = await lab();
 
-    action(all.panel.node, 'connect-serial').click();
+    plus(all).click();
+    pick(CONNECT_SERIAL);
 
     expect(all.handlers.connectSerial).toHaveBeenCalledTimes(1);
     expect(all.handlers.connectUsb).not.toHaveBeenCalled();
-    expect(all.serial.dialogs).toEqual([]);
-  });
+    expect(menuOpen()).toBe(false);
 
-  it('ACC-USB-45 the add USB device button calls the connect handler of the plugin once per click', async () => {
-    const all = await lab();
-
-    action(all.panel.node, 'connect-usb').click();
+    plus(all).click();
+    pick(CONNECT_USB);
 
     expect(all.handlers.connectUsb).toHaveBeenCalledTimes(1);
-    expect(all.handlers.connectSerial).not.toHaveBeenCalled();
+    expect(all.handlers.connectSerial).toHaveBeenCalledTimes(1);
+    expect(menuOpen()).toBe(false);
+    // The panel itself opens no dialog of the browser.
+    expect(all.serial.dialogs).toEqual([]);
     expect(all.usb.dialogs).toEqual([]);
   });
 
+  it('ACC-PANEL-156 the title of the plus icon says what it adds, and the icon says that it opens a menu', async () => {
+    const all = await lab();
+
+    expect(plus(all).title).toBe('Add a serial port or a USB device');
+    expect(plus(all).getAttribute('aria-haspopup')).toBe('menu');
+  });
+
+  it('ACC-PANEL-156 the open menu has the focus, Escape closes it, and the focus is on the plus icon again', async () => {
+    const all = await lab();
+    const add = plus(all);
+
+    add.focus();
+    add.click();
+    // Lumino gives the open menu the focus when it handles its next posted message.
+    MessageLoop.flush();
+    expect(document.activeElement === all.addMenu.node).toBe(true);
+
+    pressEscape(all);
+
+    expect(menuOpen()).toBe(false);
+    expect(document.activeElement === add).toBe(true);
+  });
+
+  it('ACC-PANEL-156 the focus is on the plus icon again after an entry of the menu was chosen', async () => {
+    const all = await lab();
+    const add = plus(all);
+
+    add.click();
+    expect(document.activeElement === add).toBe(false);
+    pick(CONNECT_USB);
+
+    expect(all.handlers.connectUsb).toHaveBeenCalledTimes(1);
+    expect(document.activeElement === add).toBe(true);
+  });
+
+  it('ACC-PANEL-156 a disposed panel is not touched when the menu closes: its plus icon gets no focus call', async () => {
+    const all = await lab();
+    const focus = jest.spyOn(plus(all), 'focus');
+
+    plus(all).click();
+    pressEscape(all);
+    expect(focus).toHaveBeenCalledTimes(1);
+
+    all.panel.dispose();
+    all.addMenu.open(0, 0);
+    expect(menuOpen()).toBe(true);
+    all.addMenu.close();
+
+    expect(menuOpen()).toBe(false);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DeviceBridgePanel: buttons that go to the plugin', () => {
   it('ACC-TERM-74 the Terminal button of a serial row calls the terminal handler with the name of the port', async () => {
     const all = await lab({ ports: [new SimSerialPort(UNO)] });
 
@@ -1752,42 +1933,49 @@ describe('DeviceBridgePanel: round trip and absent interfaces', () => {
     expect(roundTrip.textContent).toBe('not connected');
   });
 
-  it('ACC-PANEL-70 without the device interfaces the panel names HTTPS and localhost and both add buttons are disabled', async () => {
+  it('ACC-PANEL-154 without the device interfaces the panel names HTTPS and localhost, and the plus icon is disabled and opens no menu', async () => {
     const all = await lab({ interfaces: [] });
     const absent = field(all.panel.node, 'absent');
-    const addSerial = action(all.panel.node, 'connect-serial');
-    const addUsb = action(all.panel.node, 'connect-usb');
 
     expect(absent.hidden).toBe(false);
     expect(absent.textContent).toBe(
       'The browser gives this page no access to serial ports and USB devices. Open the lab over HTTPS or at localhost, in Chrome or Edge.'
     );
-    expect(addSerial.disabled).toBe(true);
-    expect(addUsb.disabled).toBe(true);
+    expect(plus(all).disabled).toBe(true);
 
-    addSerial.click();
-    addUsb.click();
-    expect(all.handlers.connectSerial).not.toHaveBeenCalled();
-    expect(all.handlers.connectUsb).not.toHaveBeenCalled();
+    plus(all).click();
+    expect(menuOpen()).toBe(false);
   });
 
-  it('ACC-PANEL-70 with both device interfaces the panel shows no such message and both add buttons work', async () => {
+  it('ACC-PANEL-154 with both device interfaces the panel shows no such message, and the plus icon is enabled and opens its menu', async () => {
     const all = await lab();
 
     expect(field(all.panel.node, 'absent').hidden).toBe(true);
-    expect(action(all.panel.node, 'connect-serial').disabled).toBe(false);
-    expect(action(all.panel.node, 'connect-usb').disabled).toBe(false);
+    expect(plus(all).disabled).toBe(false);
+
+    plus(all).click();
+    expect(menuOpen()).toBe(true);
+    all.addMenu.close();
   });
 
-  it('ACC-PANEL-70 a browser with one device interface gets the message for the absent one and the button of the other', async () => {
-    const all = await lab({ interfaces: ['serial'] });
-    const absent = field(all.panel.node, 'absent');
+  it.each([
+    ['serial', 'USB devices'],
+    ['usb', 'serial ports']
+  ] as const)(
+    'ACC-PANEL-154 a browser with only the %s interface gets the message for the absent %s, and the plus icon is enabled and opens its menu',
+    async (only, missing) => {
+      const all = await lab({ interfaces: [only] });
+      const absent = field(all.panel.node, 'absent');
 
-    expect(absent.hidden).toBe(false);
-    expect(absent.textContent).toMatch(
-      /^The browser gives this page no access to USB devices\. /
-    );
-    expect(action(all.panel.node, 'connect-serial').disabled).toBe(false);
-    expect(action(all.panel.node, 'connect-usb').disabled).toBe(true);
-  });
+      expect(absent.hidden).toBe(false);
+      expect(absent.textContent).toBe(
+        `The browser gives this page no access to ${missing}. Open the lab over HTTPS or at localhost, in Chrome or Edge.`
+      );
+      expect(plus(all).disabled).toBe(false);
+
+      plus(all).click();
+      expect(menuOpen()).toBe(true);
+      all.addMenu.close();
+    }
+  );
 });

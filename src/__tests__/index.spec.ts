@@ -4,7 +4,8 @@
  *
  * The lab is a small stand-in: a real command registry, a shell that records, and the
  * optional services as recorders. The lab packages that Jest cannot load are replaced:
- * the notifications and the dialogs by recorders, the icon by its SVG text.
+ * the notifications and the dialogs by recorders, the icon of the panel by its SVG
+ * text. The plus icon and its menu are those of the lab.
  */
 
 import { InputDialog, Notification, showDialog } from '@jupyterlab/apputils';
@@ -52,7 +53,13 @@ jest.mock('@jupyterlab/ui-components', () => ({
       props.container.innerHTML = this.options.svgstr;
       return props.container;
     }
-  }
+  },
+  // Jest cannot load the index of the package. It loads these two modules of it.
+  addIcon: jest.requireActual('@jupyterlab/ui-components/lib/icon/iconimports')
+    .addIcon,
+  MenuSvg: jest.requireActual(
+    '@jupyterlab/ui-components/lib/icon/widgets/menusvg'
+  ).MenuSvg
 }));
 jest.mock('../worker', () => ({
   ...jest.requireActual('../worker'),
@@ -183,8 +190,8 @@ interface ILab {
 interface ILabOptions {
   ports?: SimSerialPort[];
   devices?: SimUsbDevice[];
-  /** False: the browser has neither device interface, as on plain http. */
-  interfaces?: boolean;
+  /** The device interfaces the browser has; both unless a test says otherwise. On plain http it has none. */
+  interfaces?: Array<'serial' | 'usb'>;
   /** False: the server offers no terminals. */
   terminals?: boolean;
   /** False: the lab has no command `basic-terminal:launch`, as without jupyterlab_basic_terminal_extension. */
@@ -218,12 +225,14 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
   const server = new SimServer();
   const serial = new SimSerial(...(options.ports || []));
   const usb = new SimUsb(...(options.devices || []));
-  const interfaces = options.interfaces !== false;
-  const scope = interfaces
-    ? new SimScope(server, serial, usb)
-    : new SimScope(server);
-  setInterface('serial', interfaces ? serial : undefined);
-  setInterface('usb', interfaces ? usb : undefined);
+  const interfaces = options.interfaces || ['serial', 'usb'];
+  const offered = {
+    serial: interfaces.includes('serial') ? serial : undefined,
+    usb: interfaces.includes('usb') ? usb : undefined
+  };
+  const scope = new SimScope(server, offered.serial, offered.usb);
+  setInterface('serial', offered.serial);
+  setInterface('usb', offered.usb);
   (createWorker as jest.Mock).mockImplementation(() => {
     workerMain(scope);
     return scope.page;
@@ -328,6 +337,43 @@ async function request(
 
 const button = (all: ILab, selector: string): HTMLButtonElement =>
   all.panel.node.querySelector<HTMLButtonElement>(selector)!;
+
+/** The plus icon of the panel header. */
+const plus = (all: ILab): HTMLButtonElement =>
+  button(all, '[data-action="add-device"]');
+
+/** Whether the plus menu is open: the page then holds its one menu. */
+const menuOpen = (): boolean =>
+  document.body.querySelectorAll('.lm-Menu').length === 1;
+
+/** Every entry of the open plus menu: its command and its label. */
+const entries = (): Array<[string | undefined, string | null]> =>
+  Array.from(
+    document.body.querySelectorAll<HTMLElement>('li.lm-Menu-item'),
+    entry => [
+      entry.dataset.command,
+      entry.querySelector('.lm-Menu-itemLabel')!.textContent
+    ]
+  );
+
+/**
+ * Choose an entry of the open plus menu as a click does: the pointer goes up over the
+ * entry. Lumino finds the entry under the pointer by its rectangle, and jsdom gives
+ * every element an empty rectangle, so the entry gets one first. jsdom has no
+ * PointerEvent; Lumino reads the type, the button and the place of the event.
+ */
+function pick(command: string): void {
+  const entry = document.body.querySelector<HTMLElement>(
+    `li.lm-Menu-item[data-command="${command}"]`
+  )!;
+  const rectangle = jest
+    .spyOn(entry, 'getBoundingClientRect')
+    .mockReturnValue({ left: 0, right: 100, top: 0, bottom: 20 } as DOMRect);
+  entry.dispatchEvent(
+    new MouseEvent('pointerup', { bubbles: true, clientX: 1, clientY: 1 })
+  );
+  rectangle.mockRestore();
+}
 
 /** The list of words of every launch, in order. A launch has this list and nothing else: no folder. */
 const launches = (all: ILab): string[][] =>
@@ -499,8 +545,115 @@ describe('plugin: commands, palette and panel', () => {
   });
 });
 
+describe('plugin: the plus icon of the panel', () => {
+  const SERIAL_ENTRY = [CONNECT_SERIAL, 'Connect Serial Port'];
+  const USB_ENTRY = [CONNECT_USB, 'Connect USB Device'];
+
+  /** For each connect command: whether the registry has it, whether it is enabled, and whether the palette lists it. */
+  const offered = (all: ILab): boolean[][] =>
+    [CONNECT_SERIAL, CONNECT_USB].map(command => [
+      all.commands.hasCommand(command),
+      all.commands.isEnabled(command),
+      all.palette.addItem.mock.calls.some(([item]) => item.command === command)
+    ]);
+
+  it('ACC-PANEL-153 the plus icon opens a menu with the entries Connect Serial Port and Connect USB Device, an entry opens the dialog of the browser, and the granted device is listed as attached', async () => {
+    const all = await lab();
+    all.serial.dialog = new SimSerialPort(UNO);
+    all.usb.dialog = new SimUsbDevice();
+
+    plus(all).click();
+
+    // The plugin built the menu before it added the commands: the menu reads the
+    // label of an entry when it is drawn.
+    expect(entries()).toEqual([SERIAL_ENTRY, USB_ENTRY]);
+    // The menu is a MenuSvg, as the menus of the lab are: a MenuSvg adds this class
+    // to its node, and a plain Lumino menu does not.
+    expect(
+      document.body
+        .querySelector('.lm-Menu')!
+        .classList.contains('jp-ThemedContainer')
+    ).toBe(true);
+    expect(all.serial.dialogs).toEqual([]);
+    expect(all.usb.dialogs).toEqual([]);
+
+    pick(CONNECT_SERIAL);
+    await tick();
+
+    expect(menuOpen()).toBe(false);
+    expect(all.serial.dialogs).toEqual([null]);
+    expect(all.usb.dialogs).toEqual([]);
+
+    plus(all).click();
+    pick(CONNECT_USB);
+    await tick();
+
+    expect(all.serial.dialogs).toEqual([null]);
+    expect(all.usb.dialogs).toEqual([{ filters: [] }]);
+    const rows = all.panel.node.querySelectorAll<HTMLElement>('[data-device]');
+    expect(
+      Array.from(rows, row => [row.dataset.device, row.dataset.state])
+    ).toEqual([
+      [UNO_NAME, 'attached'],
+      [PROBE_NAME, 'attached']
+    ]);
+    expect(notifications()).toEqual([]);
+  });
+
+  it.each([
+    ['serial', SERIAL_ENTRY, CONNECT_SERIAL, CONNECT_USB],
+    ['usb', USB_ENTRY, CONNECT_USB, CONNECT_SERIAL]
+  ] as const)(
+    'ACC-PANEL-154 with only the %s interface the plus menu has the one entry of that interface and it opens the dialog, and the command of the absent interface is still registered, enabled and in the palette, and raises the notification that names HTTPS and localhost',
+    async (only, entry, present, absent) => {
+      const all = await lab({ interfaces: [only] });
+
+      expect(plus(all).disabled).toBe(false);
+      plus(all).click();
+      expect(entries()).toEqual([entry]);
+      expect(
+        document.body.querySelector(`li.lm-Menu-item[data-command="${absent}"]`)
+      ).toBeNull();
+
+      pick(present);
+      await tick();
+      expect(menuOpen()).toBe(false);
+      expect(all[only].dialogs).toHaveLength(1);
+      expect(notifications()).toEqual([]);
+
+      expect(offered(all)).toEqual([
+        [true, true, true],
+        [true, true, true]
+      ]);
+      await all.commands.execute(absent);
+      await tick();
+      expect(notifications()).toHaveLength(1);
+      expect(notifications()[0][0]).toMatch(
+        /^No device was attached: .*HTTPS.*localhost/
+      );
+      expect(notifications()[0][1]).toBe('error');
+    }
+  );
+
+  it('ACC-PANEL-154 with neither browser interface the plus icon is disabled and opens no menu, the panel says to open the lab over HTTPS or at localhost, and both connect commands are still registered, enabled and in the palette', async () => {
+    const all = await lab({ interfaces: [] });
+
+    expect(plus(all).disabled).toBe(true);
+    plus(all).click();
+    expect(menuOpen()).toBe(false);
+    expect(
+      all.panel.node.querySelector('[data-field="absent"]')!.textContent
+    ).toMatch(/Open the lab over HTTPS or at localhost/);
+    expect(offered(all)).toEqual([
+      [true, true, true],
+      [true, true, true]
+    ]);
+    expect(notifications()).toEqual([]);
+  });
+});
+
 describe('plugin: a grant dialog that gives no device', () => {
-  it('ACC-PANEL-72 a port dialog the browser refuses for lack of a user gesture raises a notification that says to use the button', async () => {
+  it('ACC-PANEL-72 a port dialog the browser refuses for lack of a user gesture raises a notification that says to use the plus icon or Grant', async () => {
     const all = await lab();
     all.serial.dialog = NO_GESTURE;
 
@@ -509,7 +662,7 @@ describe('plugin: a grant dialog that gives no device', () => {
 
     expect(notifications()).toEqual([
       [
-        `The browser opens its device dialog only after a click. Use a button of the Devices panel (if no sidebar has it: ${VIEW_ITEM}).`,
+        `A device dialog opens only after a click. Use the plus icon or Grant in the Devices panel (if no sidebar has it: ${VIEW_ITEM}).`,
         'warning'
       ]
     ]);
@@ -528,7 +681,7 @@ describe('plugin: a grant dialog that gives no device', () => {
     expect(notifications()).toHaveLength(2);
     for (const [text, type] of notifications()) {
       expect(text).toContain(
-        `Use a button of the Devices panel (if no sidebar has it: ${VIEW_ITEM}).`
+        `Use the plus icon or Grant in the Devices panel (if no sidebar has it: ${VIEW_ITEM}).`
       );
       expect(type).toBe('warning');
     }
@@ -554,8 +707,8 @@ describe('plugin: a grant dialog that gives no device', () => {
     ]);
   });
 
-  it('ACC-PANEL-70 a connect command in a browser without the device interfaces raises a notification that names HTTPS and localhost', async () => {
-    const all = await lab({ interfaces: false });
+  it('ACC-PANEL-154 a connect command in a browser without the device interfaces raises a notification that names HTTPS and localhost', async () => {
+    const all = await lab({ interfaces: [] });
 
     await all.commands.execute(CONNECT_SERIAL);
     await all.commands.execute(CONNECT_USB);
@@ -609,7 +762,7 @@ describe('plugin: who opens a grant dialog', () => {
     expect(all.usb.dialogs).toEqual([]);
   });
 
-  it('ACC-SEC-93 each connect command, each add button, each Grant button and each Grant action of a notification opens one grant dialog', async () => {
+  it('ACC-SEC-93 each connect command, each entry of the plus menu, each Grant button and each Grant action of a notification opens one grant dialog', async () => {
     const all = await lab();
     await request(all, PROBE_REQUEST, PORT_REQUEST);
 
@@ -618,9 +771,13 @@ describe('plugin: who opens a grant dialog', () => {
     await all.commands.execute(CONNECT_USB);
     expect([all.serial.dialogs.length, all.usb.dialogs.length]).toEqual([1, 1]);
 
-    button(all, '[data-action="connect-serial"]').click();
+    // The plus icon opens its menu and no dialog.
+    plus(all).click();
+    expect([all.serial.dialogs.length, all.usb.dialogs.length]).toEqual([1, 1]);
+    pick(CONNECT_SERIAL);
     expect([all.serial.dialogs.length, all.usb.dialogs.length]).toEqual([2, 1]);
-    button(all, '[data-action="connect-usb"]').click();
+    plus(all).click();
+    pick(CONNECT_USB);
     expect([all.serial.dialogs.length, all.usb.dialogs.length]).toEqual([2, 2]);
 
     // The simulated user picks no device, so each request ends when its dialog closes.
@@ -1147,6 +1304,100 @@ describe('plugin: how a command line is started in a lab terminal', () => {
     expect(terminal.length).toBeLessThanOrEqual(140);
     expect(all.launch).not.toHaveBeenCalled();
     expect(all.newTerminal).not.toHaveBeenCalled();
+  });
+
+  /** The fixed part of the notification of a launch that the command refused. */
+  const NOT_STARTED = 'The terminal did not start: ';
+
+  /** The notification of a launch that the command refused for this reason, as the plugin raises it. */
+  const notStarted = (reason: string): unknown[] => [
+    `${NOT_STARTED}${reason}`,
+    'error',
+    { autoClose: false }
+  ];
+
+  it('ACC-PANEL-161 when basic-terminal:launch rejects, the Start button, the Terminal button of a serial row and the two lab commands each raise one error notification that says the terminal did not start and holds the reason, and the commands end without an error', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+    // An example of a refusal: the terminal ended before the lab displayed it.
+    const reason =
+      'basic-terminal:launch: terminal "3" exited before it could be displayed';
+    all.launch.mockRejectedValue(new Error(reason));
+
+    button(all, '[data-section="runs"] [data-action="start-run"]').click();
+    await tick();
+    expect(emit.mock.calls).toEqual([notStarted(reason)]);
+
+    button(all, `[data-device="${UNO_NAME}"] [data-action="terminal"]`).click();
+    await tick();
+    expect(emit.mock.calls).toEqual([notStarted(reason), notStarted(reason)]);
+
+    await expect(all.commands.execute(START_RUN)).resolves.toBeUndefined();
+    await expect(all.commands.execute(OPEN_TERMINAL)).resolves.toBeUndefined();
+    expect(emit.mock.calls).toEqual([
+      notStarted(reason),
+      notStarted(reason),
+      notStarted(reason),
+      notStarted(reason)
+    ]);
+    // Each of the four was a launch that the command refused.
+    expect(launchedLines(all)).toEqual([
+      ['jupyterlab-device', 'shell'],
+      ['jupyterlab-device', 'terminal', UNO_NAME],
+      ['jupyterlab-device', 'shell'],
+      ['jupyterlab-device', 'terminal', UNO_NAME]
+    ]);
+    expect(all.newTerminal).not.toHaveBeenCalled();
+  });
+
+  it('ACC-PANEL-161 a rejection that is no Error gives its string as the reason', async () => {
+    const all = await lab();
+    all.launch.mockRejectedValue('the terminal ended before its display');
+
+    await all.commands.execute(START_RUN);
+
+    expect(emit.mock.calls).toEqual([
+      notStarted('the terminal ended before its display')
+    ]);
+  });
+
+  it('ACC-PANEL-161 a reason of 300 characters gives a text of 140 characters that ends with three dots, and a text of exactly 140 characters is not cut', async () => {
+    const all = await lab();
+    // Digits, so that the test sees which part of the reason a text keeps.
+    const long = Array.from({ length: 300 }, (_, index) => index % 10).join('');
+    expect(NOT_STARTED).toHaveLength(28);
+
+    // 28 characters of the fixed part and 112 of the reason are 140; one more is 141.
+    for (const reason of [long, long.slice(0, 112), long.slice(0, 113)]) {
+      all.launch.mockRejectedValue(new Error(reason));
+      await all.commands.execute(START_RUN);
+    }
+
+    const texts = notifications().map(([text]) => text);
+    expect(texts).toEqual([
+      `${NOT_STARTED}${long.slice(0, 109)}...`,
+      `${NOT_STARTED}${long.slice(0, 112)}`,
+      `${NOT_STARTED}${long.slice(0, 109)}...`
+    ]);
+    // The lab cuts a notification after 140 characters.
+    expect(texts.map(text => text.length)).toEqual([140, 140, 140]);
+    expect(notifications().map(([, type]) => type)).toEqual([
+      'error',
+      'error',
+      'error'
+    ]);
+  });
+
+  it('ACC-PANEL-161 a launch that succeeds raises no notification', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    button(all, '[data-section="runs"] [data-action="start-run"]').click();
+    button(all, `[data-device="${UNO_NAME}"] [data-action="terminal"]`).click();
+    await tick();
+    await all.commands.execute(START_RUN);
+    await all.commands.execute(OPEN_TERMINAL);
+
+    expect(all.launch).toHaveBeenCalledTimes(4);
+    expect(notifications()).toEqual([]);
   });
 });
 

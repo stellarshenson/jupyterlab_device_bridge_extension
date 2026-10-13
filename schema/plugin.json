@@ -26,7 +26,7 @@
     "showMenu": {
       "type": "boolean",
       "title": "Show the Devices menu",
-      "description": "Add a Devices menu to the menu bar of the lab, with the commands Connect Serial Port, Connect USB Device, Serial Terminal and Show Devices Panel. The change takes effect at once.",
+      "description": "Add a Devices menu to the menu bar of the lab, with the commands of the extension. The change takes effect at once.",
       "default": false
     },
     "defaultBaudRate": {

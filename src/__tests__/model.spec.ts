@@ -184,7 +184,7 @@ describe('DeviceBridgeModel: what it reports', () => {
     ]);
   });
 
-  it('ACC-PANEL-70 interfaces says which device interfaces the browser has', async () => {
+  it('ACC-PANEL-154 interfaces says which device interfaces the browser has', async () => {
     expect((await connectedLab()).model.interfaces).toEqual({
       serial: true,
       usb: true
@@ -489,7 +489,7 @@ describe('DeviceBridgeModel: grant dialogs', () => {
     expect(server.sent('claim')).toEqual([]);
   });
 
-  it('ACC-PANEL-70 without the browser interface a connect call rejects with reason unsupported and a message that names HTTPS and localhost', async () => {
+  it('ACC-PANEL-154 without the browser interface a connect call rejects with reason unsupported and a message that names HTTPS and localhost', async () => {
     const { model } = await connectedLab({ interfaces: false });
 
     for (const call of [model.connectSerial(), model.connectUsb()]) {

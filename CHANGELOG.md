@@ -2,6 +2,33 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [0.6.27] - 2026-10-13
+
+The Devices panel now controls the programs that use a device: it lists them, starts a device shell and stops a program. One plus icon replaces the two add buttons. The extension is tested against simulated devices in the browser; no test used a physical board. One known defect: a launch that the server of the terminal extension 1.0.7 refuses shows `[object Object]` as its reason.
+
+### Added
+
+- Run control: the Devices panel lists every program started through `jupyterlab-device run` or `jupyterlab-device shell`, in any terminal, with the buttons **Start**, **Info** and a two-step **Stop**
+- Device shell: `jupyterlab-device shell` starts the shell of the lab's terminals with the preload shim and prints a banner that names the installed upload tools and lists the attached devices
+- TX and RX lamps on every device row, which follow the rate of the traffic
+- One plus icon in the header of the panel, with the menu entries Connect Serial Port and Connect USB Device
+- `jupyterlab-device help` and `jupyterlab-device help <command>`, which print what `--help` prints, and `jupyterlab-device --version`
+- The banner of the device shell has no colour when the variable `NO_COLOR` is set
+- `jupyterlab-device --help` ends with one example command line for each upload tool found on `PATH`
+- A notification with the reason when the terminal extension refuses a launch
+
+### Changed
+
+- The serial terminal and the device shell open through `jupyterlab_basic_terminal_extension` 1.0.7 or newer, which pip installs together with this extension: the terminal runs one program, no command line is typed into it, and its tab closes when the program ends
+- The plus icon replaces the buttons **Add serial port** and **Add USB device**, and the section of the devices is titled Serial and USB devices
+- **Stop** sends `SIGHUP`, and `SIGKILL` 3 s later, in place of `SIGTERM`. A tool that `run` started then ends with status 129
+
+### Fixed
+
+- Start failed in a lab whose terminals run fish through a launcher, because it relied on the variable `SHELL`. The shell command now comes from the terminal manager of the server
+- Stop left the tool of a fish shell running, and a bash shell stayed listed for 3 s
+- The settings text of `showMenu` named four of the five commands of the Devices menu
+
 ## [0.6.20] - 2026-10-12
 
 The repository and the wheel now hold three proposed installers of the firmware tools, and the agent skill names them. No test of this extension ran an installer.

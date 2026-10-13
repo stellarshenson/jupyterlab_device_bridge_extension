@@ -76,7 +76,7 @@ The choice is stored with the settings of the lab and holds after a page load. W
 
 The panel has:
 
-- **Add serial port**, **Add USB device** - each opens the browser's dialog, and the device the user chooses is attached. A device granted earlier is attached again when the page loads, without a click
+- **Plus icon** - in the header of the panel. A click opens a menu with **Connect Serial Port** and **Connect USB Device**; each opens the browser's dialog, and the device the user chooses is attached. A device granted earlier is attached again when the page loads, without a click
 - **One row per device** - kind, name, state (`attached`, `detached`, `removed` or `held by another tab`) and byte counters; for a serial port also the baud rate, the profile and the program that holds the virtual device; for a USB device the product name, whether a program has it open and the name of that program
 - **TX and RX lamps** - on every device row. They follow the traffic as the LEDs of a USB serial adapter do: a lamp is lit for 80 ms after each 50 ms period in which bytes passed in its direction. So sparse traffic gives single flashes, and steady traffic gives a steady light. For a device that another lab tab holds, a lamp flashes once when its byte counter grew, and the counters arrive once a second
 - **Terminal** - on an attached serial port; opens the serial terminal
@@ -86,7 +86,7 @@ The panel has:
 - **Requests of programs** - each pending device request with the program, the device it asks for, the reason and a **Grant** button. The lab also raises a notification with that button
 - **Device shell and tools** - one row per program that was started through `jupyterlab-device run` or `jupyterlab-device shell`, in any terminal, also by an agent: the program, its process id, its command line and the device. **Stop** ends the program: the first click changes the button to **Confirm stop**, the second click acts. **Start** opens a device shell, a lab terminal in which every tool has the preload shim; see [Preload shim](#preload-shim). **Info** is there while a program runs. It shows the path of each attached device and example command lines for avrdude, stm32flash and esptool
 - **Round trip** - the last line shows the measured round trip between browser and server in milliseconds
-- **Absent interfaces** - when the browser gives the page no Web Serial or no WebUSB, the panel says so, names HTTPS and localhost, and disables the add button of that interface
+- **Absent interfaces** - when the browser gives the page no Web Serial or no WebUSB, the panel says so, names HTTPS and localhost, and the menu of the plus icon has no entry for that interface; with neither interface the plus icon is disabled
 
 ### Commands
 
@@ -133,6 +133,7 @@ The serial terminal is pyserial's miniterm; this extension has no terminal emula
 - miniterm opens the virtual device as every tool does: the panel shows it as the holding program, and the action on open of the profile runs
 - When the command line ends with an error less than 5 seconds after its start, for example because another program holds the port, the terminal stays open with the message until Enter is pressed
 - Where the server offers no terminals, or the lab has no `jupyterlab_basic_terminal_extension`, the lab shows the command line to run in a shell of the container
+- Where the terminal extension refuses the launch, the lab raises a notification that says the terminal did not start, followed by the reason as the terminal extension gives it
 
 ### Status bar item
 
@@ -184,9 +185,9 @@ A profile is the settings the browser opens the port with, and the action it run
 - **No C compiler** - `run` stops with exit status 1 and a message that names a profile as the way that needs no shim
 - **Statically linked tool** - a statically linked tool does not load the shim, so only a profile serves it
 - **Order** - a DTR, RTS or break call returns to the tool after the lab tab applied it, or after 1 s
-- **Device shell** - `jupyterlab-device shell` starts the shell of the lab's terminals with the shim: the shell command that the Jupyter server starts in a terminal, whichever shell that is. Every tool started in that shell has the shim, without `jupyterlab-device run --` in front. The shell first prints a banner in pale cyan: it names the upload tools that are installed, of avrdude, stm32flash and esptool, or says to install one when none is on `PATH`, and it lists each attached device, a serial port by its path with `(COM)` and a USB device by its name with `(USB)`
+- **Device shell** - `jupyterlab-device shell` starts the shell of the lab's terminals with the shim: the shell command that the Jupyter server starts in a terminal, whichever shell that is. Every tool started in that shell has the shim, without `jupyterlab-device run --` in front. The shell first prints a banner in pale cyan, or without colour when the variable `NO_COLOR` is set: it names the upload tools that are installed, of avrdude, stm32flash and esptool, or says to install one when none is on `PATH`, and it lists each attached device, a serial port by its path with `(COM)` and a USB device by its name with `(USB)`
 - **Device shell from the panel** - the **Start** button of the panel and the command **Device Shell** run `jupyterlab-device shell` in a new lab terminal, in the folder of the file browser. `exit`, or **Stop** in the panel, ends the shell, and the tab of the terminal closes. When the shell cannot start, for example because the container has no C compiler, the terminal stays open with the message until Enter is pressed
-- **Shown in the panel** - `run` reports the program to the server before it starts it, so the panel lists the program while it lives, also one that an agent started. **Stop** sends the program `SIGTERM`, and `SIGKILL` 3 s later when it still lives
+- **Shown in the panel** - `run` reports the program to the server before it starts it, so the panel lists the program while it lives, also one that an agent started. **Stop** sends the program `SIGHUP`, and `SIGKILL` 3 s later when it still lives. A shell ends on `SIGHUP` together with the tool that runs in it
 - **Tested with** - gcc and glibc 2.39 on x86-64 Linux, with Python programs and pyserial as the tool
 
 ## USB devices
@@ -389,7 +390,7 @@ ln -s "$PWD/.agents/skills/jupyterlab-device-bridge-extension" ~/.claude/skills/
 
 ## Command line
 
-`jupyterlab-device` is the one command. It runs in a terminal of the lab, finds the running Jupyter server and its token itself, and talks to the server on the loopback address without a proxy. `jupyterlab-device --help` and `jupyterlab-device <command> --help` hold the full reference with examples.
+`jupyterlab-device` is the one command. It runs in a terminal of the lab, finds the running Jupyter server and its token itself, and talks to the server on the loopback address without a proxy. `jupyterlab-device --help` and `jupyterlab-device <command> --help` hold the full reference with examples. `jupyterlab-device help` and `jupyterlab-device help <command>` print the same, and `jupyterlab-device --version` prints the version.
 
 | Command                                                                                              | Does                                                                                                |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -404,6 +405,7 @@ ln -s "$PWD/.agents/skills/jupyterlab-device-bridge-extension" ~/.claude/skills/
 | `action <device> <action>`                                                                           | runs one action on a serial port                                                                    |
 | `run [--device D] -- CMD [ARG ...]`                                                                  | starts a tool with the preload shim                                                                 |
 | `shell`                                                                                              | starts a device shell: the shell of the lab's terminals with the preload shim                       |
+| `help [COMMAND ...]`                                                                                 | prints the help of the tool or of one command, as `--help` does                                     |
 | `request {serial,usb} [--vid HEX] [--pid HEX] --reason TEXT [--timeout S]`                           | asks the user to grant a device                                                                     |
 | `usb list`                                                                                           | lists the USB devices                                                                               |
 | `usb describe <device>`                                                                              | prints the descriptors of a USB device as JSON                                                      |

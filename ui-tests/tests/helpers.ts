@@ -506,9 +506,34 @@ export async function usbRecord(name: string): Promise<any> {
 export const runPids = async (): Promise<number[]> =>
   (await api('GET', 'runs')).body.runs.map((run: { pid: number }) => run.pid);
 
-/** Click the add serial port button and wait until the tab holds the open port. */
+/** The plus icon in the header of the Devices panel: the one control of the panel that adds a device. */
+export const addIcon = (page: Page): Locator =>
+  page.locator(`${PANEL} [data-action="add-device"]`);
+
+/** The menu that the plus icon opens. The lab attaches an open menu to the body of the page. */
+export const addMenu = (page: Page): Locator => page.locator('body > .lm-Menu');
+
+/** The entry of the plus menu that connects a device of this kind. */
+export const addMenuEntry = (page: Page, kind: 'serial' | 'usb'): Locator =>
+  addMenu(page).locator(
+    `.lm-Menu-item[data-command="device-bridge:connect-${kind}"]`
+  );
+
+/**
+ * Add a device as the user does: click the plus icon of the panel, then the entry of
+ * its menu for this kind of device. The entry opens the dialog of the browser.
+ */
+export async function pickAddEntry(
+  page: Page,
+  kind: 'serial' | 'usb'
+): Promise<void> {
+  await addIcon(page).click();
+  await addMenuEntry(page, kind).click();
+}
+
+/** Pick Connect Serial Port in the plus menu and wait until the tab holds the open port. */
 export async function addSerial(page: Page, port: ISimSerial): Promise<void> {
-  await action(page.locator(PANEL), 'connect-serial').click();
+  await pickAddEntry(page, 'serial');
   await expect
     .poll(async () => (await serialRecord(port.name))?.portState, {
       timeout: ROUND_TRIP
@@ -517,9 +542,9 @@ export async function addSerial(page: Page, port: ISimSerial): Promise<void> {
   await expect(row(page, port.name)).toHaveAttribute('data-owner', 'this');
 }
 
-/** Click the add USB device button and wait until the tab holds the device. */
+/** Pick Connect USB Device in the plus menu and wait until the tab holds the device. */
 export async function addUsb(page: Page, device: ISimUsb): Promise<void> {
-  await action(page.locator(PANEL), 'connect-usb').click();
+  await pickAddEntry(page, 'usb');
   await expect
     .poll(async () => (await usbRecord(device.name))?.state, {
       timeout: ROUND_TRIP

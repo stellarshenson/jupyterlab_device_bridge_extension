@@ -28,7 +28,7 @@ import shutil
 import sys
 import time
 
-from . import shim_build
+from . import __version__, shim_build
 from .client import DeviceBridgeClient, DeviceBridgeError
 from .profiles import ACTIONS
 
@@ -78,7 +78,7 @@ BANNER_TOP = (
 BANNER_BOTTOM = (
     "",
     f"{PROG} list      all devices",
-    f"{PROG} --help    example commands",
+    f"{PROG} help      example commands",
     "\u2500" * 54,
 )
 
@@ -113,9 +113,12 @@ def _device_lines(table: dict) -> list[str]:
 def _banner(device_lines: list[str]) -> str:
     """What `shell` prints on a terminal before it becomes the shell.
 
-    The banner in pale cyan, then the colour reset and an empty line.
+    The banner in pale cyan, then the colour reset and an empty line. With the variable
+    NO_COLOR set and not empty: the banner without an escape sequence, then an empty line.
     """
     lines = "\n".join([*BANNER_TOP, *_tool_lines(), *device_lines, *BANNER_BOTTOM])
+    if os.environ.get("NO_COLOR"):
+        return f"{lines}\n\n"
     return f"\x1b[38;2;159;224;238m{lines}\x1b[0m\n\n"
 
 
@@ -744,7 +747,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG, description=__doc__,
         epilog=f"""
-Every command has its own --help with examples: `{PROG} monitor read --help`.
+Every command has its own --help with examples: `{PROG} monitor read --help`,
+and `{PROG} help monitor read` prints the same.
 
 exit status:
   0  done
@@ -765,11 +769,13 @@ environment:
   JUPYTER_TOKEN                        the token when `jupyter server list` reports no server
   JUPYTER_PORT, JUPYTERHUB_SERVICE_PREFIX
                                        where the server answers when the list reports none
+  NO_COLOR                             when set and not empty, the banner of `shell` has no colour
 
 {_upload_examples()}
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--version", action="version", version=f"{PROG} {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     p = _sub(sub, "list", "list the devices with path, state, holder and settings", """
@@ -843,7 +849,7 @@ library; set a profile for it too.
 Before the command becomes CMD it tells the server its process id. So the
 Devices panel of the lab (if no sidebar has the panel: menu View, item Show
 Devices Panel) lists the run with its command line, and the user can stop it
-there. CMD then receives SIGTERM, and SIGKILL 3 s later when it still runs. CMD
+there. CMD then receives SIGHUP, and SIGKILL 3 s later when it still runs. CMD
 starts also when the server does not take the run; the panel then does not list
 it.
 
@@ -878,7 +884,7 @@ run -- CMD` instead.
 Before the command becomes the shell it tells the server its process id. So the
 Devices panel of the lab (if no sidebar has the panel: menu View, item Show
 Devices Panel) lists it as a run, with `jupyterlab-device shell` as its command
-line, and the user can stop it there. The shell then receives SIGTERM, and
+line, and the user can stop it there. The shell then receives SIGHUP, and
 SIGKILL 3 s later when it still runs.
 
 When standard output is a terminal the command first prints a banner: the
@@ -892,6 +898,18 @@ report the shell command.
   jupyterlab-device shell
 """)
     p.set_defaults(func=cmd_shell)
+
+    p = _sub(sub, "help", "print the help of the tool or of one command", """
+Prints the help of the tool, or of the command that the words name, on stdout:
+`jupyterlab-device help monitor read` prints what `jupyterlab-device monitor read
+--help` prints. It needs no Jupyter server. Exit status 2 when the words name no
+command.
+""", """
+  jupyterlab-device help
+  jupyterlab-device help monitor read
+""")
+    p.add_argument("words", nargs="*", metavar="COMMAND",
+                   help="the words of a command, for example `monitor read`; none for the help of the tool")
 
     p = _sub(sub, "request", "ask the user to grant a device that is not attached", """
 Shows a request in the lab with a Grant button and waits. A program cannot grant a
@@ -933,6 +951,11 @@ def main(argv: list[str] | None = None) -> int:
         split = argv.index("--")
         argv, command = argv[:split], argv[split + 1:]
     args = parser.parse_args(argv)
+    if args.command == "help":
+        # argparse prints the help of the command that the words name and ends the process
+        # there, so no server is looked for. It returns only when a word is `--`.
+        parser.parse_args([*args.words, "--help"])
+        parser.error("help takes the words of a command, for example `help monitor read`")
     if args.func is cmd_run:
         args.command = command
     try:

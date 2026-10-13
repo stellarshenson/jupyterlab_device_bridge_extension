@@ -9,6 +9,8 @@ import hashlib
 import logging
 import os
 import pathlib
+import pty
+import shutil
 import signal
 import socket
 import stat
@@ -1074,17 +1076,17 @@ async def test_acc_prof_120_a_claim_with_refused_defaults_is_refused_and_makes_n
 
 # ------------------------------------------------------------------------------- runs
 
-# Says that it runs, then waits for a line on stdin. SIGTERM ends it, as it ends most tools.
+# Says that it runs, then waits for a line on stdin. SIGHUP ends it, as it ends most tools.
 WAIT = """
 import sys
 print("ready", flush=True)
 sys.stdin.readline()
 """
 
-# Ignores SIGTERM, as an interactive shell does, and says when one arrived.
-IGNORE_TERM = """
+# Ignores SIGHUP, as a tool started under nohup does, and says when one arrived.
+IGNORE_HUP = """
 import signal
-signal.signal(signal.SIGTERM, lambda *_: print("term", flush=True))
+signal.signal(signal.SIGHUP, lambda *_: print("hup", flush=True))
 print("ready", flush=True)
 while True:
     signal.pause()
@@ -1097,6 +1099,22 @@ child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 print(child.pid, flush=True)
 sys.stdin.readline()
+"""
+
+# A terminal session as the lab starts one for a device shell. This process leads the session,
+# with the terminal of argv[1] as its controlling terminal, and the shell of argv[2:] is its
+# child, as a device shell is the child of the script that launches it. A shell that led the
+# session itself would prove less: when a session leader ends, the kernel sends SIGHUP to the
+# foreground tool, whatever ended the leader. Prints the process id of the shell, then how the
+# shell ended: its exit status, or the negative number of the signal that ended it.
+SESSION = """
+import os, subprocess, sys
+os.setsid()
+# The first terminal that a session leader opens becomes its controlling terminal.
+terminal = os.open(sys.argv[1], os.O_RDWR)
+shell = subprocess.Popen(sys.argv[2:], stdin=terminal, stdout=terminal, stderr=terminal)
+print(shell.pid, flush=True)
+print(shell.wait(), flush=True)
 """
 
 # No process has this id: it is above the largest process id of Linux, 4194304.
@@ -1119,6 +1137,20 @@ def state(pid):
             return entry.read().rpartition(")")[2].split()[0]
     except OSError:
         return None
+
+
+def child_running(pid, program):
+    """The id of a child of this process that runs this program; None while it has no such child."""
+    for candidate in os.listdir("/proc"):
+        if candidate.isdigit():
+            try:
+                with open(f"/proc/{candidate}/stat") as entry:
+                    name, _, fields = entry.read().partition("(")[2].rpartition(")")
+            except OSError:
+                continue  # the process ended meanwhile
+            if name == program and fields.split()[1] == str(pid):
+                return int(candidate)
+    return None
 
 
 def foreign_process():
@@ -1342,8 +1374,8 @@ async def test_acc_shim_129_the_watch_runs_only_while_a_run_is_registered_and_en
     await end(child)
 
 
-async def test_acc_shim_130_stop_ends_a_run_with_sigterm(api, fake_tab, tool):
-    """ACC-SHIM-130 `DELETE runs/<pid>` answers 204 and sends SIGTERM to the process of the run, and the run leaves the list when that process has ended."""
+async def test_acc_shim_157_stop_ends_a_run_with_sighup(api, fake_tab, tool):
+    """ACC-SHIM-157 `DELETE runs/<pid>` answers 204 and sends SIGHUP to the process of the run, and the run leaves the list when that process has ended."""
     tab = await fake_tab()
     child = await running(tool)
     assert (await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE}))[0] == 200
@@ -1351,16 +1383,16 @@ async def test_acc_shim_130_stop_ends_a_run_with_sigterm(api, fake_tab, tool):
     stopped = await api("DELETE", "runs", str(child.pid))
 
     assert stopped == (204, None)
-    # Within 2 s it is the SIGTERM that ended the process: the SIGKILL comes after 3 s.
-    assert await asyncio.wait_for(child.wait(), 2) == -signal.SIGTERM
+    # Within 2 s it is the SIGHUP that ended the process: the SIGKILL comes after 3 s.
+    assert await asyncio.wait_for(child.wait(), 2) == -signal.SIGHUP
     await tab.until(lambda: tab.runs["running"] == [], timeout=2)
     assert (await api("GET", "runs")) == (200, {"runs": []})
 
 
-async def test_acc_shim_130_a_run_that_ignores_sigterm_gets_sigkill_3_s_later(api, fake_tab, tool):
-    """ACC-SHIM-130 a run whose process ignores SIGTERM stays listed and gets SIGKILL 3 s after the stop, and the route answers 204 at once."""
+async def test_acc_shim_157_a_run_that_ignores_sighup_gets_sigkill_3_s_later(api, fake_tab, tool):
+    """ACC-SHIM-157 a run whose process ignores SIGHUP stays listed and gets SIGKILL 3 s after the stop, and the route answers 204 at once."""
     tab = await fake_tab()
-    child = await running(tool, IGNORE_TERM)
+    child = await running(tool, IGNORE_HUP)
     status, run = await api("POST", "runs", body={"pid": child.pid, "command": ["bash"]})
     assert status == 200
 
@@ -1369,7 +1401,7 @@ async def test_acc_shim_130_a_run_that_ignores_sigterm_gets_sigkill_3_s_later(ap
     answered = time.monotonic() - started
 
     assert stopped == (204, None) and answered < 1
-    assert await line(child) == b"term\n", "the process got SIGTERM"
+    assert await line(child) == b"hup\n", "the process got SIGHUP"
     await asyncio.sleep(2)
     assert child.returncode is None, "no SIGKILL before the 3 s are over"
     assert (await api("GET", "runs")) == (200, {"runs": [run]}), "a stopped run that still lives stays listed"
@@ -1378,8 +1410,8 @@ async def test_acc_shim_130_a_run_that_ignores_sigterm_gets_sigkill_3_s_later(ap
     await tab.until(lambda: tab.runs["running"] == [], timeout=2)
 
 
-async def test_acc_shim_130_an_unknown_process_id_is_404(api, tool):
-    """ACC-SHIM-130 `DELETE runs/<pid>` of a process id that is no registered run is answered 404 with the code unknown-run, and a live process that is no run gets no signal."""
+async def test_acc_shim_157_an_unknown_process_id_is_404(api, tool):
+    """ACC-SHIM-157 `DELETE runs/<pid>` of a process id that is no registered run is answered 404 with the code unknown-run, and a live process that is no run gets no signal."""
     child = await running(tool)
 
     for pid in (NO_PROCESS, child.pid, "abc", "0", "-1", f"-{child.pid}"):
@@ -1392,9 +1424,9 @@ async def test_acc_shim_130_an_unknown_process_id_is_404(api, tool):
     await end(child)
 
 
-async def test_acc_shim_130_a_process_id_that_another_process_took_is_not_signalled(
+async def test_acc_shim_157_a_process_id_that_another_process_took_is_not_signalled(
         api, fake_tab, tool, manager, monkeypatch):
-    """ACC-SHIM-130 a stop of a run whose process id now belongs to a process with another start time sends no signal: the run is ended, its list is sent, and the answer is 404."""
+    """ACC-SHIM-157 a stop of a run whose process id now belongs to a process with another start time sends no signal: the run is ended, its list is sent, and the answer is 404."""
     manager.run_watch_interval, manager.run_kill_delay = 60, 0.2  # the watch does not end the run first
     tab = await fake_tab()
     child = await running(tool)
@@ -1405,29 +1437,29 @@ async def test_acc_shim_130_a_process_id_that_another_process_took_is_not_signal
     status, document = await api("DELETE", "runs", str(child.pid))
     await asyncio.sleep(0.6)
 
-    assert child.returncode is None, "neither SIGTERM nor SIGKILL reached the process that has the id now"
+    assert child.returncode is None, "neither SIGHUP nor SIGKILL reached the process that has the id now"
     assert (status, document["error"]["code"]) == (404, "unknown-run")
     await tab.until(lambda: tab.runs["running"] == [])
     await end(child)
 
 
-async def test_acc_shim_130_no_sigkill_for_a_process_id_that_another_process_took_after_the_sigterm(
+async def test_acc_shim_157_no_sigkill_for_a_process_id_that_another_process_took_after_the_sighup(
         api, tool, manager, monkeypatch):
-    """ACC-SHIM-130 the SIGKILL is sent only when the process that got the SIGTERM still lives: a process with another start time that has the id by then is not signalled."""
+    """ACC-SHIM-157 the SIGKILL is sent only when the process that got the SIGHUP still lives: a process with another start time that has the id by then is not signalled."""
     manager.run_watch_interval, manager.run_kill_delay = 60, 1
-    child = await running(tool, IGNORE_TERM)
+    child = await running(tool, IGNORE_HUP)
     assert (await api("POST", "runs", body={"pid": child.pid, "command": ["bash"]}))[0] == 200
 
     assert (await api("DELETE", "runs", str(child.pid)))[0] == 204
-    assert await line(child) == b"term\n"
+    assert await line(child) == b"hup\n"
     another_process_takes(monkeypatch, child.pid)
     await asyncio.sleep(1.5)
 
     assert child.returncode is None, "no SIGKILL for the process that has the id now"
 
 
-async def test_acc_shim_130_stop_signals_the_process_of_the_run_and_not_its_process_group(api):
-    """ACC-SHIM-130 the stop signal goes to the process of the run only: a child of that process in the same process group lives on."""
+async def test_acc_shim_157_stop_signals_the_process_of_the_run_and_not_its_process_group(api):
+    """ACC-SHIM-157 the stop signal goes to the process of the run only: a child of that process in the same process group lives on."""
     # A session of its own, so that the process group of the run is not the one of the tests.
     run = await asyncio.create_subprocess_exec(
         sys.executable, "-c", WITH_CHILD, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -1439,7 +1471,7 @@ async def test_acc_shim_130_stop_signals_the_process_of_the_run_and_not_its_proc
 
         assert (await api("DELETE", "runs", str(run.pid)))[0] == 204
 
-        assert await asyncio.wait_for(run.wait(), 2) == -signal.SIGTERM
+        assert await asyncio.wait_for(run.wait(), 2) == -signal.SIGHUP
         await asyncio.sleep(0.3)
         assert state(grandchild) in ("S", "R"), "the child of the run got no signal"
     finally:
@@ -1448,3 +1480,49 @@ async def test_acc_shim_130_stop_signals_the_process_of_the_run_and_not_its_proc
         if run.returncode is None:
             run.kill()
             await run.wait()
+
+
+# The interactive shells of the test below. Neither reads a start file, and fish keeps no history.
+SHELLS = [
+    pytest.param(["bash", "--norc", "-i"], id="bash"),
+    pytest.param(["fish", "--no-config", "--private", "-i"], id="fish",
+                 marks=pytest.mark.skipif(shutil.which("fish") is None, reason="fish is not installed")),
+]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+async def test_acc_shim_157_stop_ends_an_interactive_shell_together_with_its_foreground_tool(
+        shell, api, tool, tmp_path, monkeypatch):
+    """ACC-SHIM-157 the stop of a run that is an interactive shell on a terminal, with a tool in its foreground, ends the shell and the tool within 1 s, and it is not the SIGKILL that ends the shell: bash ends by the SIGHUP itself."""
+    monkeypatch.setenv("HOME", str(tmp_path))  # bash writes its history there
+    keyboard, terminal = pty.openpty()
+    shell_pid = tool_pid = None
+    try:
+        session = await tool(SESSION, os.ttyname(terminal), *shell)
+        shell_pid = int(await line(session))
+        os.write(keyboard, b"sleep 60\n")
+        deadline = time.monotonic() + 20
+        while (tool_pid := child_running(shell_pid, "sleep")) is None:
+            assert time.monotonic() < deadline, "the shell did not start the tool"
+            await asyncio.sleep(0.01)
+        assert (await api("POST", "runs", body={"pid": shell_pid, "command": ["jupyterlab-device", "shell"]}))[0] == 200
+
+        stopped = time.monotonic()
+        assert (await api("DELETE", "runs", str(shell_pid))) == (204, None)
+
+        # State Z: the process has ended, and the process that inherited it has not waited for it yet.
+        while living := [name for name, pid in (("the shell", shell_pid), ("the tool", tool_pid))
+                         if state(pid) not in (None, "Z")]:
+            assert time.monotonic() - stopped < 1, f"1 s after the stop these still run: {', '.join(living)}"
+            await asyncio.sleep(0.01)
+        ended = int(await line(session))
+        assert ended != -signal.SIGKILL, "the shell ended before the SIGKILL of the stop"
+        if shell[0] == "bash":
+            assert ended == -signal.SIGHUP, "bash ends by the signal itself"
+    finally:
+        for pid in (tool_pid, shell_pid):
+            if pid:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+        os.close(keyboard)
+        os.close(terminal)

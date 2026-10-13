@@ -44,13 +44,40 @@
   color: var(--jp-ui-font-color1);
 }
 
-/* The row of the two add buttons */
-.jp-DeviceBridgePanel-toolbar {
+/* The plus icon of the header, with the measures of the icon buttons of the AI
+   assistants panel: a hit box of 24px, a glyph of 14px */
+.jp-DeviceBridgePanel-iconButton {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 2px;
   display: flex;
-  gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--jp-border-color3);
-  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: var(--jp-ui-font-color2);
+}
+
+.jp-DeviceBridgePanel-iconButton:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.jp-DeviceBridgePanel-iconButton:focus-visible {
+  outline: 1px solid var(--jp-brand-color1);
+  outline-offset: 1px;
+}
+
+.jp-DeviceBridgePanel-iconButton:hover:not(:disabled) {
+  background: var(--jp-layout-color3);
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-DeviceBridgePanel-iconButton svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* Buttons */
@@ -106,12 +133,6 @@
 .jp-DeviceBridgePanel-button.jp-mod-warn.jp-mod-confirm {
   background: var(--jp-error-color1);
   color: var(--jp-ui-inverse-font-color1);
-}
-
-/* each add button takes half the width of the panel */
-.jp-DeviceBridgePanel-toolbar .jp-DeviceBridgePanel-button {
-  flex: 1 1 0;
-  min-width: 0;
 }
 
 /* The message for a browser without the device interfaces */

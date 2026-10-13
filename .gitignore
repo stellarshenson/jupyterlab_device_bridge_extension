@@ -141,3 +141,6 @@ junit.xml
 .claude/agents/
 .claude/workflows/
 .claude/agent-memory/
+
+# images pasted into the chat of the lab: not part of the project, and out of the sdist
+paste-*.png

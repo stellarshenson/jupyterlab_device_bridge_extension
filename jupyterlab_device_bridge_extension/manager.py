@@ -798,8 +798,10 @@ class DeviceManager:
         return [{field: run[field] for field in RUN_FIELDS} for run in self._runs.values()]
 
     def stop_run(self, pid: str) -> None:
-        """Stop a run: SIGTERM to its process now, SIGKILL `run_kill_delay` later when it still lives.
+        """Stop a run: SIGHUP to its process now, SIGKILL `run_kill_delay` later when it still lives.
 
+        SIGHUP and not SIGTERM: an interactive bash ignores SIGTERM, and fish ends on it
+        without ending its foreground tool. Both shells end on SIGHUP together with their jobs.
         The signals go to the process of the run only, not to its process group.
 
         Args:
@@ -814,7 +816,7 @@ class DeviceManager:
         run = next((run for run in self._runs.values() if str(run["pid"]) == pid), None)
         if run is None:
             raise BridgeError(404, "unknown-run", f"no run with the process id {pid}")
-        self._signal_run(run, signal.SIGTERM)
+        self._signal_run(run, signal.SIGHUP)
         asyncio.get_running_loop().call_later(self.run_kill_delay, self._signal_run, run, signal.SIGKILL)
 
     def _signal_run(self, run: dict, number: int) -> None:

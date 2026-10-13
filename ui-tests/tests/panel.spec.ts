@@ -5,6 +5,9 @@ import { basename, join } from 'path';
 
 import {
   action,
+  addIcon,
+  addMenu,
+  addMenuEntry,
   addSerial,
   addUsb,
   api,
@@ -23,6 +26,7 @@ import {
   PANEL,
   PANEL_SHOWN,
   PANEL_TAB,
+  pickAddEntry,
   recordLamps,
   ROUND_TRIP,
   row,
@@ -550,7 +554,84 @@ test.describe('Devices panel', () => {
     expect(await serialRecord(port.name)).toBeUndefined();
   });
 
-  test('ACC-PANEL-70 when the browser has neither interface the panel names HTTPS and localhost and disables both add buttons', async ({
+  test('ACC-PANEL-153 the header of the panel has one plus icon and the panel has no add button; a click opens a menu under the icon with the entries Connect Serial Port and Connect USB Device; each entry opens the dialog of the browser, and the granted device is listed as attached', async ({
+    page
+  }) => {
+    const port = simSerial();
+    const device = simUsb();
+    await openLab(page, { serial: [port], usb: [device] });
+    const panel = page.locator(PANEL);
+    const icon = panel.locator(
+      '.jp-DeviceBridgePanel-header button[data-action="add-device"]'
+    );
+    await expect(icon).toHaveCount(1);
+    await expect(panel.locator('[data-action="add-device"]')).toHaveCount(1);
+    await expect(icon).toBeEnabled();
+    await expect(icon.locator('svg')).toHaveCount(1);
+    // The two add buttons of the first version are gone. Start is a positive control
+    // of this way to find a button of the panel.
+    await expect(action(panel, 'start-run')).toHaveCount(1);
+    await expect(
+      panel.locator(
+        '[data-action="connect-serial"], [data-action="connect-usb"]'
+      )
+    ).toHaveCount(0);
+
+    await icon.click();
+
+    const menu = addMenu(page);
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('.lm-Menu-itemLabel')).toHaveText([
+      'Connect Serial Port',
+      'Connect USB Device'
+    ]);
+    expect(
+      await menu
+        .locator('.lm-Menu-item')
+        .evaluateAll(items =>
+          items.map(item => item.getAttribute('data-command'))
+        )
+    ).toEqual(['device-bridge:connect-serial', 'device-bridge:connect-usb']);
+    // The menu is below the icon, the left edges in one line.
+    const iconBox = (await icon.boundingBox())!;
+    const menuBox = (await menu.boundingBox())!;
+    expect(Math.abs(menuBox.x - iconBox.x)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(menuBox.y - (iconBox.y + iconBox.height))
+    ).toBeLessThanOrEqual(1);
+
+    // Each entry opens the dialog of the browser, and the device it grants is attached.
+    expect(await simDialogs(page)).toEqual([]);
+    await addMenuEntry(page, 'serial').click();
+    await expect(menu).toHaveCount(0);
+    await expect
+      .poll(async () => (await serialRecord(port.name))?.portState, {
+        timeout: ROUND_TRIP
+      })
+      .toBe('open');
+    await expect(field(row(page, port.name), 'state')).toHaveText('attached');
+
+    await icon.click();
+    await addMenuEntry(page, 'usb').click();
+    await expect
+      .poll(async () => (await usbRecord(device.name))?.state, {
+        timeout: ROUND_TRIP
+      })
+      .toBe('attached');
+    await expect(field(row(page, device.name), 'state')).toHaveText('attached');
+    expect(
+      (await simDialogs(page)).map(dialog => [
+        dialog.kind,
+        dialog.outcome,
+        dialog.device
+      ])
+    ).toEqual([
+      ['serial', 'granted', port.id],
+      ['usb', 'granted', device.id]
+    ]);
+  });
+
+  test('ACC-PANEL-154 when the browser has neither interface the panel names HTTPS and localhost, and the plus icon is disabled, dimmed and opens no menu', async ({
     page
   }) => {
     await openLab(page, { absent: true });
@@ -560,8 +641,89 @@ test.describe('Devices panel', () => {
     await expect(absent).toBeVisible();
     await expect(absent).toContainText('HTTPS');
     await expect(absent).toContainText('localhost');
-    await expect(action(panel, 'connect-serial')).toBeDisabled();
-    await expect(action(panel, 'connect-usb')).toBeDisabled();
+    const icon = addIcon(page);
+    await expect(icon).toHaveCount(1);
+    await expect(icon).toBeDisabled();
+    await expect(icon).toHaveCSS('opacity', '0.4');
+    // A click on the place of a disabled icon opens nothing.
+    await icon.click({ force: true });
+    await expect(addMenu(page)).toHaveCount(0);
+  });
+
+  test('ACC-PANEL-155 the plus icon has the measures of an icon button: 24 px by 24 px, a glyph of 14 px, no border and a transparent background, and under the pointer the background --jp-layout-color3', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const icon = addIcon(page);
+    // The pointer is somewhere else: the icon is in its plain state.
+    await page.mouse.move(700, 500);
+    await expect(icon).toHaveCSS('width', '24px');
+    await expect(icon).toHaveCSS('height', '24px');
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      await expect(icon).toHaveCSS(`border-${side}-width`, '0px');
+    }
+    await expect(icon).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    const glyph = icon.locator('svg');
+    await expect(glyph).toHaveCSS('width', '14px');
+    await expect(glyph).toHaveCSS('height', '14px');
+
+    // What the variable of the lab is on the panel, as the colour the browser computes.
+    const layoutColor3 = await page.locator(PANEL).evaluate(panel => {
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = 'var(--jp-layout-color3)';
+      panel.append(probe);
+      const colour = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return colour;
+    });
+    expect(layoutColor3).toMatch(/^rgb\(/);
+    await icon.hover();
+    await expect(icon).toHaveCSS('background-color', layoutColor3);
+  });
+
+  test('ACC-PANEL-156 with the focus on the plus icon Enter opens the menu, ArrowDown and Enter pick the entry of the serial port, and Escape closes the menu with the focus on the icon again; the title of the icon says what it adds', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    const icon = addIcon(page);
+    const menu = addMenu(page);
+    await expect(icon).toHaveAttribute(
+      'title',
+      'Add a serial port or a USB device'
+    );
+    await expect(icon).toHaveAttribute('aria-haspopup', 'menu');
+
+    await icon.focus();
+    await page.keyboard.press('Enter');
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await expect(menu.locator('.lm-Menu-item.lm-mod-active')).toHaveAttribute(
+      'data-command',
+      'device-bridge:connect-serial'
+    );
+    await page.keyboard.press('Enter');
+
+    // The key is a user gesture: the dialog of the browser opened and gave the port.
+    await expect(menu).toHaveCount(0);
+    await expect
+      .poll(async () => (await serialRecord(port.name))?.portState, {
+        timeout: ROUND_TRIP
+      })
+      .toBe('open');
+    await expect(field(row(page, port.name), 'state')).toHaveText('attached');
+    expect((await simDialogs(page)).map(dialog => dialog.outcome)).toEqual([
+      'granted'
+    ]);
+
+    await icon.focus();
+    await page.keyboard.press('Enter');
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(icon).toBeFocused();
+    // Escape picked nothing: no second dialog opened.
+    expect(await simDialogs(page)).toHaveLength(1);
   });
 
   test('ACC-PANEL-71 a second lab tab shows a device of the first tab as held by another tab, with no detach and no forget', async ({
@@ -616,7 +778,7 @@ test.describe('Devices panel', () => {
       }
     });
 
-    await action(page.locator(PANEL), 'connect-serial').click();
+    await pickAddEntry(page, 'serial');
 
     await expect(
       toast(page, 'No device was attached: The port is in use.')
@@ -791,7 +953,7 @@ test.describe('Device shell and tools', () => {
       ...devices,
       '',
       expect.stringMatching(/^jupyterlab-device list +all devices$/),
-      expect.stringMatching(/^jupyterlab-device --help +example commands$/)
+      expect.stringMatching(/^jupyterlab-device help +example commands$/)
     ]);
     expect(banner.join('\n')).not.toMatch(/shim/i);
 
@@ -988,10 +1150,10 @@ test.describe('Device shell and tools', () => {
     expect(run.process.signalCode).toBeNull();
     await stop.click();
 
-    // The server sent SIGTERM, which ends `cat`.
+    // The server sent SIGHUP, which ends `cat`.
     await expect
       .poll(() => run.process.signalCode, { timeout: ROUND_TRIP })
-      .toBe('SIGTERM');
+      .toBe('SIGHUP');
     await expect(rowOfRun).toHaveCount(0, { timeout: ROUND_TRIP });
     await expect(field(runsSection(page), 'count')).toHaveText('(0)');
   });
@@ -1011,7 +1173,7 @@ test.describe('Device shell and tools', () => {
     await page.waitForTimeout(600);
     await stop.click();
 
-    // An interactive shell ignores SIGTERM, and the server ends it by force 3 s later.
+    // SIGHUP ends an interactive shell; SIGTERM, which it ignores, would leave it 3 s.
     await expect(runRow(page, pid)).toHaveCount(0, { timeout: ROUND_TRIP });
     await expect.poll(() => fs.existsSync(`/proc/${pid}`)).toBe(false);
     await expect(field(runsSection(page), 'count')).toHaveText('(0)');

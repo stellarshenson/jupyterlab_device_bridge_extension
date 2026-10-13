@@ -71,6 +71,14 @@ The LD_PRELOAD library and the server side that takes its events
   - root-cause: 2026-10-12T10:37:37Z @kj the open is found by the 20 ms poll, shim lines arrive earlier; a T line then stores the frame while pty.held is false, and no close clears it
   - log: 2026-10-12T10:37:37Z @kj added
   - log: 2026-10-12T11:24:36Z @kj closed: fixed: at a line of the shim the bridge looks for the tool's open at once; a T line with no tool on the device changes nothing
+- [x] `DEF-SHIM-18` **Stop does not end an interactive shell or its tool** - MAJOR; Stop of a device shell: bash stays listed 3 s until SIGKILL; fish ends at once but its foreground tool keeps running, and a fish stopped under 5 s after Start leaves the prompt Press Enter unable to take Enter
+  - evidence: stop_run sends SIGHUP; pytest test_acc_shim_157_stop_ends_an_interactive_shell_together_with_its_foreground_tool[bash] and [fish] passed in 456 passed (logs/review2-r1-make-test.log); probe tmp/review/sig_matrix.py: shell and tool gone within 0.05 s
+  - related: ACC-SHIM-130
+  - repro: start a device shell with bash, then with fish and a foreground tool; press Stop; measure the shell and the tool (probe sig_matrix.py: bash gone after 3.02 s by SIGKILL; fish gone after 0.05 s, tool alive)
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-10-13T11:42:14Z @kj stop_run sends SIGTERM to the process id of the run; an interactive bash ignores SIGTERM, and fish ends on SIGTERM without ending its foreground job and without restoring the terminal modes; both end with their jobs on SIGHUP
+  - log: 2026-10-13T11:42:14Z @kj added
+  - log: 2026-10-13T13:22:17Z @kj closed
 
 ## Panel, commands and menu `PANEL`
 
@@ -106,6 +114,12 @@ What the user sees and clicks in the lab
   - log: 2026-10-13T08:43:05Z @kj added
   - log: 2026-10-13T08:43:29Z @kj edited test-tags added "UNIT, FUNCTIONAL"
   - log: 2026-10-13T09:42:07Z @kj closed
+- [ ] `DEF-PANEL-19` **Refused launch by the terminal server shows [object Object]** - MINOR; when the server of the terminal extension refuses a launch, for example because the folder of the file browser no longer exists, the notification reads The terminal did not start: [object Object]; the user learns that the launch failed, not why
+  - related: ACC-PANEL-161
+  - repro: node: build ServerConnection.ResponseError with the body {error: invalid_cwd} as the terminal extension does, run the expression of runInTerminal; output: The terminal did not start: [object Object]
+  - test-tags: UNIT
+  - root-cause: 2026-10-13T13:40:09Z @kj jupyterlab_basic_terminal_extension 1.0.7 src/request.ts:47 throws ResponseError(response, data.message || data); its server bodies hold error and no message, so the body object becomes the message and the text is lost before this plugin gets the rejection
+  - log: 2026-10-13T13:40:09Z @kj added
 
 ## Command line and agent documents `CLI`
 
@@ -144,14 +158,18 @@ The jupyterlab-device command, its help texts, the README and the agent skill
 
 GitHub Actions workflows, and tests that fail only on a runner
 
-- [ ] `DEF-CI-16` **Stopped-server test times out on a runner** - MEDIUM; the pytest test of ACC-SERIAL-3 waits 30 s for its Jupyter server to end after SIGTERM; on a GitHub runner the server did not end in that time, once, and the Build workflow of commit ec53401 failed
+- [x] `DEF-CI-16` **Stopped-server test times out on a runner** - MEDIUM; the pytest test of ACC-SERIAL-3 waits 30 s for its Jupyter server to end after SIGTERM; on a GitHub runner the server did not end in that time, once, and the Build workflow of commit ec53401 failed
+  - evidence: GitHub Actions run 38382480138 (Build) of commit 1ece3d6: job build success, pytest step passed with JUPYTER_NO_CONFIG=1 in the test server; local: server ended 0.19 s after SIGTERM against 40.67 s with a 40 s stand-in julia
   - repro: put a program julia that sleeps 40 s on PATH and run the test: the server ends 40 s after SIGTERM
   - test-tags: UNIT
   - root-cause: 2026-10-13T10:12:16Z @kj the test server loaded every extension of the environment; jupyter_lsp looks for language servers in a thread at start, with julia and Rscript calls that have no timeout, and Python ends only after that thread
   - log: 2026-10-13T10:12:16Z @kj added
-- [ ] `DEF-CI-17` **Release check fails at the trial upload** - MEDIUM; the Check Release workflow of commit ec53401 failed in the step publish-assets: the trial upload of the wheel to the pypiserver inside the runner was answered with 400 Bad Request
+  - log: 2026-10-13T10:30:23Z @kj closed
+- [x] `DEF-CI-17` **Release check fails at the trial upload** - MEDIUM; the Check Release workflow of commit ec53401 failed in the step publish-assets: the trial upload of the wheel to the pypiserver inside the runner was answered with 400 Bad Request
+  - evidence: GitHub Actions run 38382480038 (Check Release) of commit 1ece3d6: success with steps_to_skip publish-assets; local: pypiserver 2.3.2 refused the 0.6.24 wheel with MultipartError Memory limit reached
   - repro: start pypiserver 2.3.2 on localhost and upload the wheel with twine: MultipartError: Memory limit reached
   - test-tags: CI
   - root-cause: 2026-10-13T10:12:16Z @kj pypiserver keeps at most 102400 bytes of one upload in memory; the README is the long description of the wheel, 48875 characters; with the wheel of 0.6.24 the largest description that passes has 46516
   - log: 2026-10-13T10:12:16Z @kj added
+  - log: 2026-10-13T10:30:23Z @kj closed
 

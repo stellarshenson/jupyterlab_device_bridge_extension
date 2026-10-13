@@ -3,15 +3,21 @@
  *
  * It shows what the model reports: the device table, the device requests of container
  * programs, the runs and the round trip. A click that opens a dialog of the browser,
- * a dialog of the lab or a lab terminal goes to a handler of the plugin. Attach,
- * detach, forget, a profile change and the stop of a run go to the model.
+ * a dialog of the lab or a lab terminal goes to a handler of the plugin. The plus icon
+ * opens a menu that the plugin made from its connect commands. Attach, detach,
+ * forget, a profile change and the stop of a run go to the model.
  *
  * Hooks for the functional tests. Each one is an id or an attribute, never a class
  * name, and none of them changes with the text of a label.
  *
  *   panel root          #jupyterlab-device-bridge-panel
- *   add buttons         [data-action="connect-serial"], [data-action="connect-usb"];
- *                       disabled when the browser lacks that interface
+ *   plus icon           [data-action="add-device"] in the header; disabled when the
+ *                       browser has neither interface. A click opens the menu that
+ *                       the plugin made. The menu is a Lumino widget in the page
+ *                       body, not in the panel. It has an entry only for an
+ *                       interface the browser has:
+ *                       [data-command="device-bridge:connect-serial"],
+ *                       [data-command="device-bridge:connect-usb"]
  *   absent interfaces   [data-field="absent"]; hidden when the browser has both
  *   device row          [data-device="<name>"] with data-kind="serial|usb",
  *                       data-state="attached|detached", data-owner="this|other|none"
@@ -63,8 +69,9 @@
  */
 
 import { Notification } from '@jupyterlab/apputils';
+import { addIcon } from '@jupyterlab/ui-components';
 
-import { Widget } from '@lumino/widgets';
+import { Menu, Widget } from '@lumino/widgets';
 
 import { deviceIcon } from './icons';
 import { DeviceBridgeModel } from './model';
@@ -132,10 +139,8 @@ const VALUE_CLASS = 'jp-DeviceBridgePanel-value';
 /** What the panel shows and the handlers of the clicks it does not act on itself. */
 export interface IDeviceBridgePanelOptions {
   model: DeviceBridgeModel;
-  /** Open the serial port dialog of the browser. Called inside a click. */
-  connectSerial: () => void;
-  /** Open the USB device dialog of the browser. Called inside a click. */
-  connectUsb: () => void;
+  /** The menu that the plus icon of the header opens: the connect commands of the interfaces the browser has. */
+  addMenu: Menu;
   /** Open the dialog of the browser for the device request with this id. Called inside a click. */
   grantRequest: (id: string) => void;
   /** Open the serial terminal on the serial port with this name. */
@@ -704,7 +709,7 @@ function section(
  * programs, the runs and the round trip, with the buttons that act on them.
  *
  * @example
- * const panel = new DeviceBridgePanel({ model, connectSerial, connectUsb, grantRequest, openTerminal, startRun, showRunInfo });
+ * const panel = new DeviceBridgePanel({ model, addMenu, grantRequest, openTerminal, startRun, showRunInfo });
  * app.shell.add(panel, 'left');
  */
 export class DeviceBridgePanel extends Widget {
@@ -718,25 +723,29 @@ export class DeviceBridgePanel extends Widget {
     this.title.caption = 'Devices';
     this.addClass('jp-DeviceBridgePanel');
 
+    // The plus icon of the lab is the one control that adds a device. It is not made
+    // by `button`, which gives a button the frame and the padding of a text button.
+    const add = this._add;
+    add.type = 'button';
+    add.dataset.action = 'add-device';
+    add.title = 'Add a serial port or a USB device';
+    add.setAttribute('aria-haspopup', 'menu');
+    add.disabled = !model.interfaces.serial && !model.interfaces.usb;
+    addIcon.element({ container: add });
+    add.addEventListener('click', () => {
+      // Below the icon, the left edges in one line.
+      const rect = add.getBoundingClientRect();
+      options.addMenu.open(rect.left, rect.bottom);
+    });
+    // The open menu has the focus, and a menu that closes gives it to no element, so
+    // the icon takes it. The panel is the receiver of the signal, so `dispose` ends
+    // this connection with the other connections of the panel.
+    options.addMenu.aboutToClose.connect(this._focusAdd, this);
     const header = el('div', 'jp-DeviceBridgePanel-header');
-    header.append(el('span', 'jp-DeviceBridgePanel-headerTitle', 'Devices'));
-
-    const addSerial = button(
-      'connect-serial',
-      'Add serial port',
-      'Choose a serial port of this computer in the dialog of the browser',
-      options.connectSerial
+    header.append(
+      el('span', 'jp-DeviceBridgePanel-headerTitle', 'Devices'),
+      add
     );
-    const addUsb = button(
-      'connect-usb',
-      'Add USB device',
-      'Choose a USB device of this computer in the dialog of the browser',
-      options.connectUsb
-    );
-    addSerial.disabled = !model.interfaces.serial;
-    addUsb.disabled = !model.interfaces.usb;
-    const toolbar = el('div', 'jp-DeviceBridgePanel-toolbar');
-    toolbar.append(addSerial, addUsb);
 
     const missing = [
       model.interfaces.serial ? '' : 'serial ports',
@@ -792,7 +801,7 @@ export class DeviceBridgePanel extends Widget {
 
     const footer = el('div', 'jp-DeviceBridgePanel-footer');
     footer.append('Browser to server round trip: ', this._roundTrip);
-    this.node.append(header, toolbar, absent, body, footer);
+    this.node.append(header, absent, body, footer);
 
     model.devicesChanged.connect(this._renderDevices, this);
     model.requestsChanged.connect(this._renderRequests, this);
@@ -889,8 +898,13 @@ export class DeviceBridgePanel extends Widget {
       ms === null ? 'not connected' : `${ms.toFixed(1)} ms`;
   }
 
+  private _focusAdd(): void {
+    this._add.focus();
+  }
+
   private readonly _model: DeviceBridgeModel;
   private readonly _options: IDeviceBridgePanelOptions;
+  private readonly _add = el('button', 'jp-DeviceBridgePanel-iconButton');
   private readonly _serialRows = new Map<string, IRow<ISerialRecord>>();
   private readonly _usbRows = new Map<string, IRow<IUsbRecord>>();
   private readonly _serialList = el('div', 'jp-DeviceBridgePanel-list');
@@ -898,7 +912,7 @@ export class DeviceBridgePanel extends Widget {
   private readonly _empty = el(
     'div',
     'jp-DeviceBridgePanel-empty',
-    'No device yet. Add a serial port or a USB device of this computer with the buttons above.'
+    'No device yet. Add a serial port or a USB device of this computer with the plus icon above.'
   );
   private readonly _deviceCount = field(
     'count',

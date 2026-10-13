@@ -72,7 +72,7 @@ USB_FIELDS = {"name", "state", "tab", "vendorId", "productId", "productName", "m
 # The command table of docs/design.md.
 COMMANDS = {
     "list", "status", "profiles", "profile", "monitor read", "monitor write", "terminal", "signals",
-    "action", "run", "shell", "request", "usb list", "usb describe", "usb open", "usb close", "usb claim",
+    "action", "run", "shell", "help", "request", "usb list", "usb describe", "usb open", "usb close", "usb claim",
     "usb release", "usb configuration", "usb alternate", "usb clear-halt", "usb reset", "usb control",
     "usb transfer",
 }
@@ -143,6 +143,21 @@ def cli_run(lab, jp_asyncio_loop):
         if child.returncode is None:
             child.kill()
             jp_asyncio_loop.run_until_complete(child.wait())
+
+
+@pytest.fixture
+def no_server(cli_run, tmp_path, monkeypatch):
+    """No server answers the CLI, and its `jupyter` lists none.
+
+    Returns:
+        A file that exists once the CLI has looked for a server: its `jupyter` makes it.
+    """
+    looked = tmp_path / "looked-for-a-server"
+    (cli_run.binaries / "jupyter").write_text(f"#!/bin/sh\n: > '{looked}'\n")
+    monkeypatch.setenv("JUPYTER_PORT", "9")
+    # The top-level help names the upload tools on PATH, so this process and the command get one PATH.
+    monkeypatch.setenv("PATH", str(cli_run.binaries))
+    return looked
 
 
 async def port_sends(tab, api, data):
@@ -274,6 +289,62 @@ async def test_acc_cli_81_help_runs_without_a_server(cli_run, monkeypatch):
     assert nested.out.decode() == PARSERS[("monitor", "read")].format_help()
     assert "\x1b" not in top.out.decode()
     assert (bare.status, bare.out) == (2, b"") and bare.err == top.out.decode()
+
+
+@pytest.mark.parametrize("words", [(), ("monitor",), ("monitor", "read"), ("usb", "control")],
+                         ids=lambda words: " ".join(words) or "the tool")
+async def test_acc_cli_158_help_prints_what_the_help_flag_prints_and_looks_for_no_server(words, cli_run, no_server):
+    """ACC-CLI-158 `help` and `help <command>` print on stdout, with exit 0 and nothing on stderr, what `--help` and `<command> --help` print, and do not look for a server; a command that needs the server looks for one."""
+    by_command = await cli_run("help", *words)
+    by_flag = await cli_run(*words, "--help")
+
+    assert (by_command.status, by_command.err) == (0, "")
+    assert by_command.out == by_flag.out
+    assert by_command.out.decode() == dict(parsers(cli.build_parser()))[words].format_help()
+    assert not no_server.exists(), "help looked for a server"
+    assert (await cli_run("list")).status == 1 and no_server.exists(), "list looks for a server, and the test sees it"
+
+
+# Words after `help` that name no command, and what stderr says about them. Two `--` give
+# argparse a word `--`, after which it reads `--help` as a text and no longer as the flag.
+NO_COMMAND = {
+    ("nosuch",): "argument COMMAND: invalid choice: 'nosuch'",
+    ("monitor", "nosuch"): "argument COMMAND: invalid choice: 'nosuch'",
+    ("monitor", "write", SERIAL_NAME, "--", "--"): "help takes the words of a command",
+}
+
+
+@pytest.mark.parametrize("words, message", NO_COMMAND.items(), ids=map(" ".join, NO_COMMAND))
+async def test_acc_cli_158_help_of_an_unknown_command_exits_2(words, message, cli_run, no_server):
+    """ACC-CLI-158 `help` with words that name no command exits 2 with the reason on stderr and nothing on stdout, and does not look for a server."""
+    outcome = await cli_run("help", *words)
+
+    assert (outcome.status, outcome.out) == (2, b"")
+    assert outcome.err.startswith(f"usage: {cli.PROG} ") and f": error: {message}" in outcome.err
+    assert not no_server.exists()
+
+
+def test_acc_cli_158_the_top_level_help_has_a_line_for_help():
+    """ACC-CLI-158 the list of commands in `jupyterlab-device --help` has one line for `help`, and the sentence about the `--help` of every command says that `jupyterlab-device help monitor read` prints the same."""
+    text = PARSERS[()].format_help()
+    lines = [line for line in text.splitlines() if line.startswith("    help ")]
+
+    assert len(lines) == 1 and lines[0].split(None, 1)[1] == "print the help of the tool or of one command"
+    assert ("Every command has its own --help with examples: `jupyterlab-device monitor read --help`, "
+            "and `jupyterlab-device help monitor read` prints the same.") in " ".join(text.split())
+
+
+async def test_acc_cli_159_version_prints_the_name_and_the_version_of_the_installed_package(cli_run, no_server):
+    """ACC-CLI-159 `--version` prints `jupyterlab-device` and the version of the installed package on stdout, with exit 0 and nothing on stderr, and does not look for a server."""
+    installed = importlib.metadata.version("jupyterlab_device_bridge_extension")
+
+    outcome = await cli_run("--version")
+
+    assert (outcome.status, outcome.err) == (0, "")
+    assert outcome.out.decode() == f"jupyterlab-device {installed}\n", (
+        "where the source has another version than the package in this environment - run make install")
+    assert not no_server.exists(), "--version looked for a server"
+    assert (await cli_run("list")).status == 1 and no_server.exists(), "list looks for a server, and the test sees it"
 
 
 async def test_acc_cli_82_list_and_status_print_one_json_document(cli_run, fake_tab, bridge_address, device_dir):
@@ -823,7 +894,7 @@ BANNER_TOP = """\
 """
 BANNER_BOTTOM = """
 jupyterlab-device list      all devices
-jupyterlab-device --help    example commands
+jupyterlab-device help      example commands
 ──────────────────────────────────────────────────────"""
 NO_DEVICE = "No device is attached."
 # The tool line with all three known upload tools on PATH, and the two lines with none of them.
@@ -832,13 +903,15 @@ FOR_THREE_TOOLS = ("For avrdude, stm32flash, esptool.",)
 NO_TOOL = ("No avrdude, stm32flash or esptool on PATH.", "Install one to make use of the device shell.")
 
 
-def banner(*device_lines, tools=FOR_THREE_TOOLS):
+def banner(*device_lines, tools=FOR_THREE_TOOLS, colour=True):
     """What a terminal gets for the banner with these lines of the tools and of the devices.
 
-    Pale cyan comes before the banner, the colour reset and an empty line after it.
+    Pale cyan comes before the banner, the colour reset and an empty line after it. Without
+    `colour` the banner has no escape sequence, and the empty line follows it.
     """
     lines = "".join(f"{line}\n" for line in (*tools, *device_lines))
-    return f"\x1b[38;2;159;224;238m{BANNER_TOP}{lines}{BANNER_BOTTOM}\x1b[0m\n\n"
+    text = f"{BANNER_TOP}{lines}{BANNER_BOTTOM}"
+    return f"\x1b[38;2;159;224;238m{text}\x1b[0m\n\n" if colour else f"{text}\n\n"
 
 
 def device_calls(monkeypatch):
@@ -920,7 +993,7 @@ def terminal_shell(jp_serverapp, monkeypatch, *words):
 
 @pytest.fixture
 def lab_shell(jp_serverapp, tmp_path, monkeypatch):
-    """The terminals of the test server start one stand-in program, and the CLI has no variable SHELL.
+    """The terminals of the test server start one stand-in program, and the CLI has neither the variable SHELL nor NO_COLOR.
 
     Returns:
         The path of the stand-in, which prints `started` and ends.
@@ -928,6 +1001,7 @@ def lab_shell(jp_serverapp, tmp_path, monkeypatch):
     shell = stand_in(tmp_path / "lab-shell")
     terminal_shell(jp_serverapp, monkeypatch, shell)
     monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
     return shell
 
 
@@ -997,6 +1071,22 @@ async def test_acc_shim_145_shell_prints_no_banner_when_standard_output_is_no_te
 
     assert (status, piped) == (0, (b"started\n", None))
     assert displayed == "", "the banner did not go to standard error either"
+
+
+@pytest.mark.parametrize("value, colour", [("1", False), ("", True), (None, True)],
+                         ids=["NO_COLOR is 1", "NO_COLOR is empty", "no variable NO_COLOR"])
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_160_the_banner_holds_no_escape_sequence_when_no_color_is_set(
+        value, colour, cli_run, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-160 with the variable NO_COLOR set to a value that is not empty the banner on a terminal holds no escape sequence; with an empty NO_COLOR and without the variable it is pale cyan with the colour reset at its end."""
+    if value is not None:
+        monkeypatch.setenv("NO_COLOR", value)
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    assert status == 0
+    assert displayed == banner(NO_DEVICE, colour=colour) + "started\n"
+    assert ("\x1b" in displayed) is colour
 
 
 @pytest.mark.parametrize("tool", ["shell", "other"], ids=["the value of SHELL as its tool", "another tool"])
@@ -1326,7 +1416,7 @@ async def test_acc_panel_140_the_banner_names_a_device_shell_and_does_not_hold_t
 
 
 async def test_acc_cli_141_the_banner_names_the_commands_list_and_help(cli_run, screen, lab_shell):
-    """ACC-CLI-141 above its rule the banner has an empty line and two lines that name `jupyterlab-device list` with `all devices` and `jupyterlab-device --help` with `example commands`, the two texts in one column."""
+    """ACC-CLI-141 (the second line names `jupyterlab-device help` since ACC-CLI-158) above its rule the banner has an empty line and two lines that name `jupyterlab-device list` with `all devices` and `jupyterlab-device help` with `example commands`, the two texts in one column."""
 
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
@@ -1334,8 +1424,18 @@ async def test_acc_cli_141_the_banner_names_the_commands_list_and_help(cli_run, 
     rule = lines.index("\u2500" * 54 + "\x1b[0m")
     assert status == 0
     assert lines[rule - 3:rule] == [
-        "", "jupyterlab-device list      all devices", "jupyterlab-device --help    example commands"]
+        "", "jupyterlab-device list      all devices", "jupyterlab-device help      example commands"]
     assert lines[rule - 2].index("all devices") == lines[rule - 1].index("example commands")
+
+
+async def test_acc_cli_158_the_banner_names_the_command_help(cli_run, screen, lab_shell):
+    """ACC-CLI-158 the line of the banner with `example commands` names `jupyterlab-device help`, and the banner holds no `--help`."""
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    named = [row.split()[:2] for row in displayed.split("\n") if row.endswith("example commands")]
+    assert status == 0
+    assert named == [[cli.PROG, "help"]]
+    assert "--help" not in displayed
 
 
 # -------------------------------------------------- the examples in the top-level help
@@ -1464,7 +1564,7 @@ def test_acc_cli_135_run_help_says_that_the_devices_panel_lists_the_run_and_that
 
     assert f"the Devices panel of the lab {VIEW_ITEM} lists the run" in text
     assert "the user can stop it there" in text
-    assert f"receives SIGTERM, and SIGKILL {manager_module.RUN_KILL_S:g} s later when it still runs" in text
+    assert f"receives SIGHUP, and SIGKILL {manager_module.RUN_KILL_S:g} s later when it still runs" in text
 
 
 # ---------------------------------------------------------------------------- requests

@@ -18,6 +18,8 @@ import { ISettingRegistry } from '@jupyterlab/settingregistry';
 
 import { IStatusBar } from '@jupyterlab/statusbar';
 
+import { MenuSvg } from '@jupyterlab/ui-components';
+
 import { Menu, Widget } from '@lumino/widgets';
 
 // Activation needs all three at once: the model attaches the granted devices when the
@@ -103,11 +105,14 @@ const EXAMPLES: Array<[tool: string, line: string]> = [
  */
 const TOAST = { autoClose: false } as const;
 
+/** The lab cuts the text of a notification after this many characters. */
+const TEXT_LIMIT = 140;
+
 /**
  * Tell the user why a grant dialog of the browser gave no device.
  *
  * A dialog the user closed needs no message. A dialog the browser did not open for
- * lack of a user gesture gets a message that names the button to use.
+ * lack of a user gesture gets a message that names the controls to use.
  *
  * @param error What `connectSerial`, `connectUsb` or `grantRequest` of the model rejected with
  */
@@ -119,7 +124,7 @@ function reportGrantError(error: unknown): void {
   }
   if (reason === 'gesture') {
     Notification.emit(
-      'The browser opens its device dialog only after a click. Use a button of the Devices panel (if no sidebar has it: View → Show Devices Panel).',
+      'A device dialog opens only after a click. Use the plus icon or Grant in the Devices panel (if no sidebar has it: View → Show Devices Panel).',
       'warning',
       TOAST
     );
@@ -273,9 +278,10 @@ const plugin: JupyterFrontEndPlugin<void> = {
      * Start one command line of the CLI in a terminal of the lab, through the command
      * of the basic terminal extension. No line is typed into a terminal. Where the
      * server offers no terminals, or the lab has no such command, show the command
-     * line for the user to run.
+     * line for the user to run. Where the command refuses the launch, show its reason.
      *
      * @param words The words of the command line after the program `jupyterlab-device`
+     * @returns A promise that ends when the launch ended; it never rejects
      */
     const runInTerminal = async (...words: string[]): Promise<void> => {
       const line = [CLI, ...words].join(' ');
@@ -295,9 +301,23 @@ const plugin: JupyterFrontEndPlugin<void> = {
         );
         return;
       }
-      await commands.execute(BASIC_TERMINAL_LAUNCH, {
-        argv: ['/bin/bash', '-c', LAUNCH_SCRIPT, CLI, ...words]
-      });
+      try {
+        await commands.execute(BASIC_TERMINAL_LAUNCH, {
+          argv: ['/bin/bash', '-c', LAUNCH_SCRIPT, CLI, ...words]
+        });
+      } catch (reason) {
+        // The lab shows a rejected command to nobody. The reason has any length, so
+        // a text over the limit is cut and ends with three dots.
+        const cause = reason instanceof Error ? reason.message : String(reason);
+        const text = `The terminal did not start: ${cause}`;
+        Notification.emit(
+          text.length > TEXT_LIMIT
+            ? `${text.slice(0, TEXT_LIMIT - 3)}...`
+            : text,
+          'error',
+          TOAST
+        );
+      }
     };
 
     /**
@@ -362,10 +382,21 @@ const plugin: JupyterFrontEndPlugin<void> = {
       });
     };
 
+    // The menu of the plus icon of the panel: the connect command of each interface
+    // that the browser has. The interfaces are fixed for the life of the page, so the
+    // menu is built once. A menu reads the label of an entry from the registry each
+    // time it is drawn, so it is built here, before the commands are added.
+    const addMenu = new MenuSvg({ commands });
+    if (model.interfaces.serial) {
+      addMenu.addItem({ command: CONNECT_SERIAL });
+    }
+    if (model.interfaces.usb) {
+      addMenu.addItem({ command: CONNECT_USB });
+    }
+
     const panel = new DeviceBridgePanel({
       model,
-      connectSerial,
-      connectUsb,
+      addMenu,
       grantRequest,
       openTerminal: name => void openTerminal(name),
       startRun: () => void startRun(),

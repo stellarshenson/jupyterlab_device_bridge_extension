@@ -62,7 +62,7 @@ async function requestRecord(reason: string): Promise<any> {
 }
 
 test.describe('USB device', () => {
-  test('ACC-USB-45 the add USB device button opens the device dialog of the browser and the granted device is listed as attached', async ({
+  test('ACC-USB-45 the entry Connect USB Device of the plus menu opens the device dialog of the browser and the granted device is listed as attached', async ({
     page
   }) => {
     const device = simUsb();

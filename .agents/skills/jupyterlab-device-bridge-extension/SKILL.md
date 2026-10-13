@@ -17,7 +17,7 @@ Runs in a lab terminal. Device sits on the user's computer, lab tab in Chrome or
 - `monitor read --follow` runs for the whole `--timeout`. Long buffer: pass `--lines`
 - Before an upload set the board's profile with `profile`. Device is a pty: holds baud rate only. Parity and reset on open come from the profile. `on open <action>` in a `list` line: port has an action of its own in place of the profile's; `profile` with an id removes it
 - Tool sets DTR, RTS or parity itself (esptool, stm32flash, pyserial with parity): start it under `run --`. Without it the device refuses or drops those calls. Static binary does not load the shim: profile only
-- Tool started under `run --` is a run: Devices panel of the lab (if no sidebar has the panel: menu View, item Show Devices Panel) lists it, user can stop it there. Tool then gets SIGTERM, SIGKILL 3 s later when it still runs
+- Tool started under `run --` is a run: Devices panel of the lab (if no sidebar has the panel: menu View, item Show Devices Panel) lists it, user can stop it there. Tool then gets SIGHUP, SIGKILL 3 s later when it still runs
 - `shell` is a device shell for a person at a terminal: the shell of the lab's terminals with the shim, runs until `exit`. Agent starts each tool under `run --`
 - Action `touch-1200` may bring the board back as another USB device. Needs a new grant from user
 - `usb open` and `usb claim` last until `usb close`. pyusb program: module `jupyterlab_device_bridge_extension.pyusb_backend`, `get_backend()` or `install()`

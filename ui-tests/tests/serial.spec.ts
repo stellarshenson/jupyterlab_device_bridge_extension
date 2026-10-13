@@ -13,8 +13,8 @@ import {
   ISimCall,
   openLab,
   openSecondTab,
-  PANEL,
   PANEL_SHOWN,
+  pickAddEntry,
   ROUND_TRIP,
   row,
   serialRecord,
@@ -55,7 +55,7 @@ const MONITOR_OPEN = {
 };
 
 test.describe('serial port', () => {
-  test('ACC-SERIAL-1 the add serial port button opens the port dialog of the browser and the granted port is listed as attached', async ({
+  test('ACC-SERIAL-1 the entry Connect Serial Port of the plus menu opens the port dialog of the browser and the granted port is listed as attached', async ({
     page
   }) => {
     const port = simSerial();
@@ -243,7 +243,7 @@ test.describe('serial port', () => {
     });
     await openLab(page, { serial: [port] });
 
-    await action(page.locator(PANEL), 'connect-serial').click();
+    await pickAddEntry(page, 'serial');
 
     const error = field(row(page, port.name), 'error');
     await expect(error).toHaveText(reason, { timeout: ROUND_TRIP });
@@ -265,7 +265,7 @@ test.describe('serial port', () => {
       }
     });
     await openLab(page, { serial: [port] });
-    await action(page.locator(PANEL), 'connect-serial').click();
+    await pickAddEntry(page, 'serial');
     await expect
       .poll(() => serialRecord(port.name), { timeout: ROUND_TRIP })
       .toMatchObject({ state: 'attached', portState: 'error' });

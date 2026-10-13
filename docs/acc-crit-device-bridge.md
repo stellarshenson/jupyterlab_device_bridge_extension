@@ -11,6 +11,7 @@ Programs in the lab container reach a serial port or a USB device of the browser
 Attach a port, its virtual serial device, bytes both ways, baud rate, tool open and close
 
 - [x] `ACC-SERIAL-1` **Add port from the panel** - HIGH; the panel's add serial port button opens the browser's port dialog; the granted port is listed as attached
+  - overridden-by: ACC-PANEL-153
   - evidence: verify round 1: galata serial.spec.ts ACC-SERIAL-1 passed in the Galata suite; red under 'the serial record always says detached' (galata)
   - test: galata serial.spec.ts: click add with a simulated port, assert the row shows attached
   - test-tags: FUNCTIONAL
@@ -308,6 +309,7 @@ A tool's own DTR, RTS and parity calls passed to the bridge
   - log: 2026-10-12T20:00:24Z @kj added
   - log: 2026-10-12T20:49:52Z @kj closed
 - [x] `ACC-SHIM-130` **Stop ends a run** - HIGH; DELETE runs/<pid> sends SIGTERM to the process of the run, and SIGKILL after 3 s when it still lives; an unknown process id answers 404; a process id that another process took since the run began is not signalled
+  - overridden-by: ACC-SHIM-157
   - evidence: make test on build 0.6.21 (logs/runs-make-test.log), 398 pytest tests pass: the 6 tests test_acc_shim_130_* in test_manager.py pass, one with the real 3 s before SIGKILL; temporary changes (no SIGTERM, no SIGKILL, no start-time check, killpg) made each fail
   - test: pytest test_manager.py: stop a child that ends on SIGTERM; stop a child that ignores SIGTERM; delete an unknown process id
   - test-tags: UNIT
@@ -349,6 +351,20 @@ A tool's own DTR, RTS and parity calls passed to the bridge
   - test-tags: UNIT
   - log: 2026-10-13T08:43:05Z @kj added
   - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-SHIM-157` **Stop ends a shell together with its tool** - HIGH; DELETE runs/<pid> sends SIGHUP to the process of the run, and SIGKILL after 3 s when it still lives; an interactive bash and an interactive fish end within 1 s together with their foreground tool; an unknown process id answers 404; a process id another process took is not signalled
+  - evidence: pytest test_acc_shim_157_* (8 cases; bash and fish on a pty with a foreground tool) in 456 passed, 1 skipped (logs/review2-r1-make-test.log, build 0.6.26); galata ACC-PANEL-133 asserts signal SIGHUP in 73 passed (logs/review2-r1-galata.log); with SIGTERM put back both shell cases failed (logs/sighup-mutation-sigterm.log)
+  - overrides: ACC-SHIM-130
+  - related: DEF-SHIM-18
+  - test: pytest test_manager.py: bash, and fish when installed, on a pty with a foreground tool; stop the run; assert shell and tool gone within 1 s, no SIGKILL; galata panel.spec.ts: the stop is logged as SIGHUP
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T12:48:12Z @kj added
+  - log: 2026-10-13T13:22:17Z @kj closed
+- [x] `ACC-SHIM-160` **Banner has no colour under NO_COLOR** - LOW; with the variable NO_COLOR set to a non-empty value the banner of the device shell holds no escape sequence; without it the banner is pale cyan as before
+  - evidence: pytest test_acc_shim_160 (3 cases: NO_COLOR is 1, empty, absent) in 456 passed (logs/review2-r1-make-test.log)
+  - test: pytest test_cli.py: banner on a terminal with NO_COLOR=1, assert no escape byte; without it, assert the colour sequence
+  - test-tags: UNIT
+  - log: 2026-10-13T12:48:12Z @kj added
+  - log: 2026-10-13T13:22:17Z @kj closed
 
 ## Monitor `MON`
 
@@ -396,6 +412,7 @@ Recent port output kept on the server, read and written from the CLI
 Attach, device requests, operations, Python client, pyusb backend, errors
 
 - [x] `ACC-USB-45` **Add device from the panel** - HIGH; the panel's add USB device button opens the browser's device dialog; the granted device is listed as attached
+  - overridden-by: ACC-PANEL-153
   - evidence: verify round 1: galata usb.spec.ts ACC-USB-45 passed in the Galata suite; red under 'the USB record always says detached' (galata)
   - test: galata usb.spec.ts: click add with a simulated device, assert the row shows attached
   - test-tags: FUNCTIONAL
@@ -551,6 +568,7 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - log: 2026-10-12T00:27:45Z @kj added
   - log: 2026-10-12T07:49:07Z @kj closed: verified
 - [x] `ACC-PANEL-70` **Interfaces absent** - HIGH; when the browser has neither interface the panel says the lab must be opened over HTTPS or at localhost and disables both add buttons
+  - overridden-by: ACC-PANEL-154
   - evidence: verify round 1: jest panel.spec.ts 'ACC-PANEL-70 without the device interfaces ...'; galata panel.spec.ts ACC-PANEL-70 passed in make test and the Galata suite; red under 'the message for absent interfaces is never shown' (jest, galata)
   - test: galata panel.spec.ts: remove navigator.serial and navigator.usb, assert the message and disabled buttons
   - test-tags: FUNCTIONAL
@@ -686,6 +704,41 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - test-tags: UNIT
   - log: 2026-10-13T08:43:14Z @kj added
   - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-PANEL-153` **One plus icon adds a device** - HIGH; the panel header holds one plus icon button and the panel has no add buttons; a click opens a menu below the icon with the entries Connect Serial Port and Connect USB Device; an entry opens the browser's dialog; the granted device is listed as attached
+  - evidence: galata panel.spec.ts ACC-PANEL-153 passed in the run of 73 passed, exit 0 (logs/plus-galata-1.log, build 0.6.25); jest ACC-PANEL-153 tests in 253 passed (logs/plus-make-test-1.log); picture tmp/screenshots/plus-menu-light.png; devices simulated
+  - overrides: ACC-SERIAL-1
+  - overrides: ACC-USB-45
+  - test: galata panel.spec.ts: click the plus icon, pick each entry with a simulated device, assert both rows attached; jest panel.spec.ts: assert no add button
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T10:26:07Z @kj added
+  - log: 2026-10-13T10:29:13Z @kj edited text "the panel header holds one plus icon button and the panel has no add buttons; a click opens a menu below the icon with the entries Serial Port and USB Device; an entry opens the browser's dialog; the granted device is listed as attached" -> "the panel header holds one plus icon button and the panel has no add buttons; a click opens a menu below the icon with the entries Connect Serial Port and Connect USB Device; an entry opens the browser's dialog; the granted device is listed as attached"
+  - log: 2026-10-13T11:15:12Z @kj closed
+- [x] `ACC-PANEL-154` **Plus menu follows the browser interfaces** - HIGH; the plus menu has an entry only for an interface the browser has (Web Serial, WebUSB); with neither interface the plus icon is disabled and the panel says to open the lab over HTTPS or at localhost
+  - evidence: jest ACC-PANEL-154 tests in 253 passed (logs/plus-make-test-1.log): one entry with serial only; galata ACC-PANEL-154 in 73 passed (logs/plus-galata-1.log): message shown, icon disabled, opacity 0.4, no menu opens
+  - overrides: ACC-PANEL-70
+  - test: jest index.spec.ts: no navigator.usb, assert one entry, for serial; galata panel.spec.ts: remove both interfaces, assert the message and the disabled icon
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T10:26:07Z @kj added
+  - log: 2026-10-13T10:50:56Z @kj edited title "Plus menu follows the browser interfaces" -> "Plus menu follows the browser interfaces"; text "an entry of the plus menu is disabled when the browser lacks its interface (Web Serial, WebUSB); with neither interface the plus icon is disabled and the panel says to open the lab over HTTPS or at localhost" -> "the plus menu has an entry only for an interface the browser has (Web Serial, WebUSB); with neither interface the plus icon is disabled and the panel says to open the lab over HTTPS or at localhost"; test "jest panel.spec.ts: no navigator.usb, assert the USB entry disabled; galata panel.spec.ts: remove both interfaces, assert the message and the disabled icon" -> "jest index.spec.ts: no navigator.usb, assert one entry, for serial; galata panel.spec.ts: remove both interfaces, assert the message and the disabled icon"
+  - log: 2026-10-13T11:15:12Z @kj closed
+- [x] `ACC-PANEL-155` **Plus icon styled as in the AI assistants panel** - MEDIUM; the plus icon has the measures of .jp-AiAssistantsPanel-iconButton of jupyterlab_ai_code_assistants_extension: 24 px square hit box, 14 px glyph, no border, transparent background, hover background --jp-layout-color3, disabled opacity 0.4
+  - evidence: galata ACC-PANEL-155 in 73 passed (logs/plus-galata-1.log): icon 24 px by 24 px, svg 14 px, border 0, transparent background, hover background equals --jp-layout-color3; disabled opacity 0.4 asserted in the ACC-PANEL-154 test
+  - test: galata panel.spec.ts: read the computed style of the icon button and of its svg, assert 24 px, 14 px, transparent background, no border
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-13T10:26:07Z @kj added
+  - log: 2026-10-13T11:15:12Z @kj closed
+- [x] `ACC-PANEL-156` **Plus menu works from the keyboard** - MEDIUM; with the focus on the plus icon, Enter opens the menu; arrow keys and Enter pick an entry; Escape closes the menu and the focus is on the plus icon again; the title of the icon says what it adds
+  - evidence: galata ACC-PANEL-156 in 73 passed (logs/plus-galata-1.log): Enter opens the menu, ArrowDown and Enter attach the simulated port, Escape closes the menu and the icon has the focus; jest ACC-PANEL-156 tests in 253 passed
+  - test: galata panel.spec.ts: focus the icon, Enter, ArrowDown, Enter with a simulated port, assert the row; Enter, Escape, assert the icon has the focus
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-13T10:26:07Z @kj added
+  - log: 2026-10-13T11:15:12Z @kj closed
+- [x] `ACC-PANEL-161` **A refused launch raises a notification** - MEDIUM; when the command basic-terminal:launch rejects, Start and Terminal raise an error notification that says the terminal did not start and holds the reason of the rejection; the text has at most 140 characters
+  - evidence: jest ACC-PANEL-161 tests in 257 passed (logs/review2-r1-make-test.log; titles in logs/plus-jest-12.log); with the catch removed three of them failed (logs/plus-mutation-3.log)
+  - test: jest index.spec.ts: basic-terminal:launch rejects with a reason; press Start, then Terminal; assert one error notification each that holds the reason, and a long reason cut to 140 characters
+  - test-tags: UNIT
+  - log: 2026-10-13T12:48:12Z @kj added
+  - log: 2026-10-13T13:22:17Z @kj closed
 
 ## Serial terminal `TERM`
 
@@ -856,7 +909,7 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-12T20:00:24Z @kj added
   - log: 2026-10-12T20:49:52Z @kj closed
-- [x] `ACC-CLI-141` **Help shows examples for the upload tools that are installed** - MEDIUM; jupyterlab-device --help shows one example command line for each known upload tool found on PATH (avrdude, stm32flash, esptool), each a command line of the README, and says so when none is found; the banner of the device shell names jupyterlab-device list and jupyterlab-device --help
+- [x] `ACC-CLI-141` **Help shows examples for the upload tools that are installed** - MEDIUM; jupyterlab-device --help shows one example command line for each known upload tool found on PATH (avrdude, stm32flash, esptool), each a command line of the README, and says so when none is found; the banner of the device shell names jupyterlab-device list and jupyterlab-device help
   - evidence: make test on build 0.6.23 (logs/runs-make-test-3.log), 417 pytest tests pass: the 10 cases of test_acc_cli_141_* in test_cli.py pass, with stand-in tools on PATH; one compares each example with the bash blocks of README.md; temporary changes (every tool listed, no examples, prefix inside a device shell) made each fail
   - test: pytest test_cli.py: a PATH with a stand-in avrdude gives the avrdude line only; a PATH with none gives the sentence; each example is a README line; the banner holds both command names
   - test-tags: UNIT
@@ -864,6 +917,7 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - log: 2026-10-13T08:22:04Z @kj closed
   - log: 2026-10-13T08:22:11Z @kj reopened; evidence retired: make test on build 0.6.23 (logs/runs-make-test-3.log), 417 pytest tests pass: the 9 cases of test_acc_cli_141_* in test_cli.py pass, with stand-in tools on PATH; one compares each example with the bash blocks of README.md; temporary changes (every tool listed, no examples, prefix inside a device shell) made each fail; reason: the evidence named 9 cases; the run shows 10
   - log: 2026-10-13T08:22:11Z @kj closed
+  - log: 2026-10-13T13:12:29Z @kj edited text "jupyterlab-device --help shows one example command line for each known upload tool found on PATH (avrdude, stm32flash, esptool), each a command line of the README, and says so when none is found; the banner of the device shell names jupyterlab-device list and jupyterlab-device --help" -> "jupyterlab-device --help shows one example command line for each known upload tool found on PATH (avrdude, stm32flash, esptool), each a command line of the README, and says so when none is found; the banner of the device shell names jupyterlab-device list and jupyterlab-device help"; reason: the banner line follows ACC-CLI-158: help is a command
 - [x] `ACC-CLI-144` **shell subcommand starts a device shell** - HIGH; jupyterlab-device shell becomes the shell command that GET status reports, with the shim loaded as run loads it; it registers itself as a run first; it takes no argument and does not read the variable SHELL
   - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: the 7 cases of test_acc_cli_144_* pass on a real pty with SHELL removed; temporary changes (starts what SHELL names, no registration, shim not loaded, shell accepts words) made each fail
   - test: pytest test_cli.py on a pty: stand-in shell command on the server, SHELL unset; the stand-in starts with LD_PRELOAD and JUPYTERLAB_DEVICE_SHIM_DIR, and the run has its process id
@@ -882,6 +936,18 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-13T08:43:14Z @kj added
   - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-CLI-158` **help is a command** - MEDIUM; jupyterlab-device help prints what --help prints, and help <command> what <command> --help prints, on stdout with exit status 0 and without a server; an unknown command exits 2; the banner of the device shell names jupyterlab-device help
+  - evidence: pytest test_acc_cli_158_* (9 cases: help equals --help for the tool, monitor, monitor read, usb control; unknown command exits 2; banner line; help line) in 456 passed (logs/review2-r1-make-test.log); galata banner check in 73 passed (logs/review2-r1-galata.log)
+  - test: pytest test_cli.py: compare help with --help for the top level, monitor read and usb control, with no server; assert exit 2 for an unknown command and the banner line
+  - test-tags: UNIT
+  - log: 2026-10-13T12:48:12Z @kj added
+  - log: 2026-10-13T13:22:17Z @kj closed
+- [x] `ACC-CLI-159` **--version prints the version** - LOW; jupyterlab-device --version prints jupyterlab-device and the version of the installed package on stdout, with exit status 0 and without a server
+  - evidence: pytest test_acc_cli_159 in 456 passed (logs/review2-r1-make-test.log); run by hand on build 0.6.26: jupyterlab-device --version printed jupyterlab-device 0.6.26
+  - test: pytest test_cli.py: run --version with no server, compare with the version of the package
+  - test-tags: UNIT
+  - log: 2026-10-13T12:48:12Z @kj added
+  - log: 2026-10-13T13:22:17Z @kj closed
 
 ## Grants, authentication and ownership `SEC`
 
