@@ -8,34 +8,31 @@ except ImportError:
     warnings.warn("Importing 'jupyterlab_device_bridge_extension' outside a proper installation.")
     __version__ = "dev"
 import atexit
-import os
 
-from traitlets import Integer, Unicode, default
+from traitlets import Integer, Unicode
 from traitlets.config import Configurable
 
 from .manager import DeviceManager
 from .routes import MANAGER_KEY, setup_route_handlers
+from .vserial import default_device_dir
 
 
 class DeviceBridge(Configurable):
     """Configuration of the device bridge server extension."""
 
     device_dir = Unicode(
+        "",
         config=True,
         help="Directory of the virtual serial devices and the shim sockets. It is made with "
-             "mode 0700 and must be a real directory of the server's user. The default is "
-             "the environment variable JUPYTERLAB_DEVICE_DIR, else /tmp/jupyterlab-device-<uid>.",
+             "mode 0700 and must be a real directory of the server's user. Empty means "
+             "/run/devices when the server's user owns that directory or can make it, else "
+             "/tmp/jupyterlab-device-<uid>.",
     )
     monitor_bytes = Integer(
         262144,
         config=True,
         help="Most bytes of serial output the server keeps for each port.",
     )
-
-    @default("device_dir")
-    def _default_device_dir(self):
-        # /tmp and not the home directory: a home on a network volume cannot hold a Unix socket.
-        return os.environ.get("JUPYTERLAB_DEVICE_DIR") or f"/tmp/jupyterlab-device-{os.getuid()}"
 
 
 def _jupyter_labextension_paths():
@@ -60,11 +57,12 @@ def _load_jupyter_server_extension(server_app):
         JupyterLab application instance
     """
     config = DeviceBridge(config=server_app.config)
-    manager = DeviceManager(config.device_dir, config.monitor_bytes, server_app.log)
+    device_dir = config.device_dir or default_device_dir(server_app.log)
+    manager = DeviceManager(device_dir, config.monitor_bytes, server_app.log)
     server_app.web_app.settings[MANAGER_KEY] = manager
     # A server extension of this form has no stop hook: the ptys, the symlinks and the
     # shim sockets are released when the server process ends.
     atexit.register(manager.close)
     setup_route_handlers(server_app.web_app)
     name = "jupyterlab_device_bridge_extension"
-    server_app.log.info(f"Registered {name} server extension (device_dir={config.device_dir})")
+    server_app.log.info(f"Registered {name} server extension (device_dir={device_dir})")

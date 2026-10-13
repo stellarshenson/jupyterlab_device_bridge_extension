@@ -6,6 +6,7 @@ authentication. docs/design.md lists the messages and the routes.
 
 import base64
 import json
+import os
 import struct
 import time
 
@@ -74,12 +75,25 @@ class BridgeHandler(APIHandler):
         self.finish(json.dumps({"error": detail}))
 
 
+def terminal_shell(settings: dict) -> list[str]:
+    """The words of the shell command of the lab's terminals, from the settings of the web application.
+
+    It is the shell command of the server's terminal manager. A server without terminals
+    has no such manager: then it is the server's variable SHELL, and /bin/sh without it.
+    """
+    terminals = settings.get("terminal_manager")
+    if terminals is None:
+        return [os.environ.get("SHELL") or "/bin/sh"]
+    return list(terminals.shell_command)
+
+
 class StatusHandler(BridgeHandler):
-    """`GET status`: version, connected tabs, directories and counts."""
+    """`GET status`: version, directories, shell command of the terminals, connected tabs and counts."""
 
     @tornado.web.authenticated
     def get(self) -> None:
-        self.finish(json.dumps({"version": __version__, **self.manager.status()}))
+        shell = terminal_shell(self.settings)
+        self.finish(json.dumps({"version": __version__, "shell": shell, **self.manager.status()}))
 
 
 class DevicesHandler(BridgeHandler):
@@ -146,6 +160,28 @@ class RequestHandler(BridgeHandler):
     @tornado.web.authenticated
     async def get(self, request_id: str) -> None:
         self.finish(json.dumps(await self.manager.request(request_id, self.number("wait", float))))
+
+
+class RunsHandler(BridgeHandler):
+    """`GET runs` and `POST runs`: the processes that `jupyterlab-device run` started."""
+
+    @tornado.web.authenticated
+    def get(self) -> None:
+        self.finish(json.dumps({"runs": self.manager.runs()}))
+
+    @tornado.web.authenticated
+    def post(self) -> None:
+        self.finish(json.dumps(self.manager.register_run(self.body())))
+
+
+class RunHandler(BridgeHandler):
+    """`DELETE runs/<pid>`: stop one run; answers 204 once the stop signal was sent."""
+
+    @tornado.web.authenticated
+    def delete(self, pid: str) -> None:
+        self.manager.stop_run(pid)
+        self.set_status(204)
+        self.finish()
 
 
 class UsbHandler(BridgeHandler):
@@ -233,6 +269,8 @@ def setup_route_handlers(web_app: tornado.web.Application) -> None:
         (rf"serial/{name}/(write|signals|action)", SerialCommandHandler),
         (r"requests", RequestsHandler),
         (rf"requests/{name}", RequestHandler),
+        (r"runs", RunsHandler),
+        (rf"runs/{name}", RunHandler),
         (rf"usb/{name}", UsbHandler),
         (rf"usb/{name}/{name}", UsbOperationHandler),
     ]

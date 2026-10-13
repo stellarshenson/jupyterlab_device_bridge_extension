@@ -3,7 +3,8 @@
 One `DeviceManager` lives in the Jupyter server. Lab tabs talk to it over the
 WebSocket (`connect`, `receive`, `port_data`, `disconnect`); the REST handlers call
 the rest. Serial devices keep their virtual serial device, monitor buffer and name
-while no tab holds them.
+while no tab holds them. The manager also lists the runs, the processes that
+`jupyterlab-device run` started, and stops one on request.
 """
 
 import asyncio
@@ -15,6 +16,7 @@ import logging
 import os
 import re
 import secrets
+import signal
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -39,11 +41,34 @@ COMMAND_TIMEOUT_S = 5.0
 REQUEST_TTL_S = 300.0
 PORT_STATES = ("closed", "opening", "open", "error")
 SIGNALS = ("dtr", "rts", "brk")
+RUN_WATCH_S = 1.0
+RUN_KILL_S = 3.0
+RUN_FIELDS = ("pid", "program", "command", "device")
+RUN_COMMAND_CHARS = 200
 
 
 def _text(value: object) -> str | None:
     """A text a tab sent, or None when it sent none."""
     return value if isinstance(value, str) else None
+
+
+def _started(pid: int) -> int | None:
+    """The start time of a live process of the server's user; None for any other process id.
+
+    The start time is field 22 of /proc/<pid>/stat. A later process that gets the same
+    process id has another start time.
+    """
+    try:
+        # The owner of the directory /proc/<pid> is the effective user of the process.
+        if os.stat(f"/proc/{pid}").st_uid != os.getuid():
+            return None
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as stat:
+            # Field 2, the program name, can hold spaces and brackets. Field 3 follows its last bracket.
+            fields = stat.read().rpartition(")")[2].split()
+    except OSError:
+        return None
+    # State Z: the process has ended, and its parent has not waited for it yet.
+    return None if fields[0] == "Z" else int(fields[19])
 
 
 class BridgeError(HTTPError):
@@ -287,6 +312,8 @@ class DeviceManager:
         self.monitor_bytes = monitor_bytes
         self.log = log
         self.command_timeout = COMMAND_TIMEOUT_S  # seconds a tab has to ack a command
+        self.run_watch_interval = RUN_WATCH_S  # seconds between two looks at the processes of the runs
+        self.run_kill_delay = RUN_KILL_S  # seconds a stopped run has to end before it gets SIGKILL
         self.tabs: dict[str, Tab] = {}
         self.serial: dict[str, SerialDevice] = {}
         self.usb: dict[str, UsbDevice] = {}
@@ -297,6 +324,8 @@ class DeviceManager:
         self._acks: dict[int, tuple[asyncio.Future, asyncio.TimerHandle]] = {}
         self._requests: dict[str, dict] = {}
         self._answered: dict[str, asyncio.Event] = {}
+        self._runs: dict[int, dict] = {}  # pid -> the run record plus the start time of its process
+        self._run_timer: asyncio.TimerHandle | None = None  # the watch; set only while a run is registered
         self._dir_lock: int | None = None  # the descriptor that holds the lock on the device directory
         self._dir_lock_tried = False
         if os.path.lexists(device_dir):
@@ -310,7 +339,7 @@ class DeviceManager:
 
     def connect(self, tab_id: str, serial: bool, usb: bool,
                 send: Callable[[dict | bytes], None]) -> Tab:
-        """Register the tab that said `hello` and send it the welcome, the table and the requests."""
+        """Register the tab that said `hello`; send it the welcome, the table, the requests and the runs."""
         if not isinstance(tab_id, str) or not 0 < len(tab_id) <= 64:
             raise ValueError("hello without a tabId of 1 to 64 characters")
         if tab_id in self.tabs:
@@ -321,6 +350,7 @@ class DeviceManager:
                   "deviceDir": self.device_dir})
         tab.send({"type": "devices", **self.table()})
         tab.send(self._requests_message())
+        tab.send(self._runs_message())
         return tab
 
     def disconnect(self, tab: Tab) -> None:
@@ -729,6 +759,93 @@ class DeviceManager:
             {field: value for field, value in request.items() if field != "state"}
             for request in self._pending_requests()]}
 
+    # ------------------------------------------------------------------------- runs
+
+    def register_run(self, body: dict) -> dict:
+        """List a process that `jupyterlab-device run` started; a registered process id gets the new record.
+
+        Args:
+            body: `{pid, command, device?}`: the process id of the run, the words of its
+                command and the name of its `--device`.
+
+        Returns:
+            The run record `{pid, program, command, device}`.
+
+        Raises:
+            BridgeError: 400, `pid` is not the id of a live process of the server's user,
+                `command` is no list of 1 or more texts, or `device` is no text.
+        """
+        pid, command, device = body.get("pid"), body.get("command"), body.get("device")
+        # Only a whole number above 0 is put into a path of /proc and, at a stop, into a signal call.
+        started = _started(pid) if type(pid) is int and pid > 0 else None
+        if started is None:
+            raise BridgeError(400, "bad-request", "pid: the id of a live process of the server's user")
+        if (not isinstance(command, list) or not command
+                or not all(isinstance(word, str) for word in command)):
+            raise BridgeError(400, "bad-request", "command: a list of 1 or more texts")
+        if device is not None and not isinstance(device, str):
+            raise BridgeError(400, "bad-request", "device: the name of a device as a text, or absent")
+        run = self._runs[pid] = {
+            "pid": pid, "program": os.path.basename(command[0]),
+            "command": " ".join(command)[:RUN_COMMAND_CHARS], "device": device, "started": started}
+        self._broadcast(self._runs_message())
+        if self._run_timer is None:
+            self._watch_runs()
+        return {field: run[field] for field in RUN_FIELDS}
+
+    def runs(self) -> list[dict]:
+        """The record of every registered run that the watch has not ended."""
+        return [{field: run[field] for field in RUN_FIELDS} for run in self._runs.values()]
+
+    def stop_run(self, pid: str) -> None:
+        """Stop a run: SIGTERM to its process now, SIGKILL `run_kill_delay` later when it still lives.
+
+        The signals go to the process of the run only, not to its process group.
+
+        Args:
+            pid: The process id of the run, as the text of the route.
+
+        Raises:
+            BridgeError: 404, no run has this process id. That is also the answer for a
+                run whose process ended or whose process id another process took: this
+                call ends such a run as the watch does.
+        """
+        self._check_runs()
+        run = next((run for run in self._runs.values() if str(run["pid"]) == pid), None)
+        if run is None:
+            raise BridgeError(404, "unknown-run", f"no run with the process id {pid}")
+        self._signal_run(run, signal.SIGTERM)
+        asyncio.get_running_loop().call_later(self.run_kill_delay, self._signal_run, run, signal.SIGKILL)
+
+    def _signal_run(self, run: dict, number: int) -> None:
+        """Send a signal to the process of a run, unless it ended or another process has its id."""
+        if _started(run["pid"]) == run["started"]:
+            # The process can end between the look at /proc and the signal.
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(run["pid"], number)
+
+    def _check_runs(self) -> None:
+        """End every run whose process is gone or has another start time; the watch stops with the last."""
+        ended = [pid for pid, run in self._runs.items() if _started(pid) != run["started"]]
+        for pid in ended:
+            del self._runs[pid]
+        if ended:
+            self._broadcast(self._runs_message())
+        if not self._runs and self._run_timer:
+            self._run_timer.cancel()
+            self._run_timer = None
+
+    def _watch_runs(self) -> None:
+        """The watch: look at the runs now, and again every `run_watch_interval` while one is registered."""
+        self._run_timer = None
+        self._check_runs()
+        if self._runs:
+            loop = asyncio.get_running_loop()
+            self._run_timer = loop.call_later(self.run_watch_interval, self._watch_runs)
+
+    def _runs_message(self) -> dict:
+        return {"type": "runs", "running": self.runs()}
+
     # -------------------------------------------------------------------- the whole
 
     def devices_changed(self) -> None:
@@ -761,12 +878,14 @@ class DeviceManager:
     def close(self) -> None:
         """Remove every virtual serial device and shim socket, then unlock the device directory.
 
-        Safe to call twice.
+        The watch of the runs stops too. Safe to call twice.
         """
         for device in self.serial.values():
             device.close()
         self.serial.clear()
         self._by_sid.clear()
+        self._runs.clear()
+        self._check_runs()  # no run is left, so this stops the watch
         if self._dir_lock is not None:
             os.close(self._dir_lock)
             self._dir_lock = None

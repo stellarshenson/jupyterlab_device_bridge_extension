@@ -10,6 +10,7 @@
 
 import type {
   IClaimedMessage,
+  IDeviceActivity,
   IErrorInfo,
   IGrant,
   IRescanMessage,
@@ -65,6 +66,7 @@ export function workerMain(scope: IWorkerScope): void {
   const PORT_BUFFER_BYTES = 65536;
   const PING_MS = 2000;
   const STATS_MS = 1000;
+  const ACTIVITY_MS = 50;
   const BACKOFF_FIRST_MS = 500;
   const BACKOFF_MAX_MS = 10000;
   const TOUCH_BAUD = 1200;
@@ -112,6 +114,9 @@ export function workerMain(scope: IWorkerScope): void {
     tx: number;
     sentRx: number;
     sentTx: number;
+    /** The counters at the last look for activity. */
+    seenRx: number;
+    seenTx: number;
   }
 
   interface ISerialEntry extends IEntryBase {
@@ -170,6 +175,8 @@ export function workerMain(scope: IWorkerScope): void {
   let backoff = BACKOFF_FIRST_MS;
   let pingTimer = 0;
   let statsTimer = 0;
+  /** The timer of the look for activity; null while no device is open. */
+  let activityTimer: number | null = null;
   let scanning: Promise<void> = Promise.resolve();
 
   // ---------------------------------------------------------------------- small tools
@@ -240,6 +247,50 @@ export function workerMain(scope: IWorkerScope): void {
       ...entry.ids
     }));
     scope.postMessage({ type: 'grants', grants });
+  };
+
+  // ------------------------------------------------------------- activity, to the page
+
+  /**
+   * Tell the page which devices moved bytes since the last look. The page lights its
+   * lamps from this. It reads the counters only: the bytes and what the server gets
+   * do not pass here.
+   */
+  const lookForActivity = (): void => {
+    const devices: IDeviceActivity[] = [];
+    for (const entry of allEntries()) {
+      const rx = entry.rx > entry.seenRx;
+      const tx = entry.tx > entry.seenTx;
+      entry.seenRx = entry.rx;
+      entry.seenTx = entry.tx;
+      if ((rx || tx) && entry.name) {
+        devices.push({ name: entry.name, rx, tx });
+      }
+    }
+    if (devices.length > 0) {
+      scope.postMessage({ type: 'activity', devices });
+    }
+  };
+
+  /**
+   * Run the look for activity only while a device is open. Called after every open
+   * and every close of a device; a device that is removed or forgotten is closed.
+   */
+  const watchActivity = (): void => {
+    const open = allEntries().some(entry =>
+      entry.kind === 'serial' ? entry.opened : entry.device.opened
+    );
+    if (open && activityTimer === null) {
+      // Bytes counted before now moved in no period of this timer.
+      for (const entry of allEntries()) {
+        entry.seenRx = entry.rx;
+        entry.seenTx = entry.tx;
+      }
+      activityTimer = scope.setInterval(lookForActivity, ACTIVITY_MS);
+    } else if (!open && activityTimer !== null) {
+      scope.clearInterval(activityTimer);
+      activityTimer = null;
+    }
   };
 
   // --------------------------------------------------------------------- serial port
@@ -343,6 +394,7 @@ export function workerMain(scope: IWorkerScope): void {
       throw error;
     }
     entry.opened = true;
+    watchActivity();
     entry.writer = port.writable!.getWriter();
     entry.reading = true;
     entry.readDone = readLoop(entry);
@@ -371,6 +423,7 @@ export function workerMain(scope: IWorkerScope): void {
     await entry.readDone;
     // Both locks are released here: close() rejects while a stream is locked.
     entry.opened = false;
+    watchActivity();
     entry.state = 'closed';
     entry.error = null;
     entry.signals = {};
@@ -679,11 +732,14 @@ export function workerMain(scope: IWorkerScope): void {
     switch (message.op) {
       case 'open':
         await device.open();
+        watchActivity();
         return sendDescriptors(entry);
       case 'close':
         // Data that arrived before a close or a reset belongs to the session it ends.
         entry.kept.clear();
-        return device.close();
+        await device.close();
+        watchActivity();
+        return;
       case 'reset':
         entry.kept.clear();
         return device.reset();
@@ -767,7 +823,11 @@ export function workerMain(scope: IWorkerScope): void {
       return enqueue(entry, () => closePort(entry));
     }
     entry.kept.clear();
-    return entry.device.opened ? entry.device.close() : Promise.resolve();
+    const closed = entry.device.opened
+      ? entry.device.close()
+      : Promise.resolve();
+    // The close of a device that is gone can fail; the look ends when none is open.
+    return closed.finally(watchActivity);
   };
 
   /** The lowest key of a family that no device of this tab uses. */
@@ -788,7 +848,9 @@ export function workerMain(scope: IWorkerScope): void {
     rx: 0,
     tx: 0,
     sentRx: 0,
-    sentTx: 0
+    sentTx: 0,
+    seenRx: 0,
+    seenTx: 0
   });
 
   const addSerial = (port: SerialPort): void => {
@@ -1027,6 +1089,7 @@ export function workerMain(scope: IWorkerScope): void {
       case 'welcome':
       case 'devices':
       case 'requests':
+      case 'runs':
         scope.postMessage(message);
         return;
       case 'pong':

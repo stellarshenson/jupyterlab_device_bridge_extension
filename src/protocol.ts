@@ -137,6 +137,17 @@ export interface IDeviceRequest {
   program: string;
 }
 
+/** One process that `jupyterlab-device run` started. `pid` identifies the run. */
+export interface IRunRecord {
+  pid: number;
+  /** The base name of the first word of the command. */
+  program: string;
+  /** The words of the command joined with one space, cut after 200 characters. */
+  command: string;
+  /** The `--device` of the run, or null. */
+  device: string | null;
+}
+
 // ------------------------------------------------------------------------ USB payloads
 
 /** Setup packet of a control transfer, in WebUSB's own names. */
@@ -392,6 +403,12 @@ export interface IRequestsMessage {
   pending: IDeviceRequest[];
 }
 
+/** Every live run, after `welcome` and on every change. */
+export interface IRunsMessage {
+  type: 'runs';
+  running: IRunRecord[];
+}
+
 /** Reopen the port with these settings. */
 export interface ISerialConfigureCommand {
   type: 'serial-configure';
@@ -447,6 +464,7 @@ export type ServerMessage =
   | IClaimedMessage
   | IDevicesMessage
   | IRequestsMessage
+  | IRunsMessage
   | SerialCommand
   | UsbCommand
   | IPongMessage;
@@ -541,11 +559,32 @@ export interface IClosedMessage {
   type: 'closed';
 }
 
-/** The worker also passes the server's `welcome`, `devices` and `requests` to the page unchanged. */
+/** One device of this tab that moved bytes in the last look of the worker. */
+export interface IDeviceActivity {
+  name: string;
+  /** Bytes came from the device. */
+  rx: boolean;
+  /** Bytes went to the device. */
+  tx: boolean;
+}
+
+/**
+ * Worker to page: the devices of this tab that moved bytes in the last 50 ms. The
+ * worker looks at its byte counters every 50 ms while it holds an open device, and
+ * posts the message only when a counter grew.
+ */
+export interface IActivityMessage {
+  type: 'activity';
+  devices: IDeviceActivity[];
+}
+
+/** The worker also passes the server's `welcome`, `devices`, `requests` and `runs` to the page unchanged. */
 export type WorkerToPage =
   | IWelcomeMessage
   | IDevicesMessage
   | IRequestsMessage
+  | IRunsMessage
+  | IActivityMessage
   | IRoundTripMessage
   | IGrantsMessage
   | IClosedMessage;

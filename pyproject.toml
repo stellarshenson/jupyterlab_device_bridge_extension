@@ -24,7 +24,11 @@ classifiers = [
 ]
 dependencies = [
     "jupyter_server>=2.21,<3",
-    "pyserial>=3.5,<4"
+    "pyserial>=3.5,<4",
+    # Starts the terminal of the device shell and of the serial terminal. The frontend
+    # names only its command id basic-terminal:launch, so no npm dependency matches
+    # this one. Releases before 1.0.7 open a plain shell when the program ends early.
+    "jupyterlab-basic-terminal-extension>=1.0.7,<2"
 ]
 dynamic = ["version", "description", "authors", "urls", "keywords"]
 

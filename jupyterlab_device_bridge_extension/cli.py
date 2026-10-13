@@ -21,8 +21,10 @@ A device exists here only after the user attached it in the Devices panel of the
 
 import argparse
 import codecs
+import contextlib
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -36,6 +38,103 @@ POLL_S = 5.0
 FOLLOW_S = 10.0
 # The server drops a device request nobody answered after this long (docs/design.md).
 REQUEST_S = 300.0
+# How long `run` and `shell` wait for each answer that their tool does not need: the server
+# lists the process as a run, and it gives the devices for the banner of `shell` (docs/design.md).
+RUN_REGISTER_S = 2.0
+# The known upload tools. For each: its command line of the README section Working with an AI
+# agent, with <path> in place of the path of the device, and whether that line needs the shim.
+UPLOAD_TOOLS = (
+    ("avrdude", "avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i", False),
+    ("stm32flash", "stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>", True),
+    ("esptool", "esptool --port <path> write-flash 0x0 firmware.bin", True),
+)
+_TOOL_NAMES = [name for name, _, _ in UPLOAD_TOOLS]
+# The bits of the square wave at the top of the banner: the letters J and L as two serial
+# frames (start bit, 8 data bits with the lowest first, stop bit) between idle bits.
+_BANNER_BITS = "11" + "0010100101" + "0001100101" + "11111"
+
+
+def _wave(bits: str) -> str:
+    """Two rows that draw the bits as a square wave, two columns for each bit."""
+    top, bottom, last = "", "", bits[0]
+    for bit in bits:
+        high = bit == "1"
+        if bit == last:
+            top, bottom = top + ("\u2500" if high else " "), bottom + (" " if high else "\u2500")
+        else:  # an edge takes the first column of the new bit
+            top, bottom = top + ("\u250c" if high else "\u2510"), bottom + ("\u2518" if high else "\u2514")
+        top, bottom, last = top + ("\u2500" if high else " "), bottom + (" " if high else "\u2500"), bit
+    return f"{top.rstrip()}\n{bottom.rstrip()}"
+
+
+# The fixed lines of the banner of a device shell, above and under its lines of the tools and of
+# the devices. This file holds ASCII only, so the characters of the wave, of the rule (U+2500)
+# and the diamond (U+25C6) are written as escapes.
+BANNER_TOP = (
+    _wave(_BANNER_BITS),
+    f"\u25c6 {PROG}" + " " * 23 + "device shell",
+    "",
+)
+BANNER_BOTTOM = (
+    "",
+    f"{PROG} list      all devices",
+    f"{PROG} --help    example commands",
+    "\u2500" * 54,
+)
+
+
+def _tools_on_path() -> list[tuple[str, str, bool]]:
+    """The known upload tools that PATH holds at this moment, in the order of `UPLOAD_TOOLS`."""
+    return [tool for tool in UPLOAD_TOOLS if shutil.which(tool[0])]
+
+
+def _tool_lines() -> list[str]:
+    """The lines of the banner about the upload tools: the ones on PATH, or that one must be installed."""
+    found = [name for name, _, _ in _tools_on_path()]
+    if found:
+        return [f"For {', '.join(found)}."]
+    return [f"No {', '.join(_TOOL_NAMES[:-1])} or {_TOOL_NAMES[-1]} on PATH.",
+            "Install one to make use of the device shell."]
+
+
+def _device_lines(table: dict) -> list[str]:
+    """The device lines of the banner for the device table of the server.
+
+    One numbered line for each device that is attached and has no error, the serial devices
+    first: the path of a serial device, the name of a USB device. One line that says so when
+    no device is such a device.
+    """
+    usable = [f"{record[field]} ({kind})"
+              for group, field, kind in (("serial", "path", "COM"), ("usb", "name", "USB"))
+              for record in table[group] if record["state"] == "attached" and not record["error"]]
+    return [f"({number}) {line}" for number, line in enumerate(usable, 1)] or ["No device is attached."]
+
+
+def _banner(device_lines: list[str]) -> str:
+    """What `shell` prints on a terminal before it becomes the shell.
+
+    The banner in pale cyan, then the colour reset and an empty line.
+    """
+    lines = "\n".join([*BANNER_TOP, *_tool_lines(), *device_lines, *BANNER_BOTTOM])
+    return f"\x1b[38;2;159;224;238m{lines}\x1b[0m\n\n"
+
+
+def _upload_examples() -> str:
+    """The end of the top-level help: one example for each known upload tool on PATH now.
+
+    A line of a tool that needs the shim starts with `run --`, except inside a device shell,
+    where every tool has the shim already.
+    """
+    prefix = "" if "JUPYTERLAB_DEVICE_SHIM_DIR" in os.environ else f"{PROG} run -- "
+    lines = [f"  {prefix if shim else ''}{line}" for _, line, shim in _tools_on_path()]
+    if not lines:
+        return f"No upload tool is on PATH. Known tools: {', '.join(_TOOL_NAMES)}."
+    return "\n".join([
+        "examples for the upload tools on PATH; <path> is the path of the serial device,",
+        f"which `{PROG} list` prints:",
+        *lines])
+
+
 USB_READ_LENGTH = 64
 
 HINTS = {
@@ -243,25 +342,72 @@ def cmd_action(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
-    if not args.command:
-        raise UsageError(f"name the tool after `--`, for example `{PROG} run -- avrdude -c arduino ...`")
+def _start_with_shim(bridge: DeviceBridgeClient, command: list[str] | None,
+                     device: str | None = None) -> int:
+    """What `run` and `shell` do: build the shim, register the run, and become the tool.
+
+    Args:
+        command: The words of the tool. None stands for a device shell: the shell command
+            of the lab's terminals, which the server reports.
+        device: The `--device` of `run`: the tool is not started unless it is attached.
+    """
     try:
         shim = shim_build.build()
     except shim_build.ShimBuildError as error:
         _say(str(error))
         return 1
-    if args.device and bridge.serial(args.device).record()["state"] != "attached":
-        raise DeviceBridgeError(409, f"{args.device} is detached: no lab tab holds it", code="detached")
+    if device and bridge.serial(device).record()["state"] != "attached":
+        raise DeviceBridgeError(409, f"{device} is detached: no lab tab holds it", code="detached")
+    status = bridge.status()
     environment = dict(os.environ)
     preloaded = environment.get("LD_PRELOAD")
     environment["LD_PRELOAD"] = f"{shim}:{preloaded}" if preloaded else str(shim)
-    environment["JUPYTERLAB_DEVICE_SHIM_DIR"] = bridge.status()["shimDir"]
+    environment["JUPYTERLAB_DEVICE_SHIM_DIR"] = status["shimDir"]
+    device_shell = command is None
+    if device_shell:
+        # The variable SHELL is not read: a lab can start its terminals without it.
+        command = status.get("shell")
+        if not command:
+            _say(f"the server (device bridge {status['version']}) does not report the shell command of "
+                 "its terminals - restart JupyterLab, so that the server runs the version of this command")
+            return 1
+    # The server lists this process as a run, so the lab can show it and stop it. The
+    # tool starts whatever becomes of that call, and nothing is printed about it. A device
+    # shell is listed under its own name: the shell command of a lab can be a start script.
+    run = {"pid": os.getpid(), "command": [PROG, "shell"] if device_shell else command}
+    if device:
+        run["device"] = device
+    with contextlib.suppress(Exception):
+        bridge.call("POST", "runs", run, timeout=RUN_REGISTER_S)
+    if device_shell and sys.stdout.isatty():
+        # The devices are read for the banner alone. Without them it has no device line.
+        device_lines = []
+        with contextlib.suppress(Exception):
+            device_lines = _device_lines(bridge.call("GET", "devices", timeout=RUN_REGISTER_S))
+        # As UTF-8 bytes: a text write fails where the locale has no such characters. Flushed,
+        # because the shell replaces this process and what it has not written yet.
+        sys.stdout.buffer.write(_banner(device_lines).encode())
+        sys.stdout.flush()
     try:
-        os.execvpe(args.command[0], args.command, environment)
-    except OSError as error:
-        _say(f"cannot start {args.command[0]}: {error.strerror} - check the name of the tool and its PATH")
+        os.execvpe(command[0], command, environment)
+    except (OSError, ValueError) as error:  # ValueError: the first word of the tool is empty
+        reason = error.strerror if isinstance(error, OSError) else error
+        hint = "check the name of the tool and its PATH"
+        if device_shell:
+            hint = ("it is the shell command of the lab's terminals, "
+                    f"which `{PROG} status --json` shows as shell")
+        _say(f"cannot start {command[0]}: {reason} - {hint}")
     return 127
+
+
+def cmd_run(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    if not args.command:
+        raise UsageError(f"name the tool after `--`, for example `{PROG} run -- avrdude -c arduino ...`")
+    return _start_with_shim(bridge, args.command, args.device)
+
+
+def cmd_shell(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    return _start_with_shim(bridge, None)
 
 
 def cmd_request(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
@@ -606,7 +752,8 @@ exit status:
   2  wrong arguments; for `request`: nobody answered in time
   130  stopped with Ctrl+C
   `run` exits with the status of the tool it started, and with 127 when the tool
-  cannot be started; `terminal` exits with the status of the terminal program
+  cannot be started; `shell` does the same with the shell; `terminal` exits with
+  the status of the terminal program
 
 Results go to stdout and messages to stderr.
 
@@ -618,6 +765,8 @@ environment:
   JUPYTER_TOKEN                        the token when `jupyter server list` reports no server
   JUPYTER_PORT, JUPYTERHUB_SERVICE_PREFIX
                                        where the server answers when the list reports none
+
+{_upload_examples()}
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -690,17 +839,59 @@ The library is compiled on the first run with the system C compiler (cc or gcc)
 into ~/.cache/jupyterlab-device-bridge/ and reused after. Without a compiler the
 command exits 1; set a profile instead. A statically linked tool does not load the
 library; set a profile for it too.
+
+Before the command becomes CMD it tells the server its process id. So the
+Devices panel of the lab (if no sidebar has the panel: menu View, item Show
+Devices Panel) lists the run with its command line, and the user can stop it
+there. CMD then receives SIGTERM, and SIGKILL 3 s later when it still runs. CMD
+starts also when the server does not take the run; the panel then does not list
+it.
+
+The command prints nothing of its own on standard output. `jupyterlab-device
+shell` starts a shell in which every tool has the library.
 """, """
   jupyterlab-device run -- avrdude -c arduino -p m328p \\
-      -P /tmp/jupyterlab-device-1000/tty-2341-0043 -U flash:w:blink.hex
+      -P /run/devices/tty-2341-0043 -U flash:w:blink.hex
   jupyterlab-device run --device tty-10c4-ea60 -- esptool \\
-      --port /tmp/jupyterlab-device-1000/tty-10c4-ea60 chip-id
+      --port /run/devices/tty-10c4-ea60 chip-id
 """)
     p.usage = f"{PROG} run [-h] [--device D] -- CMD [ARG ...]"
     p.add_argument("--device", metavar="D",
                    help="name of a serial device that must be attached; "
                         "CMD is not started when it is not")
     p.set_defaults(func=cmd_run, command=[])
+
+    p = _sub(sub, "shell", "start a device shell: the shell of the lab's terminals with the preload shim",
+             """
+Starts the shell command of the lab's terminals with the preloaded library of
+`jupyterlab-device run`, and becomes it: a device shell. Every tool started in
+that shell passes its own DTR and RTS calls, its break, and its parity, data
+bits and stop bits to the port, with no `run --` before it. The Jupyter server
+names the shell command, the one that a terminal of the lab starts;
+`jupyterlab-device status --json` shows it as `shell`. The variable SHELL is not
+read. The command takes no argument.
+
+A device shell is interactive: it is for a person at a terminal and runs until
+`exit`. A program without a terminal starts each tool with `jupyterlab-device
+run -- CMD` instead.
+
+Before the command becomes the shell it tells the server its process id. So the
+Devices panel of the lab (if no sidebar has the panel: menu View, item Show
+Devices Panel) lists it as a run, with `jupyterlab-device shell` as its command
+line, and the user can stop it there. The shell then receives SIGTERM, and
+SIGKILL 3 s later when it still runs.
+
+When standard output is a terminal the command first prints a banner: the
+upload tools found on PATH, the attached devices and two commands. With a pipe
+or a file as standard output it prints nothing of its own.
+
+Exit status: the status of the shell; 127 when the shell command cannot be
+started; 1 without a C compiler for the library, or when the server does not
+report the shell command.
+""", """
+  jupyterlab-device shell
+""")
+    p.set_defaults(func=cmd_shell)
 
     p = _sub(sub, "request", "ask the user to grant a device that is not attached", """
 Shows a request in the lab with a Grant button and waits. A program cannot grant a

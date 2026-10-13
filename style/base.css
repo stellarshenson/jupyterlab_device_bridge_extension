@@ -1,5 +1,6 @@
 /*
- * Device bridge - the Devices panel of the sidebar and the status bar item.
+ * Device bridge - the Devices panel of the sidebar, the status bar item and the
+ * Info dialog of the runs.
  * Structure and tokens follow jupyterlab_share_files_extension, so the panels
  * of the family read alike. Every colour is a JupyterLab variable: a theme
  * change recolours the panel with the lab.
@@ -183,7 +184,14 @@
   font-size: var(--jp-ui-font-size0);
 }
 
-/* Rows: one per device, one per device request */
+/* The row of the buttons Start and Info of the runs section */
+.jp-DeviceBridgePanel-sectionActions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+/* Rows: one per device, one per device request, one per run */
 .jp-DeviceBridgePanel-item {
   display: flex;
   flex-direction: column;
@@ -248,6 +256,53 @@
 .jp-DeviceBridgePanel-item[data-owner='other']
   .jp-DeviceBridgePanel-state::before {
   background: var(--jp-warn-color1);
+}
+
+/* the process id of a run, after the program name */
+.jp-DeviceBridgePanel-pid {
+  flex: 0 0 auto;
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the command line of a run, in the code font as the name of a device is */
+.jp-DeviceBridgePanel-command {
+  color: var(--jp-ui-font-color1);
+  font-family: var(--jp-code-font-family);
+}
+
+/* The lamps TX and RX of a device row: a circle with its label */
+.jp-DeviceBridgePanel-lamps {
+  display: flex;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.jp-DeviceBridgePanel-lamp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+}
+
+/* not lit: an outlined circle, so that it reads as a lamp that is off */
+.jp-DeviceBridgePanel-lamp::before {
+  content: '';
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 50%;
+  background: var(--jp-layout-color3);
+}
+
+/* lit for 80 ms from each report of traffic: single flashes for sparse
+   traffic, a steady light for steady traffic */
+.jp-DeviceBridgePanel-lamp[data-lit]::before {
+  border-color: var(--jp-brand-color1);
+  background: var(--jp-brand-color1);
 }
 
 /* a line of a row: the fixed words dim, the values in the text colour */
@@ -341,6 +396,51 @@
   background: var(--jp-layout-color2);
   color: var(--jp-ui-font-color2);
   font-size: var(--jp-ui-font-size0);
+}
+
+/* Info dialog of the runs: the attached devices and the example command lines.
+   The lab makes the body of a dialog a column; the dialog is no child of the
+   panel, so its parts have their own class names. */
+.jp-DeviceBridgeInfo {
+  gap: 6px;
+  line-height: 1.4;
+}
+
+.jp-DeviceBridgeInfo-title {
+  padding-top: 6px;
+  font-weight: 600;
+}
+
+/* one attached device: the name, and the path of a serial device */
+.jp-DeviceBridgeInfo-device {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.jp-DeviceBridgeInfo-name,
+.jp-DeviceBridgeInfo-path,
+.jp-DeviceBridgeInfo-example {
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-code-font-size);
+  overflow-wrap: anywhere;
+}
+
+.jp-DeviceBridgeInfo-path {
+  color: var(--jp-ui-font-color2);
+}
+
+/* one command line to copy */
+.jp-DeviceBridgeInfo-example {
+  display: block;
+  padding: 4px 8px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: var(--jp-border-radius);
+  background: var(--jp-layout-color2);
+}
+
+.jp-DeviceBridgeInfo-text {
+  color: var(--jp-ui-font-color2);
 }
 
 /* Status bar item: the icon of the bridge and the number of attached devices.

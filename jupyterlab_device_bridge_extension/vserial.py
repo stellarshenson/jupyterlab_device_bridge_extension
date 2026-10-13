@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import errno
 import fcntl
+import logging
 import os
 import select
 import stat
@@ -28,6 +29,7 @@ POLL_S = 0.02  # how often the master is asked whether a tool holds the slave
 _TERMIOS2 = struct.Struct("4IB19s2I")
 _TCGETS2, _TCSETS2 = 0x802C542A, 0x402C542B
 _BOTHER = 0o010000  # c_cflag: the speed is the number in the speed fields
+RUN_DIR = "/run/devices"  # the device directory of a server whose setting names none
 
 
 class DeviceDirError(OSError):
@@ -48,6 +50,29 @@ class ToolListener(Protocol):
 
     def tool_closed(self) -> None:
         """The last tool closed the device."""
+
+
+def default_device_dir(log: logging.Logger) -> str:
+    """The device directory of a server whose setting names none.
+
+    Returns:
+        `/run/devices` when this user owns it, or when it is missing and this user can
+        make it; an image makes it for the server's user. Else
+        `/tmp/jupyterlab-device-<uid>`, which is logged: /tmp and not the home directory,
+        because a home on a network volume cannot hold a Unix socket.
+    """
+    try:
+        status = os.lstat(RUN_DIR)
+    except FileNotFoundError:
+        usable = os.access(os.path.dirname(RUN_DIR), os.W_OK | os.X_OK)
+    else:
+        usable = stat.S_ISDIR(status.st_mode) and status.st_uid == os.getuid()
+    if usable:
+        return RUN_DIR
+    fallback = f"/tmp/jupyterlab-device-{os.getuid()}"
+    log.info("device-bridge: %s is not a directory of this user and cannot be made; "
+             "the device directory is %s", RUN_DIR, fallback)
+    return fallback
 
 
 def ensure_dir(path: str) -> None:

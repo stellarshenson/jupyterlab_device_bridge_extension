@@ -2,9 +2,9 @@
  * The Devices panel of the left sidebar.
  *
  * It shows what the model reports: the device table, the device requests of container
- * programs and the round trip. A click that opens a dialog of the browser or a lab
- * terminal goes to a handler of the plugin. Attach, detach, forget and a profile
- * change go to the model.
+ * programs, the runs and the round trip. A click that opens a dialog of the browser,
+ * a dialog of the lab or a lab terminal goes to a handler of the plugin. Attach,
+ * detach, forget, a profile change and the stop of a run go to the model.
  *
  * Hooks for the functional tests. Each one is an id or an attribute, never a class
  * name, and none of them changes with the text of a label.
@@ -21,6 +21,13 @@
  *                       [data-field="rx"]        bytes from the device, digits only
  *                       [data-field="tx"]        bytes to the device, digits only
  *                       [data-field="error"]     the reason text; hidden without an error
+ *     lamps             [data-lamp="tx"]         TX
+ *                       [data-lamp="rx"]         RX
+ *                       A lamp is lit while it has the attribute data-lit: for 80 ms
+ *                       from each event. For a device this tab holds the event is an
+ *                       activity message of the worker, which comes for each 50 ms
+ *                       with bytes. For a device another tab holds it is a device
+ *                       table with a larger counter than the row showed before.
  *     serial row only   [data-field="baud"]      the baud rate of the port, digits only
  *                       [data-field="profile"]   the profile id
  *                       [data-field="holder"]    <program> (pid <n>) | none
@@ -35,6 +42,16 @@
  *   request section     [data-section="requests"]; hidden while no request is pending
  *   request row         [data-request="<id>"] with [data-field="program"],
  *                       [data-field="device"], [data-field="reason"], [data-action="grant"]
+ *   runs section        [data-section="runs"]; its [data-field="count"] reads (<n>)
+ *     buttons           [data-action="start-run"]; [data-action="run-info"], hidden
+ *                       while no run exists
+ *     empty text        [data-field="empty"]; hidden while a run exists
+ *   run row             [data-run="<pid>"]
+ *     fields            [data-field="program"]   the program name
+ *                       [data-field="pid"]       pid <n>
+ *                       [data-field="command"]   the command line
+ *                       [data-field="device"]    <device name> | no device
+ *     button            [data-action="stop-run"]
  *   round trip          [data-field="round-trip"]   <ms with one decimal> ms | not connected
  *   status bar item     #jupyterlab-device-bridge-status (src/status.ts); the number
  *                       of attached devices is in its [data-field="count"]
@@ -42,6 +59,7 @@
  * A button or a field that a row does not offer has the attribute `hidden`; it is not
  * removed. Forget acts on the second click: the first click changes its label to
  * "Confirm forget", and a second click earlier than 500 ms after the first is ignored.
+ * Stop of a run row does the same with the label "Confirm stop".
  */
 
 import { Notification } from '@jupyterlab/apputils';
@@ -52,8 +70,10 @@ import { deviceIcon } from './icons';
 import { DeviceBridgeModel } from './model';
 import type {
   DeviceKind,
+  IDeviceActivity,
   IDeviceRequest,
   IProfileChange,
+  IRunRecord,
   ISerialRecord,
   IUsbRecord,
   SerialAction
@@ -64,6 +84,12 @@ export const PANEL_ID = 'jupyterlab-device-bridge-panel';
 
 /** A second click on an armed button counts only after this time, so a double click does not confirm. */
 export const ARM_DELAY_MS = 500;
+
+/**
+ * How long one event keeps a lamp of a device row lit. The worker reports traffic
+ * every 50 ms, so steady traffic lights the lamp again before it goes off.
+ */
+const LAMP_MS = 80;
 
 const KIND_LABELS: Record<DeviceKind, string> = {
   serial: 'Serial',
@@ -114,15 +140,31 @@ export interface IDeviceBridgePanelOptions {
   grantRequest: (id: string) => void;
   /** Open the serial terminal on the serial port with this name. */
   openTerminal: (name: string) => void;
+  /** Open a device shell: a lab terminal whose shell runs with the shim. */
+  startRun: () => void;
+  /** Open the dialog that says how to connect a tool. */
+  showRunInfo: () => void;
 }
 
 /**
- * A row of the device list. It is made once for a device and updated in place, so an
- * update of the device table does not replace a field the user is editing.
+ * A row of the device list or of the runs. It is made once for a device or a run and
+ * updated in place, so an update of a table does not replace a field the user is
+ * editing or a button the user has armed.
  */
 interface IRow<R> {
   node: HTMLElement;
   update(record: R): void;
+  /** End the timers of the row and what it hears of the model. Called when the row or the panel goes. */
+  dispose?(): void;
+}
+
+/** An activity lamp of a device row: a circle with the label TX or RX. */
+interface ILamp {
+  node: HTMLElement;
+  /** Light the lamp for `LAMP_MS` from now. */
+  flash(): void;
+  /** End the timer of a lit lamp. */
+  dispose(): void;
 }
 
 /** The part of a device row that a serial port and a USB device share. */
@@ -195,6 +237,33 @@ function button(
   node.title = title;
   node.addEventListener('click', onClick);
   return node;
+}
+
+/**
+ * A lamp for one direction of a device row. It is lit while it has the attribute
+ * `data-lit`.
+ *
+ * @param name `tx` for the bytes to the device, `rx` for the bytes from it
+ * @param label The text beside the circle
+ * @param title What the lamp stands for
+ */
+function lamp(name: 'tx' | 'rx', label: string, title: string): ILamp {
+  const node = el('span', 'jp-DeviceBridgePanel-lamp', label);
+  node.dataset.lamp = name;
+  node.title = title;
+  let timer: number | undefined;
+  return {
+    node,
+    flash(): void {
+      node.dataset.lit = '';
+      // A lamp that is lit already stays lit for the full time from now.
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => delete node.dataset.lit, LAMP_MS);
+    },
+    dispose(): void {
+      window.clearTimeout(timer);
+    }
+  };
 }
 
 /**
@@ -376,6 +445,23 @@ function deviceRow(
     state
   );
   const details = el('div', 'jp-DeviceBridgePanel-details');
+  const txLamp = lamp('tx', 'TX', 'bytes to the device');
+  const rxLamp = lamp('rx', 'RX', 'bytes from the device');
+  const lamps = el('div', 'jp-DeviceBridgePanel-lamps');
+  lamps.append(txLamp.node, rxLamp.node);
+  // The worker of this tab names the devices whose bytes it moved, every 50 ms.
+  const onActivity = (_: unknown, devices: IDeviceActivity[]): void => {
+    const moved = devices.find(device => device.name === name);
+    if (moved?.tx) {
+      txLamp.flash();
+    }
+    if (moved?.rx) {
+      rxLamp.flash();
+    }
+  };
+  model.activity.connect(onActivity);
+  /** The counters of the last device table; null before the first one. */
+  let shown: { rx: number; tx: number } | null = null;
   const rx = field('rx');
   const tx = field('tx');
   const error = field('error', 'jp-DeviceBridgePanel-error');
@@ -404,6 +490,7 @@ function deviceRow(
   node.append(
     header,
     details,
+    lamps,
     line('From the device ', rx, ' bytes, to the device ', tx, ' bytes'),
     error,
     actions
@@ -424,11 +511,27 @@ function deviceRow(
       state.textContent = removed ? REMOVED : STATE_TEXTS[owner];
       rx.textContent = String(record.rx);
       tx.textContent = String(record.tx);
+      // The worker of another tab moves the bytes of that tab's device. This tab sees
+      // only its counters grow, once a second.
+      if (owner !== 'this' && shown) {
+        if (record.tx > shown.tx) {
+          txLamp.flash();
+        }
+        if (record.rx > shown.rx) {
+          rxLamp.flash();
+        }
+      }
+      shown = { rx: record.rx, tx: record.tx };
       error.textContent = failure ?? '';
       error.hidden = !failure;
       attach.hidden = owner !== 'none' || !model.hasGrant(name);
       detach.hidden = owner !== 'this';
       forget.hidden = owner === 'other';
+    },
+    dispose(): void {
+      model.activity.disconnect(onActivity);
+      txLamp.dispose();
+      rxLamp.dispose();
     }
   };
 }
@@ -467,7 +570,8 @@ function serialRow(
         : 'none';
       terminal.hidden = record.state !== 'attached';
       editor.update(record);
-    }
+    },
+    dispose: row.dispose
   };
 }
 
@@ -493,32 +597,87 @@ function usbRow(first: IUsbRecord, model: DeviceBridgeModel): IRow<IUsbRecord> {
       productLine.hidden = !product.textContent;
       opened.textContent = record.opened ? 'yes' : 'no';
       holder.textContent = record.holder ? record.holder.name : 'none';
+    },
+    dispose: row.dispose
+  };
+}
+
+/**
+ * The row of one run: program, process id, command line, device and the Stop button.
+ *
+ * @param pid The process id of the run
+ * @param model The model of the device bridge
+ */
+function runRow(pid: number, model: DeviceBridgeModel): IRow<IRunRecord> {
+  const program = field('program', 'jp-DeviceBridgePanel-itemName');
+  const header = el('div', 'jp-DeviceBridgePanel-itemHeader');
+  header.append(
+    program,
+    field('pid', 'jp-DeviceBridgePanel-pid', `pid ${pid}`)
+  );
+  const command = field('command', 'jp-DeviceBridgePanel-command');
+  const device = field('device');
+  const stop = twoStepButton(
+    'stop-run',
+    'Stop',
+    'End this program. The server ends it by force when it still runs 3 seconds later',
+    () => {
+      model.stopRun(pid).catch((error: Error) => {
+        // Without `autoClose` the lab displays no toast.
+        Notification.emit(
+          `The program with pid ${pid} was not stopped: ${error.message}`,
+          'error',
+          { autoClose: false }
+        );
+      });
+    }
+  );
+  const actions = el('div', 'jp-DeviceBridgePanel-itemActions');
+  actions.append(stop);
+
+  const node = el('div', 'jp-DeviceBridgePanel-item');
+  node.dataset.run = String(pid);
+  node.append(header, line(command), line('Device: ', device), actions);
+  return {
+    node,
+    update(run: IRunRecord): void {
+      // A tool that `jupyterlab-device run` became holds the device under the
+      // process id of the run.
+      const held = model.devices.serial.find(
+        record => record.holder?.pid === pid
+      );
+      program.textContent = run.program;
+      command.textContent = run.command;
+      device.textContent = run.device || held?.name || 'no device';
     }
   };
 }
 
 /**
- * Bring the rows of one kind in line with the device table: remove the row of a
- * device that is gone, make a row for a new device, update every row.
+ * Bring the rows of one list in line with its table: remove the row of a record that
+ * is gone and end its timers, make a row for a new record, update every row.
  */
-function syncRows<R extends { name: string }>(
+function syncRows<K, R>(
   list: HTMLElement,
-  rows: Map<string, IRow<R>>,
+  rows: Map<K, IRow<R>>,
   records: R[],
+  keyOf: (record: R) => K,
   create: (record: R) => IRow<R>
 ): void {
-  const names = new Set(records.map(record => record.name));
-  for (const [name, row] of rows) {
-    if (!names.has(name)) {
+  const keys = new Set(records.map(keyOf));
+  for (const [key, row] of rows) {
+    if (!keys.has(key)) {
+      row.dispose?.();
       row.node.remove();
-      rows.delete(name);
+      rows.delete(key);
     }
   }
   for (const record of records) {
-    let row = rows.get(record.name);
+    const key = keyOf(record);
+    let row = rows.get(key);
     if (!row) {
       row = create(record);
-      rows.set(record.name, row);
+      rows.set(key, row);
       list.append(row.node);
     }
     row.update(record);
@@ -542,10 +701,10 @@ function section(
 
 /**
  * The Devices panel: the device table of the server, the device requests of container
- * programs and the round trip, with the buttons that act on them.
+ * programs, the runs and the round trip, with the buttons that act on them.
  *
  * @example
- * const panel = new DeviceBridgePanel({ model, connectSerial, connectUsb, grantRequest, openTerminal });
+ * const panel = new DeviceBridgePanel({ model, connectSerial, connectUsb, grantRequest, openTerminal, startRun, showRunInfo });
  * app.shell.add(panel, 'left');
  */
 export class DeviceBridgePanel extends Widget {
@@ -596,16 +755,38 @@ export class DeviceBridgePanel extends Widget {
       this._requestCount,
       this._requestList
     );
+    const startRun = button(
+      'start-run',
+      'Start',
+      'Open a device shell',
+      options.startRun
+    );
+    this._runInfo = button(
+      'run-info',
+      'Info',
+      'Show how to connect a tool to an attached device',
+      options.showRunInfo
+    );
+    const runActions = el('div', 'jp-DeviceBridgePanel-sectionActions');
+    runActions.append(startRun, this._runInfo);
     const body = el('div', 'jp-DeviceBridgePanel-body');
     body.append(
       this._requestSection,
       section(
         'devices',
-        'Serial ports and USB devices',
+        'Serial and USB devices',
         this._deviceCount,
         this._serialList,
         this._usbList,
         this._empty
+      ),
+      section(
+        'runs',
+        'Device shell and tools',
+        this._runCount,
+        runActions,
+        this._runList,
+        this._runEmpty
       )
     );
 
@@ -615,23 +796,53 @@ export class DeviceBridgePanel extends Widget {
 
     model.devicesChanged.connect(this._renderDevices, this);
     model.requestsChanged.connect(this._renderRequests, this);
+    model.runsChanged.connect(this._renderRuns, this);
+    // The device of a run row can be the serial port that the process of the run holds.
+    model.devicesChanged.connect(this._renderRuns, this);
     model.roundTripChanged.connect(this._renderRoundTrip, this);
     this._renderDevices();
     this._renderRequests();
+    this._renderRuns();
     this._renderRoundTrip();
+  }
+
+  /** End the timers of the lamps and what the rows hear of the model, so that nothing touches a row of a disposed panel. */
+  dispose(): void {
+    for (const row of [
+      ...this._serialRows.values(),
+      ...this._usbRows.values()
+    ]) {
+      row.dispose?.();
+    }
+    super.dispose();
   }
 
   private _renderDevices(): void {
     const { serial, usb } = this._model.devices;
-    syncRows(this._serialList, this._serialRows, serial, record =>
+    const nameOf = (record: { name: string }): string => record.name;
+    syncRows(this._serialList, this._serialRows, serial, nameOf, record =>
       serialRow(record, this._model, this._options.openTerminal)
     );
-    syncRows(this._usbList, this._usbRows, usb, record =>
+    syncRows(this._usbList, this._usbRows, usb, nameOf, record =>
       usbRow(record, this._model)
     );
     const count = serial.length + usb.length;
     this._deviceCount.textContent = `(${count})`;
     this._empty.hidden = count > 0;
+  }
+
+  private _renderRuns(): void {
+    const runs = this._model.runs;
+    syncRows(
+      this._runList,
+      this._runRows,
+      runs,
+      run => run.pid,
+      run => runRow(run.pid, this._model)
+    );
+    this._runCount.textContent = `(${runs.length})`;
+    this._runEmpty.hidden = runs.length > 0;
+    this._runInfo.hidden = runs.length === 0;
   }
 
   private _renderRequests(): void {
@@ -699,5 +910,17 @@ export class DeviceBridgePanel extends Widget {
     'count',
     'jp-DeviceBridgePanel-sectionCount'
   );
+  private readonly _runRows = new Map<number, IRow<IRunRecord>>();
+  private readonly _runList = el('div', 'jp-DeviceBridgePanel-list');
+  private readonly _runEmpty = field(
+    'empty',
+    'jp-DeviceBridgePanel-empty',
+    'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
+  );
+  private readonly _runCount = field(
+    'count',
+    'jp-DeviceBridgePanel-sectionCount'
+  );
+  private readonly _runInfo: HTMLButtonElement;
   private readonly _roundTrip = field('round-trip');
 }

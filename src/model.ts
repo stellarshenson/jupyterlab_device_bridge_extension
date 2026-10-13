@@ -2,8 +2,8 @@
  * The model of the device bridge: the one object the user interface talks to.
  *
  * It starts the dedicated worker, keeps what the worker reports (the device table,
- * the pending device requests, the round trip), and opens the browser's grant
- * dialogs, which exist only in the page.
+ * the pending device requests, the runs, the round trip), and opens the browser's
+ * grant dialogs, which exist only in the page.
  */
 
 import { ServerConnection } from '@jupyterlab/services';
@@ -14,6 +14,7 @@ import { ISignal, Signal } from '@lumino/signaling';
 
 import type {
   DeviceKind,
+  IDeviceActivity,
   IDeviceRequest,
   IDeviceTable,
   IErrorInfo,
@@ -21,6 +22,7 @@ import type {
   IGrantedDevice,
   IProfile,
   IProfileChange,
+  IRunRecord,
   ISerialDefaults,
   PageToWorker,
   WorkerToPage
@@ -127,6 +129,11 @@ export class DeviceBridgeModel implements IDisposable {
     return this._requests;
   }
 
+  /** The live runs, as the server listed them last. Empty while the WebSocket is closed. */
+  get runs(): IRunRecord[] {
+    return this._runs;
+  }
+
   /** The last round trip between browser and server in ms; null while the WebSocket is closed. */
   get roundTrip(): number | null {
     return this._roundTrip;
@@ -146,8 +153,20 @@ export class DeviceBridgeModel implements IDisposable {
     return this._requestsChanged;
   }
 
+  get runsChanged(): ISignal<this, IRunRecord[]> {
+    return this._runsChanged;
+  }
+
   get roundTripChanged(): ISignal<this, number | null> {
     return this._roundTripChanged;
+  }
+
+  /**
+   * Emitted for each 50 ms period in which devices of this tab moved bytes, with those
+   * devices and their directions. The model keeps nothing of it.
+   */
+  get activity(): ISignal<this, IDeviceActivity[]> {
+    return this._activity;
   }
 
   get isDisposed(): boolean {
@@ -241,6 +260,20 @@ export class DeviceBridgeModel implements IDisposable {
   }
 
   /**
+   * Ask the server to end the process of a run. The run stays in `runs` until the
+   * server lists it no more, which is when the process has ended.
+   *
+   * @param pid The process id of the run
+   * @throws ServerConnection.ResponseError when the server refuses, for example
+   * because it knows no run with this process id
+   */
+  async stopRun(pid: number): Promise<void> {
+    await requestAPI<unknown>(`runs/${pid}`, this._serverSettings, {
+      method: 'DELETE'
+    });
+  }
+
+  /**
    * Act on a pending device request: open the grant dialog with the vendor and
    * product id the program asked for, attach the device and answer the request.
    * Call it from a click, because the browser wants a user gesture.
@@ -320,6 +353,12 @@ export class DeviceBridgeModel implements IDisposable {
       case 'requests':
         this._setRequests(message.pending);
         return;
+      case 'runs':
+        this._setRuns(message.running);
+        return;
+      case 'activity':
+        this._activity.emit(message.devices);
+        return;
       case 'rtt':
         this._setRoundTrip(message.ms);
         return;
@@ -329,6 +368,7 @@ export class DeviceBridgeModel implements IDisposable {
         this._setRoundTrip(null);
         this._setDevices(EMPTY_TABLE);
         this._setRequests([]);
+        this._setRuns([]);
         return;
     }
   }
@@ -341,6 +381,11 @@ export class DeviceBridgeModel implements IDisposable {
   private _setRequests(requests: IDeviceRequest[]): void {
     this._requests = requests;
     this._requestsChanged.emit(requests);
+  }
+
+  private _setRuns(runs: IRunRecord[]): void {
+    this._runs = runs;
+    this._runsChanged.emit(runs);
   }
 
   private _setRoundTrip(ms: number | null): void {
@@ -432,13 +477,16 @@ export class DeviceBridgeModel implements IDisposable {
   private readonly _devicesChanged = new Signal<this, IDeviceTable>(this);
   private readonly _tabIdChanged = new Signal<this, string | null>(this);
   private readonly _requestsChanged = new Signal<this, IDeviceRequest[]>(this);
+  private readonly _runsChanged = new Signal<this, IRunRecord[]>(this);
   private readonly _roundTripChanged = new Signal<this, number | null>(this);
+  private readonly _activity = new Signal<this, IDeviceActivity[]>(this);
 
   private _devices = EMPTY_TABLE;
   private _grants: IGrant[] = [];
   private _tabId: string | null = null;
   private _profiles: IProfile[] = [];
   private _requests: IDeviceRequest[] = [];
+  private _runs: IRunRecord[] = [];
   private _roundTrip: number | null = null;
   private _isDisposed = false;
 }
