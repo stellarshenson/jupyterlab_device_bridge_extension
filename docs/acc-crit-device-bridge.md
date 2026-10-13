@@ -931,6 +931,7 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - log: 2026-10-13T08:43:05Z @kj added
   - log: 2026-10-13T09:11:54Z @kj closed
 - [x] `ACC-CLI-151` **Wheel requires the basic terminal extension** - MEDIUM; pyproject.toml lists jupyterlab-basic-terminal-extension>=1.0.7,<2 among the dependencies of the project, so pip installs it with the wheel
+  - overridden-by: ACC-CLI-162
   - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: test_acc_cli_151_the_wheel_requires_the_basic_terminal_extension passes; it failed against a dependency list without the requirement and with another range; pip show of build 0.6.24 lists the requirement
   - test: pytest test_cli.py: the dependencies of pyproject.toml hold a requirement that starts with jupyterlab-basic-terminal-extension
   - test-tags: UNIT
@@ -948,6 +949,14 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-13T12:48:12Z @kj added
   - log: 2026-10-13T13:22:17Z @kj closed
+- [x] `ACC-CLI-162` **Wheel requires the terminal extension 1.0.8** - MEDIUM; pyproject.toml lists jupyterlab-basic-terminal-extension>=1.0.8,<2; with it a launch that the server of the terminal extension refuses shows that server's code as the reason: The terminal did not start: invalid_cwd for a folder of the file browser that no longer exists
+  - evidence: pytest test_acc_cli_162 in 456 passed, 1 skipped (logs/sibling108-make-test.log, build 0.6.28); galata ACC-CLI-162 in 74 passed (logs/sibling108-galata.log): after the folder was removed, Start showed The terminal did not start: invalid_cwd and no run began; terminal extension 1.0.8 installed
+  - overrides: ACC-CLI-151
+  - related: DEF-PANEL-19
+  - test: pytest test_cli.py: read the dependency from pyproject.toml; galata panel.spec.ts: open a folder in the file browser, remove it on the disk, press Start, assert the notification text and that no run began
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T14:50:05Z @kj added
+  - log: 2026-10-13T15:02:55Z @kj closed
 
 ## Grants, authentication and ownership `SEC`
 

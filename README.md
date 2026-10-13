@@ -133,7 +133,7 @@ The serial terminal is pyserial's miniterm; this extension has no terminal emula
 - miniterm opens the virtual device as every tool does: the panel shows it as the holding program, and the action on open of the profile runs
 - When the command line ends with an error less than 5 seconds after its start, for example because another program holds the port, the terminal stays open with the message until Enter is pressed
 - Where the server offers no terminals, or the lab has no `jupyterlab_basic_terminal_extension`, the lab shows the command line to run in a shell of the container
-- Where the terminal extension refuses the launch, the lab raises a notification that says the terminal did not start, followed by the reason as the terminal extension gives it
+- Where the terminal extension refuses the launch, the lab raises a notification that says the terminal did not start, followed by the reason as the terminal extension gives it, for example `invalid_cwd` when the folder of the file browser no longer exists
 
 ### Status bar item
 
@@ -452,7 +452,7 @@ The first version does not have:
 - A browser with the Web Serial and WebUSB interfaces; from knowledge these are desktop Chrome and Edge
 - The lab opened over HTTPS or at `localhost`; on a plain `http://` address that is not localhost the browser does not offer these interfaces
 - A C compiler (`cc` or `gcc`) in the container, only for `jupyterlab-device run` and `jupyterlab-device shell`
-- `jupyterlab_basic_terminal_extension` >= 1.0.7 and `/bin/bash` on the server, for the two commands of the lab that open a terminal; pip installs that extension together with this one
+- `jupyterlab_basic_terminal_extension` >= 1.0.8 and `/bin/bash` on the server, for the two commands of the lab that open a terminal; pip installs that extension together with this one
 - pyusb in the program's environment, only for the pyusb backend
 
 ## Install

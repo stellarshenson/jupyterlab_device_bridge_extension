@@ -1124,6 +1124,36 @@ test.describe('Device shell and tools', () => {
       .toMatch(/^answer-42$/m);
   });
 
+  test('ACC-CLI-162 when the folder of the file browser exists no more, Start raises the notification that the terminal did not start with the code of the terminal extension, and no run begins', async ({
+    page,
+    tmpPath
+  }) => {
+    await openLab(page, {});
+    // The file browser stands in a folder that is then removed on the disk. The lab
+    // learns that at the next refresh of the file browser, so Start comes before it.
+    const folder = `${tmpPath}/removed-folder`;
+    await page.contents.createDirectory(folder);
+    await page.evaluate(
+      path =>
+        (window as any).jupyterapp.commands.execute('filebrowser:go-to-path', {
+          path,
+          dontShowBrowser: true
+        }),
+      folder
+    );
+    // The Contents API of the test server moves a folder to the trash and has none
+    // here, so the folder is removed on the disk.
+    fs.rmSync(join((await page.getServerRoot())!, folder), { recursive: true });
+
+    await action(runsSection(page), 'start-run').click();
+
+    await expect(
+      toast(page, 'The terminal did not start: invalid_cwd')
+    ).toBeVisible({ timeout: ROUND_TRIP });
+    await expect(runsSection(page).locator('[data-run]')).toHaveCount(0);
+    expect(await runPids()).toEqual([]);
+  });
+
   test('ACC-PANEL-147 the command Device Shell of the command palette opens a terminal tab with the banner of a device shell and no command line typed, and the panel lists the shell as the run jupyterlab-device shell', async ({
     page
   }) => {

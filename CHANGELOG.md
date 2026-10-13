@@ -2,6 +2,16 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [0.6.29] - 2026-10-13
+
+### Changed
+
+- The wheel requires `jupyterlab_basic_terminal_extension` 1.0.8 or newer
+
+### Fixed
+
+- A launch that the server of the terminal extension refuses now shows that server's code as the reason, for example `The terminal did not start: invalid_cwd` when the folder of the file browser no longer exists. It showed `[object Object]`
+
 ## [0.6.27] - 2026-10-13
 
 The Devices panel now controls the programs that use a device: it lists them, starts a device shell and stops a program. One plus icon replaces the two add buttons. The extension is tested against simulated devices in the browser; no test used a physical board. One known defect: a launch that the server of the terminal extension 1.0.7 refuses shows `[object Object]` as its reason.

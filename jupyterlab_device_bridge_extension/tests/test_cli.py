@@ -685,12 +685,12 @@ async def test_acc_term_108_terminal_becomes_pyserial_miniterm(cli_run, fake_tab
     assert any(requirement.startswith("pyserial") for requirement in project()["dependencies"])
 
 
-def test_acc_cli_151_the_wheel_requires_the_basic_terminal_extension():
-    """ACC-CLI-151 pyproject.toml lists `jupyterlab-basic-terminal-extension>=1.0.7,<2` among the dependencies of the project, so pip installs it with the wheel."""
+def test_acc_cli_162_the_wheel_requires_the_basic_terminal_extension():
+    """ACC-CLI-162 pyproject.toml lists `jupyterlab-basic-terminal-extension>=1.0.8,<2` among the dependencies of the project, so pip installs it with the wheel."""
     requirements = [requirement for requirement in project()["dependencies"]
                     if requirement.startswith("jupyterlab-basic-terminal-extension")]
 
-    assert requirements == ["jupyterlab-basic-terminal-extension>=1.0.7,<2"]
+    assert requirements == ["jupyterlab-basic-terminal-extension>=1.0.8,<2"]
 
 
 async def test_acc_term_108_miniterm_runs_on_the_virtual_device(cli_run, fake_tab):

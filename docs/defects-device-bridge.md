@@ -114,12 +114,14 @@ What the user sees and clicks in the lab
   - log: 2026-10-13T08:43:05Z @kj added
   - log: 2026-10-13T08:43:29Z @kj edited test-tags added "UNIT, FUNCTIONAL"
   - log: 2026-10-13T09:42:07Z @kj closed
-- [ ] `DEF-PANEL-19` **Refused launch by the terminal server shows [object Object]** - MINOR; when the server of the terminal extension refuses a launch, for example because the folder of the file browser no longer exists, the notification reads The terminal did not start: [object Object]; the user learns that the launch failed, not why
+- [x] `DEF-PANEL-19` **Refused launch by the terminal server shows [object Object]** - MINOR; when the server of the terminal extension refuses a launch, for example because the folder of the file browser no longer exists, the notification reads The terminal did not start: [object Object]; the user learns that the launch failed, not why
+  - evidence: jupyterlab_basic_terminal_extension 1.0.8 (its commit 1b81755, on PyPI) gives the server's code as the error message; pyproject.toml requires >=1.0.8; galata ACC-CLI-162 in 74 passed (logs/sibling108-galata.log) shows The terminal did not start: invalid_cwd
   - related: ACC-PANEL-161
   - repro: node: build ServerConnection.ResponseError with the body {error: invalid_cwd} as the terminal extension does, run the expression of runInTerminal; output: The terminal did not start: [object Object]
   - test-tags: UNIT
   - root-cause: 2026-10-13T13:40:09Z @kj jupyterlab_basic_terminal_extension 1.0.7 src/request.ts:47 throws ResponseError(response, data.message || data); its server bodies hold error and no message, so the body object becomes the message and the text is lost before this plugin gets the rejection
   - log: 2026-10-13T13:40:09Z @kj added
+  - log: 2026-10-13T15:02:55Z @kj closed
 
 ## Command line and agent documents `CLI`
 
