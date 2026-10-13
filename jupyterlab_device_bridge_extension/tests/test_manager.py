@@ -1,22 +1,29 @@
 """Tests of the device manager through the real server: fake tabs on the WebSocket, tools as child processes."""
 
 import asyncio
+import atexit
 import base64
+import contextlib
 import fcntl
 import hashlib
 import logging
 import os
 import pathlib
+import signal
 import socket
 import stat
+import subprocess
 import sys
 import time
+import types
 
 import pytest
 from traitlets.config import Config
 
-from jupyterlab_device_bridge_extension import DeviceBridge
+from jupyterlab_device_bridge_extension import DeviceBridge, _load_jupyter_server_extension, vserial
+from jupyterlab_device_bridge_extension import manager as manager_module
 from jupyterlab_device_bridge_extension.manager import DeviceManager
+from jupyterlab_device_bridge_extension.routes import MANAGER_KEY
 from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_KEY, SERIAL_NAME, FakeTab
 
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
@@ -334,18 +341,30 @@ async def test_acc_sec_94_only_the_holder_reports_on_and_releases_a_device(fake_
     assert os.path.islink(path)
 
 
-def test_acc_sec_95_the_device_directory_is_in_tmp_unless_it_is_set(monkeypatch):
-    """ACC-SEC-95 the device directory is /tmp/jupyterlab-device-<uid>, or JUPYTERLAB_DEVICE_DIR, or the setting DeviceBridge.device_dir, which wins."""
-    monkeypatch.delenv("JUPYTERLAB_DEVICE_DIR", raising=False)
-    assert DeviceBridge().device_dir == f"/tmp/jupyterlab-device-{os.getuid()}"
-    assert DeviceBridge().monitor_bytes == 262144
-
+def test_acc_serial_127_the_device_directory_comes_from_the_setting_and_not_from_the_environment(monkeypatch):
+    """ACC-SERIAL-127 the setting DeviceBridge.device_dir names the device directory; it is empty by default, also with JUPYTERLAB_DEVICE_DIR set."""
     monkeypatch.setenv("JUPYTERLAB_DEVICE_DIR", "/tmp/from-the-environment")
-    assert DeviceBridge().device_dir == "/tmp/from-the-environment"
+    assert DeviceBridge().device_dir == ""
+    assert DeviceBridge().monitor_bytes == 262144
 
     settings = Config({"DeviceBridge": {"device_dir": "/tmp/from-the-settings", "monitor_bytes": 1024}})
     configured = DeviceBridge(config=settings)
     assert (configured.device_dir, configured.monitor_bytes) == ("/tmp/from-the-settings", 1024)
+
+
+def test_acc_serial_127_a_server_without_the_setting_takes_the_default_directory(tmp_path, monkeypatch):
+    """ACC-SERIAL-127 a server whose config names no device directory takes the one of default_device_dir, also with JUPYTERLAB_DEVICE_DIR set."""
+    run_dir = str(tmp_path / "devices")
+    monkeypatch.setattr(vserial, "RUN_DIR", run_dir)
+    monkeypatch.setenv("JUPYTERLAB_DEVICE_DIR", "/tmp/from-the-environment")
+    web_app = types.SimpleNamespace(settings={"base_url": "/"}, add_handlers=lambda *args: None)
+    server = types.SimpleNamespace(config=Config(), log=logging.getLogger(__name__), web_app=web_app)
+
+    _load_jupyter_server_extension(server)
+
+    manager = web_app.settings[MANAGER_KEY]
+    atexit.unregister(manager.close)
+    assert manager.device_dir == run_dir
 
 
 async def test_acc_sec_95_a_device_directory_that_is_a_symlink_refuses_the_claim(
@@ -370,9 +389,15 @@ async def test_acc_serial_3_a_stopped_server_leaves_no_path_and_no_socket_behind
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
+    # JUPYTER_NO_CONFIG: the server loads this extension only, not the ones that the
+    # environment enables. One of those, jupyter_lsp, looks for language servers in a
+    # thread at server start, with `julia` and `Rscript` calls that have no timeout, and
+    # Python ends only after that thread: with a `julia` that needs 40 s the server ended
+    # 40 s after SIGTERM, and the wait below failed once on a CI runner.
     environment = dict(
         os.environ, PYTHONPATH=str(REPOSITORY), JUPYTER_RUNTIME_DIR=str(tmp_path / "runtime"),
-        JUPYTER_CONFIG_DIR=str(tmp_path / "config"), JUPYTER_DATA_DIR=str(tmp_path / "data"))
+        JUPYTER_CONFIG_DIR=str(tmp_path / "config"), JUPYTER_DATA_DIR=str(tmp_path / "data"),
+        JUPYTER_NO_CONFIG="1")
     server = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "jupyter_server", "--no-browser", "--ServerApp.ip=127.0.0.1",
         f"--ServerApp.port={port}", "--ServerApp.port_retries=0", "--IdentityProvider.token=stop-test",
@@ -416,8 +441,8 @@ async def test_acc_sec_95_a_shim_directory_that_is_a_symlink_gets_no_socket(fake
     assert f"no shim socket for {SERIAL_NAME}" in caplog.text and "is not a directory" in caplog.text
 
 
-def test_acc_sec_97_a_server_that_starts_removes_the_link_and_the_socket_a_killed_server_left(device_dir):
-    """ACC-SEC-97 a server that starts on a device directory removes the symlink and the shim socket that a killed server left in it, and no regular file and no directory (DEF-SERIAL-5)."""
+def test_acc_serial_152_a_server_that_starts_removes_the_link_and_the_socket_a_killed_server_left(device_dir):
+    """ACC-SERIAL-152 a server that starts on a device directory removes the symlink and the shim socket that a killed server left in it, and no regular file and no directory (DEF-SERIAL-5)."""
     link, left_socket, files = leave(device_dir)
 
     DeviceManager(device_dir, 1024, logging.getLogger(__name__)).close()
@@ -429,8 +454,8 @@ def test_acc_sec_97_a_server_that_starts_removes_the_link_and_the_socket_a_kille
     assert not os.path.lexists(link), "the first server unlocked the directory when it closed"
 
 
-def test_acc_sec_97_a_server_that_starts_keeps_a_symlink_that_leads_to_no_pty_slave(device_dir, tmp_path):
-    """ACC-SEC-97 a server that starts on a device directory removes the link a killed server left and keeps a symlink that leads to a file or to a directory, because the bridge did not make it."""
+def test_acc_serial_152_a_server_that_starts_keeps_a_symlink_that_leads_to_no_pty_slave(device_dir, tmp_path):
+    """ACC-SERIAL-152 a server that starts on a device directory removes the link a killed server left and keeps a symlink that leads to a file or to a directory, because the bridge did not make it."""
     link, _, _ = leave(device_dir)
     note = tmp_path / "note"
     note.write_text("the user's own file")
@@ -444,8 +469,8 @@ def test_acc_sec_97_a_server_that_starts_keeps_a_symlink_that_leads_to_no_pty_sl
     assert [os.readlink(path) for path in kept] == [str(note), str(tmp_path)]
 
 
-def test_acc_sec_97_a_server_that_starts_on_a_refused_directory_removes_nothing(device_dir, caplog):
-    """ACC-SEC-97 a server that starts on a device directory that is a symlink removes nothing in the directory behind the symlink and logs why (DEF-SERIAL-5)."""
+def test_acc_serial_152_a_server_that_starts_on_a_refused_directory_removes_nothing(device_dir, caplog):
+    """ACC-SERIAL-152 a server that starts on a device directory that is a symlink removes nothing in the directory behind the symlink and logs why (DEF-SERIAL-5)."""
     link, left_socket, _ = leave(f"{device_dir}-elsewhere")
     os.symlink(f"{device_dir}-elsewhere", device_dir)
 
@@ -455,8 +480,8 @@ def test_acc_sec_97_a_server_that_starts_on_a_refused_directory_removes_nothing(
     assert f"{device_dir} is not a directory" in caplog.text
 
 
-def test_acc_sec_97_a_server_that_starts_removes_nothing_behind_a_shim_directory_that_is_a_symlink(device_dir):
-    """ACC-SEC-97 a server that starts on a device directory whose shim directory is a symlink keeps that symlink and removes no socket in the directory behind it (DEF-SERIAL-5)."""
+def test_acc_serial_152_a_server_that_starts_removes_nothing_behind_a_shim_directory_that_is_a_symlink(device_dir):
+    """ACC-SERIAL-152 a server that starts on a device directory whose shim directory is a symlink keeps that symlink and removes no socket in the directory behind it (DEF-SERIAL-5)."""
     _, left_socket, _ = leave(f"{device_dir}-elsewhere")
     os.mkdir(device_dir, 0o700)
     os.symlink(os.path.dirname(left_socket), os.path.join(device_dir, ".shim"))
@@ -466,8 +491,8 @@ def test_acc_sec_97_a_server_that_starts_removes_nothing_behind_a_shim_directory
     assert os.path.islink(os.path.join(device_dir, ".shim")) and os.path.lexists(left_socket)
 
 
-async def test_acc_sec_97_a_directory_that_another_process_has_locked_is_left_as_it_is(device_dir, tool, caplog):
-    """ACC-SEC-97 while another process holds the lock on the device directory, a server removes nothing from it, at its start and at its first claim, and logs one warning that names the setting DeviceBridge.device_dir (DEF-SERIAL-5)."""
+async def test_acc_serial_152_a_directory_that_another_process_has_locked_is_left_as_it_is(device_dir, tool, caplog):
+    """ACC-SERIAL-152 while another process holds the lock on the device directory, a server removes nothing from it, at its start and at its first claim, and logs one warning that names the setting DeviceBridge.device_dir (DEF-SERIAL-5)."""
     link, left_socket, _ = leave(device_dir)
     assert await line(await tool(LOCK, device_dir)) == b"locked\n"
 
@@ -484,8 +509,8 @@ async def test_acc_sec_97_a_directory_that_another_process_has_locked_is_left_as
             if "DeviceBridge.device_dir" in entry.getMessage()] == ["WARNING"]
 
 
-async def test_acc_sec_97_the_link_a_server_made_stays_at_its_next_claim(fake_tab, device_dir):
-    """ACC-SEC-97 a server holds the lock on the device directory from its first claim, and its second claim removes neither the link nor the shim socket of the first (DEF-SERIAL-5)."""
+async def test_acc_serial_152_the_link_a_server_made_stays_at_its_next_claim(fake_tab, device_dir):
+    """ACC-SERIAL-152 a server holds the lock on the device directory from its first claim, and its second claim removes neither the link nor the shim socket of the first (DEF-SERIAL-5)."""
     tab = await fake_tab()
     assert (await tab.claim_serial())["ok"]
     probe = os.open(device_dir, os.O_RDONLY)
@@ -1045,3 +1070,381 @@ async def test_acc_prof_120_a_claim_with_refused_defaults_is_refused_and_makes_n
     # The refused key has no name: the next port takes the first name of these ids.
     assert (await tab.claim_serial())["name"] == SERIAL_NAME
     assert (await tab.claim_serial(SECOND_KEY, defaults=DEFAULTS))["name"] == SECOND_NAME
+
+
+# ------------------------------------------------------------------------------- runs
+
+# Says that it runs, then waits for a line on stdin. SIGTERM ends it, as it ends most tools.
+WAIT = """
+import sys
+print("ready", flush=True)
+sys.stdin.readline()
+"""
+
+# Ignores SIGTERM, as an interactive shell does, and says when one arrived.
+IGNORE_TERM = """
+import signal
+signal.signal(signal.SIGTERM, lambda *_: print("term", flush=True))
+print("ready", flush=True)
+while True:
+    signal.pause()
+"""
+
+# Starts a child of its own, which is in its process group, and prints the id of that child.
+WITH_CHILD = """
+import subprocess, sys
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+print(child.pid, flush=True)
+sys.stdin.readline()
+"""
+
+# No process has this id: it is above the largest process id of Linux, 4194304.
+NO_PROCESS = 99999999
+AVRDUDE = ["/usr/bin/avrdude", "-c", "arduino", "-P", "/run/devices/tty-2341-0043"]
+AVRDUDE_TEXT = "/usr/bin/avrdude -c arduino -P /run/devices/tty-2341-0043"
+
+
+async def running(tool, script=WAIT):
+    """A child process that said it runs."""
+    child = await tool(script)
+    assert await line(child) == b"ready\n"
+    return child
+
+
+def state(pid):
+    """The state letter of a process in /proc/<pid>/stat, for example S, R or Z; None when it has no entry."""
+    try:
+        with open(f"/proc/{pid}/stat") as entry:
+            return entry.read().rpartition(")")[2].split()[0]
+    except OSError:
+        return None
+
+
+def foreign_process():
+    """The id of a process that another user owns; None when the user of the tests owns every process it sees."""
+    for entry in os.listdir("/proc"):
+        if entry.isdigit():
+            try:
+                if os.stat(f"/proc/{entry}").st_uid != os.getuid():
+                    return int(entry)
+            except OSError:
+                continue  # the process ended meanwhile
+    return None
+
+
+def another_process_takes(monkeypatch, pid):
+    """From now on the server reads another start time for this process id.
+
+    That is what it reads after the kernel gave the id of an ended process to a new one,
+    which a test cannot make the kernel do.
+    """
+    started = manager_module._started
+    monkeypatch.setattr(manager_module, "_started",
+                        lambda asked: started(asked) + 1 if asked == pid else started(asked))
+
+
+async def pong(tab):
+    """Returns when the tab got everything the server sent before this call."""
+    seen = len(tab.got("pong"))
+    await tab.send({"type": "ping", "t": 0})
+    await tab.until(lambda: len(tab.got("pong")) > seen)
+
+
+async def test_acc_shim_129_a_registered_run_is_listed_until_its_process_ends(api, fake_tab, tool):
+    """ACC-SHIM-129 `GET runs` and the message `runs` hold a registered run while its process lives, a tab that connects gets the list after its welcome, and the run leaves both within 2 s after its process ended."""
+    tab = await fake_tab()
+    assert [event["type"] for event in tab.events[:4]] == ["welcome", "devices", "requests", "runs"]
+    assert tab.runs == {"type": "runs", "running": []}
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+    child = await running(tool)
+
+    status, run = await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE, "device": SERIAL_NAME})
+
+    assert (status, run) == (200, {"pid": child.pid, "program": "avrdude", "command": AVRDUDE_TEXT,
+                                   "device": SERIAL_NAME})
+    await tab.until(lambda: tab.runs["running"])
+    assert tab.runs == {"type": "runs", "running": [run]}
+    late = await fake_tab("tab-2")
+    assert late.runs == tab.runs, "a tab that connects later gets the live runs"
+    # The watch looks at the process once a second and keeps a run whose process lives.
+    await asyncio.sleep(1.5)
+    assert (await api("GET", "runs")) == (200, {"runs": [run]})
+    assert len(tab.got("runs")) == 2, "the list is sent on a change only"
+
+    started = time.monotonic()
+    await end(child)
+    await tab.until(lambda: tab.runs["running"] == [], timeout=2)
+    assert time.monotonic() - started < 2
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+    await late.until(lambda: late.runs["running"] == [])
+
+
+async def test_acc_shim_129_the_record_of_a_run_and_a_second_registration_of_its_process_id(api, fake_tab, tool):
+    """ACC-SHIM-129 the record of a run has the base name of the first word as program, the words joined and cut after 200 characters as command, and null as device when the run named none; a second registration of the process id replaces the record."""
+    tab = await fake_tab()
+    child = await running(tool)
+    start = "./tools/esptool.py --port /run/devices/tty-10c4-ea60 write-flash 0x0 "
+
+    status, first = await api("POST", "runs", body={"pid": child.pid, "command": [*start.split(), "f" * 300]})
+
+    assert status == 200
+    assert first == {"pid": child.pid, "program": "esptool.py", "command": start + "f" * (200 - len(start)),
+                     "device": None}
+
+    status, second = await api("POST", "runs", body={"pid": child.pid, "command": ["sh"], "device": None})
+
+    assert (status, second) == (200, {"pid": child.pid, "program": "sh", "command": "sh", "device": None})
+    assert (await api("GET", "runs")) == (200, {"runs": [second]})
+    await tab.until(lambda: tab.runs["running"] == [second])
+    await end(child)
+
+
+async def test_acc_shim_129_a_dead_process_id_is_refused(api, fake_tab, tool):
+    """ACC-SHIM-129 the registration of a process id whose process has ended is refused with 400, lists nothing and sends no list."""
+    tab = await fake_tab()
+    child = await running(tool)
+    await end(child)
+
+    status, document = await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE})
+
+    assert (status, document["error"]["code"]) == (400, "bad-request")
+    assert document["error"]["message"].startswith("pid: ")
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+    await pong(tab)
+    assert len(tab.got("runs")) == 1, "the refused run changed no list"
+
+
+# What a registration must not be: the body for the process id of a live child, and the field it is refused for.
+BAD_RUNS = {
+    "no pid": (lambda pid: {"command": AVRDUDE}, "pid"),
+    "the pid as a text": (lambda pid: {"pid": str(pid), "command": AVRDUDE}, "pid"),
+    "the pid as a fraction": (lambda pid: {"pid": pid + 0.5, "command": AVRDUDE}, "pid"),
+    "true as pid": (lambda pid: {"pid": True, "command": AVRDUDE}, "pid"),
+    "pid 0": (lambda pid: {"pid": 0, "command": AVRDUDE}, "pid"),
+    "the negative pid, which names a process group": (lambda pid: {"pid": -pid, "command": AVRDUDE}, "pid"),
+    "a pid that no process has": (lambda pid: {"pid": NO_PROCESS, "command": AVRDUDE}, "pid"),
+    "no command": (lambda pid: {"pid": pid}, "command"),
+    "a command without a word": (lambda pid: {"pid": pid, "command": []}, "command"),
+    "the command as one text": (lambda pid: {"pid": pid, "command": AVRDUDE_TEXT}, "command"),
+    "a word that is a number": (lambda pid: {"pid": pid, "command": ["avrdude", "-b", 115200]}, "command"),
+    "a device that is a number": (lambda pid: {"pid": pid, "command": AVRDUDE, "device": 5}, "device"),
+}
+
+
+@pytest.mark.parametrize("body, field", BAD_RUNS.values(), ids=BAD_RUNS)
+async def test_acc_shim_129_a_malformed_registration_is_refused(body, field, api, tool):
+    """ACC-SHIM-129 a registration whose pid is no id of a live process, whose command is no list of 1 or more texts, or whose device is no text is refused with 400 and names the field."""
+    child = await running(tool)
+
+    status, document = await api("POST", "runs", body=body(child.pid))
+
+    assert (status, document["error"]["code"]) == (400, "bad-request")
+    assert document["error"]["message"].startswith(f"{field}: ")
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+    await end(child)
+
+
+async def test_acc_shim_129_a_process_that_does_not_belong_to_the_servers_user_is_refused(api, tool, monkeypatch):
+    """ACC-SHIM-129 the registration of a live process is refused with 400 when the owner of /proc/<pid> is not the server's user.
+
+    The user of the tests can own every process of the machine, pid 1 included, so the
+    test gives the server another user id for the one call. The next test asks with a
+    process that another user owns, where one exists.
+    """
+    child = await running(tool)
+    body = {"pid": child.pid, "command": AVRDUDE}
+    own = os.getuid()
+
+    with monkeypatch.context() as other_user:
+        other_user.setattr(os, "getuid", lambda: own + 1)
+        status, document = await api("POST", "runs", body=body)
+
+    assert (status, document["error"]["code"]) == (400, "bad-request")
+    assert document["error"]["message"].startswith("pid: ")
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+    assert (await api("POST", "runs", body=body))[0] == 200, "the server takes the same process as its own user"
+    await end(child)
+
+
+async def test_acc_shim_129_a_process_that_another_user_owns_is_refused(api):
+    """ACC-SHIM-129 the registration of a process that another user owns is refused with 400."""
+    pid = foreign_process()
+    if pid is None:
+        pytest.skip("the user of the tests owns every process of this machine, pid 1 included")
+
+    status, document = await api("POST", "runs", body={"pid": pid, "command": AVRDUDE})
+
+    assert (status, document["error"]["code"]) == (400, "bad-request")
+    assert document["error"]["message"].startswith("pid: ")
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+
+
+async def test_acc_shim_129_a_run_whose_ended_process_nobody_waited_for_leaves_the_list(api, fake_tab):
+    """ACC-SHIM-129 a run leaves the list within 2 s after its process ended also while that process is a zombie: its parent has not waited for it, so /proc keeps its entry with the same start time."""
+    tab = await fake_tab()
+    # Not an asyncio child: asyncio waits for its children at once, and this parent must not.
+    child = subprocess.Popen([sys.executable, "-c", WAIT], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        assert await asyncio.to_thread(child.stdout.readline) == b"ready\n"
+        assert (await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE}))[0] == 200
+        await tab.until(lambda: tab.runs["running"])
+
+        started = time.monotonic()
+        child.stdin.close()
+        await tab.until(lambda: tab.runs["running"] == [], timeout=2)
+
+        assert time.monotonic() - started < 2
+        assert state(child.pid) == "Z", "the process was a zombie when its run left the list"
+        assert (await api("GET", "runs")) == (200, {"runs": []})
+    finally:
+        child.kill()
+        child.wait()
+        child.stdout.close()
+
+
+async def test_acc_shim_129_the_watch_runs_only_while_a_run_is_registered_and_ends_with_the_manager(
+        api, manager, tool, monkeypatch):
+    """ACC-SHIM-129 the server looks at the processes of the runs only while a run is registered, and never after `DeviceManager.close()`."""
+    looks = []
+    look = manager._check_runs
+    monkeypatch.setattr(manager, "_check_runs", lambda: (looks.append(time.monotonic()), look()))
+    manager.run_watch_interval = 0.05
+
+    async def looked(count):
+        """Returns when the server looked at the runs `count` times more."""
+        wanted = len(looks) + count
+        deadline = time.monotonic() + 5
+        while len(looks) < wanted:
+            assert time.monotonic() < deadline, f"the server looked {len(looks)} times, not {wanted}"
+            await asyncio.sleep(0.01)
+
+    async def quiet():
+        """Whether the server does not look at the runs for 6 times the interval."""
+        before = len(looks)
+        await asyncio.sleep(0.3)
+        return len(looks) == before
+
+    assert await quiet(), "no run is registered yet"
+    child = await running(tool)
+    assert (await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE}))[0] == 200
+    await looked(3)
+
+    await end(child)
+    await looked(1)
+    assert manager.runs() == [] and await quiet(), "the last run has ended"
+
+    child = await running(tool)
+    assert (await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE}))[0] == 200
+    await looked(3)
+    manager.close()
+    assert manager.runs() == [] and await quiet(), "the manager is closed"
+    await end(child)
+
+
+async def test_acc_shim_130_stop_ends_a_run_with_sigterm(api, fake_tab, tool):
+    """ACC-SHIM-130 `DELETE runs/<pid>` answers 204 and sends SIGTERM to the process of the run, and the run leaves the list when that process has ended."""
+    tab = await fake_tab()
+    child = await running(tool)
+    assert (await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE}))[0] == 200
+
+    stopped = await api("DELETE", "runs", str(child.pid))
+
+    assert stopped == (204, None)
+    # Within 2 s it is the SIGTERM that ended the process: the SIGKILL comes after 3 s.
+    assert await asyncio.wait_for(child.wait(), 2) == -signal.SIGTERM
+    await tab.until(lambda: tab.runs["running"] == [], timeout=2)
+    assert (await api("GET", "runs")) == (200, {"runs": []})
+
+
+async def test_acc_shim_130_a_run_that_ignores_sigterm_gets_sigkill_3_s_later(api, fake_tab, tool):
+    """ACC-SHIM-130 a run whose process ignores SIGTERM stays listed and gets SIGKILL 3 s after the stop, and the route answers 204 at once."""
+    tab = await fake_tab()
+    child = await running(tool, IGNORE_TERM)
+    status, run = await api("POST", "runs", body={"pid": child.pid, "command": ["bash"]})
+    assert status == 200
+
+    started = time.monotonic()
+    stopped = await api("DELETE", "runs", str(child.pid))
+    answered = time.monotonic() - started
+
+    assert stopped == (204, None) and answered < 1
+    assert await line(child) == b"term\n", "the process got SIGTERM"
+    await asyncio.sleep(2)
+    assert child.returncode is None, "no SIGKILL before the 3 s are over"
+    assert (await api("GET", "runs")) == (200, {"runs": [run]}), "a stopped run that still lives stays listed"
+    assert await asyncio.wait_for(child.wait(), 5) == -signal.SIGKILL
+    assert 3 <= time.monotonic() - started < 6
+    await tab.until(lambda: tab.runs["running"] == [], timeout=2)
+
+
+async def test_acc_shim_130_an_unknown_process_id_is_404(api, tool):
+    """ACC-SHIM-130 `DELETE runs/<pid>` of a process id that is no registered run is answered 404 with the code unknown-run, and a live process that is no run gets no signal."""
+    child = await running(tool)
+
+    for pid in (NO_PROCESS, child.pid, "abc", "0", "-1", f"-{child.pid}"):
+        status, document = await api("DELETE", "runs", str(pid))
+        assert (status, document["error"]["code"]) == (404, "unknown-run"), pid
+        assert str(pid) in document["error"]["message"]
+
+    await asyncio.sleep(0.3)
+    assert child.returncode is None, "the process that is no run got no signal"
+    await end(child)
+
+
+async def test_acc_shim_130_a_process_id_that_another_process_took_is_not_signalled(
+        api, fake_tab, tool, manager, monkeypatch):
+    """ACC-SHIM-130 a stop of a run whose process id now belongs to a process with another start time sends no signal: the run is ended, its list is sent, and the answer is 404."""
+    manager.run_watch_interval, manager.run_kill_delay = 60, 0.2  # the watch does not end the run first
+    tab = await fake_tab()
+    child = await running(tool)
+    assert (await api("POST", "runs", body={"pid": child.pid, "command": AVRDUDE}))[0] == 200
+    await tab.until(lambda: tab.runs["running"])
+    another_process_takes(monkeypatch, child.pid)
+
+    status, document = await api("DELETE", "runs", str(child.pid))
+    await asyncio.sleep(0.6)
+
+    assert child.returncode is None, "neither SIGTERM nor SIGKILL reached the process that has the id now"
+    assert (status, document["error"]["code"]) == (404, "unknown-run")
+    await tab.until(lambda: tab.runs["running"] == [])
+    await end(child)
+
+
+async def test_acc_shim_130_no_sigkill_for_a_process_id_that_another_process_took_after_the_sigterm(
+        api, tool, manager, monkeypatch):
+    """ACC-SHIM-130 the SIGKILL is sent only when the process that got the SIGTERM still lives: a process with another start time that has the id by then is not signalled."""
+    manager.run_watch_interval, manager.run_kill_delay = 60, 1
+    child = await running(tool, IGNORE_TERM)
+    assert (await api("POST", "runs", body={"pid": child.pid, "command": ["bash"]}))[0] == 200
+
+    assert (await api("DELETE", "runs", str(child.pid)))[0] == 204
+    assert await line(child) == b"term\n"
+    another_process_takes(monkeypatch, child.pid)
+    await asyncio.sleep(1.5)
+
+    assert child.returncode is None, "no SIGKILL for the process that has the id now"
+
+
+async def test_acc_shim_130_stop_signals_the_process_of_the_run_and_not_its_process_group(api):
+    """ACC-SHIM-130 the stop signal goes to the process of the run only: a child of that process in the same process group lives on."""
+    # A session of its own, so that the process group of the run is not the one of the tests.
+    run = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", WITH_CHILD, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        start_new_session=True)
+    grandchild = int(await line(run))
+    try:
+        assert os.getpgid(grandchild) == os.getpgid(run.pid) != os.getpgid(0)
+        assert (await api("POST", "runs", body={"pid": run.pid, "command": ["bash"]}))[0] == 200
+
+        assert (await api("DELETE", "runs", str(run.pid)))[0] == 204
+
+        assert await asyncio.wait_for(run.wait(), 2) == -signal.SIGTERM
+        await asyncio.sleep(0.3)
+        assert state(grandchild) in ("S", "R"), "the child of the run got no signal"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(grandchild, signal.SIGKILL)
+        if run.returncode is None:
+            run.kill()
+            await run.wait()

@@ -4,7 +4,7 @@
  * `jupyterlab-device` command and the serial tool, both as child processes.
  */
 import { expect, galata, IJupyterLabPageFixture } from '@jupyterlab/galata';
-import type { Locator, Page } from '@playwright/test';
+import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { ChildProcess, spawn } from 'child_process';
 import { randomInt } from 'crypto';
 import * as fs from 'fs';
@@ -319,8 +319,29 @@ export const simSend = (
   ] as [string, number[]]);
 
 /**
+ * The simulated serial port sends these bytes `count` times, `interval` ms apart, each
+ * time as one chunk. The worker keeps the times, so they do not wait while the page draws.
+ */
+export const simStream = (
+  page: Page,
+  device: string,
+  bytes: number[],
+  count: number,
+  interval: number
+): Promise<void> =>
+  page.evaluate(
+    ([id, data, times, apart]) =>
+      (window as any).__deviceSim.stream(id, data, times, apart),
+    [device, bytes, count, interval] as [string, number[], number, number]
+  );
+
+/**
  * The text of every terminal of the lab. A lab terminal draws on a canvas, so the
  * text is read from the buffer of the terminal emulator and not from the document.
+ *
+ * A line that is longer than the terminal is wide fills several rows. Those rows are
+ * joined to the one line again, so the text does not depend on the width of the
+ * terminal.
  */
 export const terminalText = (page: Page): Promise<string> =>
   page.evaluate(() => {
@@ -328,11 +349,104 @@ export const terminalText = (page: Page): Promise<string> =>
     for (const widget of (window as any).jupyterapp.shell.widgets('main')) {
       const buffer = widget.content?._term?.buffer.active;
       for (let index = 0; buffer && index < buffer.length; index++) {
-        lines.push(buffer.getLine(index).translateToString(true));
+        const row = buffer.getLine(index);
+        // The spaces at the end of a row belong to its line when the next row continues it.
+        const text = row.translateToString(false);
+        if (row.isWrapped && lines.length > 0) {
+          lines[lines.length - 1] += text;
+        } else {
+          lines.push(text);
+        }
       }
     }
-    return lines.join('\n');
+    return lines.map(line => line.trimEnd()).join('\n');
   });
+
+/** One change of a lamp of a device row from off to lit or back, as `recordLamps` records it. */
+export interface ILampEvent {
+  /** The name of the device of the row. */
+  device: string | null;
+  lamp: 'tx' | 'rx';
+  /** Whether the lamp is lit after the change. */
+  lit: boolean;
+  /** The colour of the circle of the lamp after the change. */
+  colour: string;
+  /** Milliseconds since the page loaded. */
+  at: number;
+}
+
+/**
+ * Record in the page every change of a lamp of the Devices panel from off to lit and
+ * back, from the start of each document. The lab lights a lamp for 80 ms from each
+ * event, and a test that looks at the lamp now and then misses that time. An event
+ * that comes while the lamp is lit keeps it lit and is no change. Call it before the
+ * page loads the lab; with a browser context it records in every page of the context.
+ */
+export async function recordLamps(
+  target: Page | BrowserContext
+): Promise<void> {
+  await target.addInitScript(() => {
+    const events: object[] = [];
+    (window as any).__lampEvents = events;
+    /** The lamps that are lit, as far as recorded. */
+    const lit = new WeakSet<Element>();
+    const note = (lamp: Element): void => {
+      const now = lamp.hasAttribute('data-lit');
+      if (now === lit.has(lamp)) {
+        return;
+      }
+      if (now) {
+        lit.add(lamp);
+      } else {
+        lit.delete(lamp);
+      }
+      events.push({
+        device:
+          lamp.closest('[data-device]')?.getAttribute('data-device') ?? null,
+        lamp: lamp.getAttribute('data-lamp'),
+        lit: now,
+        colour: getComputedStyle(lamp, '::before').backgroundColor,
+        at: performance.now()
+      });
+    };
+    new MutationObserver(records => {
+      for (const record of records) {
+        if (record.type === 'attributes') {
+          note(record.target as Element);
+        }
+        // A lamp that is lit already when its row enters the document.
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof Element) {
+            node.querySelectorAll('[data-lamp][data-lit]').forEach(note);
+          }
+        }
+      }
+    }).observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-lit']
+    });
+  });
+}
+
+/** Every change of a lamp of the row of this device since the page loaded, in order. */
+export const lampEvents = (page: Page, device: string): Promise<ILampEvent[]> =>
+  page.evaluate(
+    name =>
+      (window as any).__lampEvents.filter(
+        (event: ILampEvent) => event.device === name
+      ),
+    device
+  );
+
+/** The runs section of the Devices panel: the device shells and the tools under `jupyterlab-device run`. */
+export const runsSection = (page: Page): Locator =>
+  page.locator(`${PANEL} [data-section="runs"]`);
+
+/** The row of the run with this process id in the Devices panel. */
+export const runRow = (page: Page, pid: number): Locator =>
+  runsSection(page).locator(`[data-run="${pid}"]`);
 
 /**
  * Wait for something that only happens while a child process runs. A child that
@@ -387,6 +501,10 @@ export async function usbRecord(name: string): Promise<any> {
   const table = (await api('GET', 'devices')).body;
   return table.usb.find((record: any) => record.name === name);
 }
+
+/** The process id of every run the server lists. */
+export const runPids = async (): Promise<number[]> =>
+  (await api('GET', 'runs')).body.runs.map((run: { pid: number }) => run.pid);
 
 /** Click the add serial port button and wait until the tab holds the open port. */
 export async function addSerial(page: Page, port: ISimSerial): Promise<void> {
@@ -468,6 +586,55 @@ function start(command: string, args: string[]): IChild {
 /** Start the real `jupyterlab-device` command. The promise is the caller's to await. */
 export function startCli(args: string[]): IChild {
   return start('jupyterlab-device', args);
+}
+
+/**
+ * End every terminal of the test server and wait until it has none. The lab starts a
+ * device shell and the serial terminal through the basic terminal extension. Galata
+ * ends only the terminals that a page made with the terminals API of the lab, so a
+ * spec that starts one calls this in `afterEach`. The programs of a terminal end with
+ * it. Every terminal of the test server belongs to the test that runs: the suite has
+ * one worker.
+ */
+export async function closeTerminals(): Promise<void> {
+  const names = async (): Promise<string[]> =>
+    (await (await fetch(`${SERVER}/api/terminals`)).json()).map(
+      (terminal: { name: string }) => terminal.name
+    );
+  await Promise.all(
+    (await names()).map(name =>
+      fetch(`${SERVER}/api/terminals/${name}`, { method: 'DELETE' })
+    )
+  );
+  await expect.poll(names, { timeout: ROUND_TRIP }).toEqual([]);
+}
+
+/**
+ * End the processes a test started and wait until each is gone and the server lists
+ * none of them as a run. A test calls it in `afterEach`, so it runs after a failure too.
+ *
+ * @param pids The process ids: of a child of the test, or of a run the test started
+ */
+export async function endProcesses(pids: number[]): Promise<void> {
+  for (const pid of pids) {
+    // Process 1 is the first process of the container, and no test starts it.
+    if (pid > 1) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // The process ended before.
+      }
+    }
+  }
+  await expect
+    .poll(
+      async () => [
+        pids.filter(pid => fs.existsSync(`/proc/${pid}`)),
+        (await runPids()).filter(pid => pids.includes(pid))
+      ],
+      { timeout: ROUND_TRIP }
+    )
+    .toEqual([[], []]);
 }
 
 /** Run the real `jupyterlab-device` command to its end. */

@@ -4,6 +4,7 @@ A tool that opens, sets or closes the device is a child process, as an upload to
 """
 
 import asyncio
+import logging
 import os
 import stat
 import sys
@@ -12,10 +13,12 @@ import time
 
 import pytest
 
+from jupyterlab_device_bridge_extension import vserial
 from jupyterlab_device_bridge_extension.shim import ShimSocket
 from jupyterlab_device_bridge_extension.vserial import (
     DeviceDirError,
     VirtualSerial,
+    default_device_dir,
     ensure_dir,
     read_speed,
 )
@@ -399,6 +402,48 @@ async def test_acc_serial_7_bytes_a_slow_tool_has_not_read_are_queued_in_order(s
         os.close(fd)
 
     assert received == data
+
+
+def test_acc_serial_127_run_devices_is_the_default_when_this_user_owns_it_or_can_make_it(tmp_path, monkeypatch, caplog):
+    """ACC-SERIAL-127 with no setting the device directory is /run/devices when the server's user owns it, and when it is missing under a parent this user can write."""
+    run_dir = tmp_path / "devices"
+    monkeypatch.setattr(vserial, "RUN_DIR", str(run_dir))
+    caplog.set_level(logging.INFO)
+
+    assert default_device_dir(logging.getLogger(__name__)) == str(run_dir)
+    assert not run_dir.exists(), "the choice makes no directory"
+    run_dir.mkdir()
+    assert default_device_dir(logging.getLogger(__name__)) == str(run_dir)
+    assert caplog.text == ""
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root can write every directory")
+@pytest.mark.parametrize("case", ["missing under a read-only parent", "a file", "a symlink", "another user's"])
+def test_acc_serial_127_tmp_is_the_default_when_run_devices_is_not_usable(case, tmp_path, monkeypatch, caplog):
+    """ACC-SERIAL-127 with no setting the device directory is /tmp/jupyterlab-device-<uid> when /run/devices is not a directory of this user and cannot be made, and the server logs both."""
+    parent = tmp_path / "run"
+    parent.mkdir()
+    run_dir = parent / "devices"
+    uid = os.getuid()
+    if case == "a file":
+        run_dir.write_text("")
+    elif case == "a symlink":
+        (tmp_path / "elsewhere").mkdir()
+        run_dir.symlink_to(tmp_path / "elsewhere")
+    elif case == "another user's":
+        run_dir.mkdir()
+        uid += 1
+        monkeypatch.setattr(os, "getuid", lambda: uid)
+    else:
+        parent.chmod(0o500)
+    monkeypatch.setattr(vserial, "RUN_DIR", str(run_dir))
+    caplog.set_level(logging.INFO)
+
+    chosen = default_device_dir(logging.getLogger(__name__))
+    parent.chmod(0o700)
+
+    assert chosen == f"/tmp/jupyterlab-device-{uid}"
+    assert str(run_dir) in caplog.text and chosen in caplog.text
 
 
 def test_acc_sec_95_the_device_directory_is_made_0700(tmp_path):

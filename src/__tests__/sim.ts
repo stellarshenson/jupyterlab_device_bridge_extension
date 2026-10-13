@@ -16,6 +16,7 @@ import type {
   IDeviceRequest,
   IDeviceTable,
   IProfile,
+  IRunRecord,
   ISerialClaimInfo,
   ISerialRecord,
   ISerialSettings,
@@ -785,7 +786,8 @@ type Unnumbered<T> = T extends unknown ? Omit<T, 'seq'> : never;
 /**
  * The server end of the WebSocket, as docs/design.md describes it: it welcomes a tab,
  * answers claims with a name, a sid and settings, keeps the device table and sends it
- * on every change, answers pings, and numbers its commands.
+ * on every change, sends the runs after the welcome, answers pings, and numbers its
+ * commands.
  *
  * @example
  * const seq = server.command({ type: 'serial-action', name, action: 'pulse-dtr' });
@@ -824,6 +826,8 @@ export class SimServer {
   readonly table: IDeviceTable = { serial: [], usb: [] };
   /** The pending device requests; `push()` sends them. */
   readonly pending: IDeviceRequest[] = [];
+  /** The live runs; `pushRuns()` sends them. */
+  readonly running: IRunRecord[] = [];
 
   /** The constructor that stands for `WebSocket` in the worker scope. */
   get WebSocket(): new (url: string) => WebSocket {
@@ -883,6 +887,14 @@ export class SimServer {
     this.send({ type: 'requests', pending: [...this.pending] });
   }
 
+  /**
+   * Send the live runs as they are now. The server sends them on a change of the runs
+   * only, so `push()` does not.
+   */
+  pushRuns(): void {
+    this.send({ type: 'runs', running: [...this.running] });
+  }
+
   /** Close the current connection from the server end. */
   drop(): void {
     this.socket.end();
@@ -916,6 +928,7 @@ export class SimServer {
           deviceDir: DEVICE_DIR
         });
         this.push();
+        this.pushRuns();
         return;
       case 'claim':
         if (this.answerClaims) {

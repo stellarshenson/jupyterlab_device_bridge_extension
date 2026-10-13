@@ -29,6 +29,10 @@ ROUTES = [
     ("RequestsHandler", "GET", "requests"),
     ("RequestsHandler", "POST", "requests"),
     ("RequestHandler", "GET", "requests/abcd1234"),
+    ("RunsHandler", "GET", "runs"),
+    ("RunsHandler", "POST", "runs"),
+    # No process has this id: it is above the largest process id of Linux, 4194304.
+    ("RunHandler", "DELETE", "runs/99999999"),
     ("UsbHandler", "GET", f"usb/{USB_NAME}"),
     ("UsbOperationHandler", "POST", f"usb/{USB_NAME}/open"),
 ]
@@ -53,13 +57,23 @@ XSRF_PAIR = {"Cookie": f"_xsrf={_XSRF}", "X-XSRFToken": _XSRF}
 
 
 @pytest.fixture
-def jp_server_config(jp_server_config):
+def more_server_config():
+    """More values for the `ServerApp` part of the test server's configuration.
+
+    A test gives them with `parametrize`, for example the shell command of the terminals.
+    """
+    return {}
+
+
+@pytest.fixture
+def jp_server_config(jp_server_config, more_server_config):
     """The server of these tests admits a request without credentials to any endpoint that is not marked.
 
     That is the default of Jupyter Server. So what refuses a request here is the
     decorator on the bridge's own handler, and a handler without one fails its test.
     """
     jp_server_config["ServerApp"]["allow_unauthenticated_access"] = True
+    jp_server_config["ServerApp"].update(more_server_config)
     return jp_server_config
 
 
@@ -85,7 +99,7 @@ def raw(http_server_client, jp_base_url, jp_auth_header):
         try:
             response = await http_server_client.fetch(
                 f"{jp_base_url}{NAMESPACE}/{path}", method=method, headers=headers,
-                body=None if method == "GET" else "{}")
+                body=None if method in ("GET", "DELETE") else "{}")
         except tornado.httpclient.HTTPClientError as error:
             response = error.response
         return response.code, response.body
@@ -179,11 +193,13 @@ async def test_acc_sec_96_an_unknown_name_inside_the_pattern_is_404(api, fake_ta
 # -------------------------------------------------------------- status, table, profiles
 
 
-async def test_acc_serial_15_status_lists_tabs_round_trip_directories_and_counts(api, fake_tab, device_dir):
+async def test_acc_serial_15_status_lists_tabs_round_trip_directories_and_counts(
+        api, fake_tab, device_dir, jp_serverapp):
     """ACC-SERIAL-15 (server half) status has the version, the tabs with their interfaces and round trip, both directories and the counts."""
     status, document = await api("GET", "status")
     assert (status, document) == (200, {
         "version": __version__, "deviceDir": device_dir, "shimDir": os.path.join(device_dir, ".shim"),
+        "shell": list(jp_serverapp.web_app.settings["terminal_manager"].shell_command),
         "tabs": [], "counts": {"serial": 0, "usb": 0, "requests": 0}})
 
     tab = await attach(fake_tab)
@@ -202,6 +218,54 @@ async def test_acc_serial_15_status_lists_tabs_round_trip_directories_and_counts
     (listed,) = document["tabs"]
     assert (listed["tabId"], listed["serial"], listed["usb"]) == ("tab-1", True, True)
     assert isinstance(listed["roundTrip"], float) and 0 <= listed["roundTrip"] < 1000
+
+
+# The shell command of the terminals as the configuration of a server gives it, and the words
+# that the server's terminal manager makes of it. No test starts the command.
+TERMINAL_SHELLS = {
+    "a list of words": ({"terminado_settings": {"shell_command": ["/opt/lab/launch-shell.sh", "--login"]}},
+                        ["/opt/lab/launch-shell.sh", "--login"]),
+    "one text": ({"terminado_settings": {"shell_command": "/usr/bin/env fish --login"}},
+                 ["/usr/bin/env", "fish", "--login"]),
+}
+
+
+@pytest.mark.parametrize("more_server_config, words", TERMINAL_SHELLS.values(), ids=TERMINAL_SHELLS)
+async def test_acc_shim_143_status_has_the_shell_command_of_the_servers_terminals(
+        more_server_config, words, api, monkeypatch):
+    """ACC-SHIM-143 `GET status` has `shell`, the words of the shell command that the server's terminal manager starts; the variable SHELL of the server does not change it."""
+    monkeypatch.setenv("SHELL", "/not/the/shell/of/the/terminals")
+
+    status, document = await api("GET", "status")
+
+    assert (status, document["shell"]) == (200, words)
+
+
+async def test_acc_shim_143_status_has_the_shell_command_of_a_server_without_such_a_setting(api, jp_serverapp):
+    """ACC-SHIM-143 on a server whose configuration names no shell command, `shell` of `GET status` is the list of words that its terminal manager chose."""
+    chosen = jp_serverapp.web_app.settings["terminal_manager"].shell_command
+
+    status, document = await api("GET", "status")
+
+    assert (status, document["shell"]) == (200, list(chosen))
+    assert chosen and all(isinstance(word, str) and word for word in chosen)
+
+
+@pytest.mark.parametrize("more_server_config", [{"terminals_enabled": False}], ids=["a server without terminals"])
+async def test_acc_shim_143_status_has_the_variable_shell_where_the_server_has_no_terminals(
+        more_server_config, api, jp_serverapp, monkeypatch):
+    """ACC-SHIM-143 where the server has no terminal manager, `shell` of `GET status` is the one word of the server's variable SHELL, and `/bin/sh` without that variable or with an empty one."""
+    assert "terminal_manager" not in jp_serverapp.web_app.settings
+
+    monkeypatch.setenv("SHELL", "/opt/lab/fish")
+    with_variable = await api("GET", "status")
+    monkeypatch.setenv("SHELL", "")
+    with_empty_variable = await api("GET", "status")
+    monkeypatch.delenv("SHELL")
+    without_variable = await api("GET", "status")
+
+    assert (with_variable[0], with_variable[1]["shell"]) == (200, ["/opt/lab/fish"])
+    assert with_empty_variable[1]["shell"] == without_variable[1]["shell"] == ["/bin/sh"]
 
 
 async def test_acc_prof_22_the_profiles_route_lists_the_built_in_profiles(api, fake_tab):

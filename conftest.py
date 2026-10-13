@@ -89,16 +89,17 @@ def api(jp_fetch):
 
     `status, document = await api("POST", "usb", name, "open", body={...})`; keyword
     arguments other than `body` are query parameters: `await api("GET", "serial",
-    name, "monitor", since=0, wait=1)`. A refusal is returned, not raised.
+    name, "monitor", since=0, wait=1)`. A refusal is returned, not raised. A GET and a
+    DELETE carry no body, and the document of an answer without a body is None.
     """
     async def call(method, *path, body=None, **query):
         try:
             response = await jp_fetch(
                 NAMESPACE, *path, method=method, params=query,
-                body=None if method == "GET" else json.dumps({} if body is None else body))
+                body=None if method in ("GET", "DELETE") else json.dumps({} if body is None else body))
         except tornado.httpclient.HTTPClientError as error:
             response = error.response
-        return response.code, json.loads(response.body)
+        return response.code, json.loads(response.body) if response.body else None
 
     return call
 

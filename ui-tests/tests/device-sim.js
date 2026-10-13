@@ -39,6 +39,10 @@
  *                    outcome 'granted', 'refused' or 'no-gesture'
  *   grants()         the ids of the granted devices
  *   send(id, bytes)  the serial port sends these bytes on its own
+ *   stream(id, bytes, count, interval)
+ *                    the serial port sends these bytes `count` times, `interval` ms
+ *                    apart, each time as one chunk of its read stream. The worker
+ *                    keeps the times, so they do not wait while the page draws
  *   unplug(id)       the device leaves the computer: the browser lists it no longer
  *                    and fires `disconnect`
  *   allowOpen(id)    the serial port loses its `openError`: its next `open()` works.
@@ -124,6 +128,14 @@ function installDeviceSim(config) {
     sim.grants = readGrants;
     sim.send = (id, bytes) =>
       channel.postMessage({ type: 'send', id, bytes: Array.from(bytes) });
+    sim.stream = (id, bytes, count, interval) =>
+      channel.postMessage({
+        type: 'stream',
+        id,
+        bytes: Array.from(bytes),
+        count,
+        interval
+      });
     sim.unplug = id => channel.postMessage({ type: 'unplug', id });
     sim.allowOpen = id => channel.postMessage({ type: 'allow-open', id });
 
@@ -559,6 +571,17 @@ function installDeviceSim(config) {
       }
     } else if (message.type === 'send' && ports.has(message.id)) {
       ports.get(message.id).emit(message.bytes);
+    } else if (message.type === 'stream' && ports.has(message.id)) {
+      let sent = 0;
+      const next = () => {
+        ports.get(message.id).emit(message.bytes);
+        sent += 1;
+        if (sent === message.count) {
+          clearInterval(timer);
+        }
+      };
+      const timer = setInterval(next, message.interval);
+      next();
     } else if (message.type === 'unplug') {
       // The device leaves the listing first, then the event fires, as in Chrome.
       unplugged.add(message.id);

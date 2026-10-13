@@ -4,10 +4,10 @@
  *
  * The lab is a small stand-in: a real command registry, a shell that records, and the
  * optional services as recorders. The lab packages that Jest cannot load are replaced:
- * the notifications and the input dialog by recorders, the icon by its SVG text.
+ * the notifications and the dialogs by recorders, the icon by its SVG text.
  */
 
-import { InputDialog, Notification } from '@jupyterlab/apputils';
+import { InputDialog, Notification, showDialog } from '@jupyterlab/apputils';
 import { ServerConnection } from '@jupyterlab/services';
 
 import { CommandRegistry } from '@lumino/commands';
@@ -16,7 +16,7 @@ import { Menu, Panel, Widget } from '@lumino/widgets';
 
 import plugin from '../index';
 import { DeviceBridgePanel } from '../panel';
-import type { IDeviceRequest, ISerialDefaults } from '../protocol';
+import type { IDeviceRequest, IRunRecord, ISerialDefaults } from '../protocol';
 import { DeviceBridgeStatus } from '../status';
 import { createWorker, workerMain } from '../worker';
 import {
@@ -32,9 +32,12 @@ jest.mock('@jupyterlab/application', () => ({
   ILayoutRestorer: 'ILayoutRestorer'
 }));
 jest.mock('@jupyterlab/apputils', () => ({
+  // A button of a dialog is its options, with the kind of the button.
+  Dialog: { okButton: (options: object) => ({ kind: 'ok', ...options }) },
   ICommandPalette: 'ICommandPalette',
   InputDialog: { getItem: jest.fn() },
-  Notification: { emit: jest.fn(), dismiss: jest.fn() }
+  Notification: { emit: jest.fn(), dismiss: jest.fn() },
+  showDialog: jest.fn()
 }));
 jest.mock('@jupyterlab/mainmenu', () => ({ IMainMenu: 'IMainMenu' }));
 jest.mock('@jupyterlab/settingregistry', () => ({
@@ -59,7 +62,11 @@ jest.mock('../worker', () => ({
 const CONNECT_SERIAL = 'device-bridge:connect-serial';
 const CONNECT_USB = 'device-bridge:connect-usb';
 const OPEN_TERMINAL = 'device-bridge:open-terminal';
+const START_RUN = 'device-bridge:start-run';
 const SHOW_PANEL = 'device-bridge:show-panel';
+/** The command of jupyterlab_basic_terminal_extension that starts one program in a lab terminal. */
+const BASIC_TERMINAL_LAUNCH = 'basic-terminal:launch';
+/** The command of the lab that opens a terminal with a shell. The plugin never runs it. */
 const NEW_LAB_TERMINAL = 'terminal:create-new';
 /** How a text of the lab says where the Devices panel is; the panel is hidden by default. */
 const VIEW_ITEM = 'View → Show Devices Panel';
@@ -89,17 +96,20 @@ const NO_GESTURE = new DOMException(
   'Must be handling a user gesture to show a permission request.',
   'SecurityError'
 );
+/** A terminal shell that runs with the shim. */
+const SHELL_RUN: IRunRecord = {
+  pid: 4242,
+  program: 'bash',
+  command: '/bin/bash',
+  device: null
+};
+/** The directory in which the simulated server makes the virtual serial devices. */
+const DEVICE_DIR = '/tmp/jupyterlab-device-1000';
 
 const emit = Notification.emit as jest.Mock;
 const dismiss = Notification.dismiss as jest.Mock;
 const getItem = InputDialog.getItem as jest.Mock;
-
-/** The session of a lab terminal, as far as the plugin uses it. */
-interface ISession {
-  connectionStatus: 'connecting' | 'connected' | 'disconnected';
-  connectionStatusChanged: Signal<ISession, string>;
-  send: jest.Mock;
-}
+const dialog = showDialog as jest.Mock;
 
 /**
  * The settings of the plugin as the schema defines them: every setting with its
@@ -160,9 +170,10 @@ interface ILab {
   readonly panel: DeviceBridgePanel;
   /** Whether the panel was in the sidebar at the moment the activation of the plugin ended. */
   shownWhenActivated: boolean;
-  /** The command of the lab that opens a terminal; it gives a terminal with `session`. */
+  /** The stand-in of the command `basic-terminal:launch`: it records its arguments. */
+  launch: jest.Mock;
+  /** The stand-in of the command of the lab that opens a terminal with a shell. */
   newTerminal: jest.Mock;
-  session: ISession;
   /** Change one setting as the Settings Editor of the lab does. */
   setSetting(key: string, value: unknown): void;
   /** Change the setting `showMenu` as the Settings Editor of the lab does. */
@@ -176,6 +187,8 @@ interface ILabOptions {
   interfaces?: boolean;
   /** False: the server offers no terminals. */
   terminals?: boolean;
+  /** False: the lab has no command `basic-terminal:launch`, as without jupyterlab_basic_terminal_extension. */
+  launcher?: boolean;
   /** False: the lab has none of the optional services. */
   services?: boolean;
   /** True: the setting registry fails to load the settings of the plugin. */
@@ -216,14 +229,13 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     return scope.page;
   });
 
-  const session = {
-    connectionStatus: 'connected',
-    send: jest.fn()
-  } as unknown as ISession;
-  session.connectionStatusChanged = new Signal<ISession, string>(session);
-  const newTerminal = jest.fn(async () => ({ content: { session } }));
+  const launch = jest.fn(async () => ({ id: 'launched-terminal' }));
+  const newTerminal = jest.fn(async () => ({ id: 'shell-terminal' }));
   const commands = new CommandRegistry();
   commands.addCommand(NEW_LAB_TERMINAL, { execute: newTerminal });
+  if (options.launcher !== false) {
+    commands.addCommand(BASIC_TERMINAL_LAUNCH, { execute: launch });
+  }
 
   const settings = {
     composite: {
@@ -297,8 +309,8 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
       return shell.add.mock.calls[0][0] as DeviceBridgePanel;
     },
     shownWhenActivated,
+    launch,
     newTerminal,
-    session,
     setSetting,
     setShowMenu: (show: boolean): void => setSetting('showMenu', show)
   };
@@ -316,6 +328,20 @@ async function request(
 
 const button = (all: ILab, selector: string): HTMLButtonElement =>
   all.panel.node.querySelector<HTMLButtonElement>(selector)!;
+
+/** The list of words of every launch, in order. A launch has this list and nothing else: no folder. */
+const launches = (all: ILab): string[][] =>
+  all.launch.mock.calls.map(([args]) => {
+    expect(Object.keys(args)).toEqual(['argv']);
+    return args.argv as string[];
+  });
+
+/** The command line of every launch, in words: what follows `/bin/bash -c <script>`. */
+const launchedLines = (all: ILab): string[][] =>
+  launches(all).map(argv => {
+    expect(argv.slice(0, 2)).toEqual(['/bin/bash', '-c']);
+    return argv.slice(3);
+  });
 
 // A widget is never given to `expect`: Jest cannot print a widget, and a failed
 // comparison of one ends the test run. The three helpers below give plain values.
@@ -355,6 +381,8 @@ beforeEach(() => {
   emit.mockReset().mockImplementation(() => `notification-${++count}`);
   dismiss.mockReset();
   getItem.mockReset();
+  // The dialog of the lab resolves when the user closes it.
+  dialog.mockReset().mockResolvedValue({ button: { accept: true } });
 });
 
 afterEach(() => {
@@ -371,9 +399,15 @@ afterEach(() => {
 });
 
 describe('plugin: commands, palette and panel', () => {
-  it('ACC-PANEL-67 the plugin registers its four commands, lists them in the palette under Devices and, with showPanel true, adds the panel to the left sidebar', async () => {
+  it('ACC-PANEL-67 the plugin registers its five commands, lists them in the palette under Devices and, with showPanel true, adds the panel to the left sidebar', async () => {
     const all = await lab({ settings: { showPanel: true } });
-    const ids = [CONNECT_SERIAL, CONNECT_USB, OPEN_TERMINAL, SHOW_PANEL];
+    const ids = [
+      CONNECT_SERIAL,
+      CONNECT_USB,
+      OPEN_TERMINAL,
+      START_RUN,
+      SHOW_PANEL
+    ];
 
     expect(plugin.id).toBe('jupyterlab_device_bridge_extension:plugin');
     expect(plugin.autoStart).toBe(true);
@@ -391,12 +425,14 @@ describe('plugin: commands, palette and panel', () => {
       true,
       true,
       true,
+      true,
       true
     ]);
     expect(ids.map(id => all.commands.label(id))).toEqual([
       'Connect Serial Port',
       'Connect USB Device',
       'Serial Terminal',
+      'Device Shell',
       'Show Devices Panel'
     ]);
     expect(all.palette.addItem.mock.calls).toEqual(
@@ -436,7 +472,7 @@ describe('plugin: commands, palette and panel', () => {
       PROBE_NAME
     ]);
     expect(all.shell.activateById).toHaveBeenCalledWith(PANEL_ID);
-    expect(all.newTerminal).toHaveBeenCalledTimes(1);
+    expect(all.launch).toHaveBeenCalledTimes(1);
     expect(all.palette.addItem).not.toHaveBeenCalled();
     expect(all.mainMenu.addMenu).not.toHaveBeenCalled();
     expect(all.statusBar.registerStatusItem).not.toHaveBeenCalled();
@@ -738,10 +774,12 @@ describe('plugin: device requests', () => {
 });
 
 describe('plugin: the serial terminal command', () => {
-  const line = (name: string): object => ({
-    type: 'stdin',
-    content: [`jupyterlab-device terminal ${name}\r`]
-  });
+  /** The command line of the serial terminal on a port, in words. */
+  const terminalOn = (name: string): string[] => [
+    'jupyterlab-device',
+    'terminal',
+    name
+  ];
 
   it('ACC-TERM-79 with no attached port the command raises a notification and opens no lab terminal', async () => {
     const all = await lab();
@@ -754,7 +792,7 @@ describe('plugin: the serial terminal command', () => {
       [message, 'warning'],
       [message, 'warning']
     ]);
-    expect(all.newTerminal).not.toHaveBeenCalled();
+    expect(all.launch).not.toHaveBeenCalled();
     expect(getItem).not.toHaveBeenCalled();
   });
 
@@ -770,7 +808,7 @@ describe('plugin: the serial terminal command', () => {
 
     expect(notifications()).toHaveLength(1);
     expect(notifications()[0][0]).toMatch(/^No serial port is attached\./);
-    expect(all.newTerminal).not.toHaveBeenCalled();
+    expect(all.launch).not.toHaveBeenCalled();
   });
 
   it('ACC-TERM-111 where the server offers no terminals the command shows the command line to run and opens no lab terminal', async () => {
@@ -788,45 +826,24 @@ describe('plugin: the serial terminal command', () => {
         { autoClose: false }
       ]
     ]);
+    expect(all.launch).not.toHaveBeenCalled();
     expect(all.newTerminal).not.toHaveBeenCalled();
-    expect(all.session.send).not.toHaveBeenCalled();
   });
 
-  it('ACC-TERM-74 with one attached port the command opens a lab terminal and types the terminal command of the CLI for that port', async () => {
+  it('ACC-TERM-148 with one attached port the command calls basic-terminal:launch with the words jupyterlab-device terminal and the name of that port, and asks nothing', async () => {
     const all = await lab({ ports: [new SimSerialPort(UNO)] });
 
     await all.commands.execute(OPEN_TERMINAL);
 
-    expect(all.newTerminal).toHaveBeenCalledTimes(1);
-    expect(all.session.send.mock.calls).toEqual([[line(UNO_NAME)]]);
+    expect(all.launch).toHaveBeenCalledTimes(1);
+    expect(launchedLines(all)).toEqual([terminalOn(UNO_NAME)]);
+    // No terminal with a shell is opened, so no line is typed.
+    expect(all.newTerminal).not.toHaveBeenCalled();
     expect(getItem).not.toHaveBeenCalled();
     expect(notifications()).toEqual([]);
   });
 
-  it('ACC-TERM-74 the command line is typed once, when the terminal is connected', async () => {
-    const all = await lab({ ports: [new SimSerialPort(UNO)] });
-    const status = (next: ISession['connectionStatus']): void => {
-      all.session.connectionStatus = next;
-      all.session.connectionStatusChanged.emit(next);
-    };
-    all.session.connectionStatus = 'connecting';
-
-    await all.commands.execute(OPEN_TERMINAL);
-    expect(all.session.send).not.toHaveBeenCalled();
-
-    status('disconnected');
-    expect(all.session.send).not.toHaveBeenCalled();
-
-    status('connected');
-    expect(all.session.send.mock.calls).toEqual([[line(UNO_NAME)]]);
-
-    // A terminal that connects again later gets no second command line.
-    status('disconnected');
-    status('connected');
-    expect(all.session.send).toHaveBeenCalledTimes(1);
-  });
-
-  it('ACC-TERM-74 with several attached ports the command asks which one, and a closed question opens no lab terminal', async () => {
+  it('ACC-TERM-148 with several attached ports the command asks which one and launches the words with the chosen port, and a closed question launches nothing', async () => {
     const all = await lab({
       ports: [new SimSerialPort(UNO), new SimSerialPort(NANO)]
     });
@@ -842,16 +859,16 @@ describe('plugin: the serial terminal command', () => {
       items: [UNO_NAME, NANO_NAME],
       editable: false
     });
-    expect(all.session.send.mock.calls).toEqual([[line(NANO_NAME)]]);
+    expect(launchedLines(all)).toEqual([terminalOn(NANO_NAME)]);
 
     getItem.mockResolvedValueOnce({ button: { accept: false }, value: null });
     await all.commands.execute(OPEN_TERMINAL);
 
-    expect(all.newTerminal).toHaveBeenCalledTimes(1);
-    expect(all.session.send).toHaveBeenCalledTimes(1);
+    expect(all.launch).toHaveBeenCalledTimes(1);
+    expect(all.newTerminal).not.toHaveBeenCalled();
   });
 
-  it('ACC-TERM-74 the Terminal button of a row and the argument name open the terminal on that port without a question', async () => {
+  it('ACC-TERM-148 the Terminal button of a row and the argument name launch the words with that port without a question', async () => {
     const all = await lab({
       ports: [new SimSerialPort(UNO), new SimSerialPort(NANO)]
     });
@@ -863,9 +880,9 @@ describe('plugin: the serial terminal command', () => {
     await tick();
     await all.commands.execute(OPEN_TERMINAL, { name: UNO_NAME });
 
-    expect(all.session.send.mock.calls).toEqual([
-      [line(NANO_NAME)],
-      [line(UNO_NAME)]
+    expect(launchedLines(all)).toEqual([
+      terminalOn(NANO_NAME),
+      terminalOn(UNO_NAME)
     ]);
     expect(getItem).not.toHaveBeenCalled();
   });
@@ -886,8 +903,576 @@ describe('plugin: the serial terminal command', () => {
       [`No attached serial port has the name ${UNO_NAME}; id.`, 'warning'],
       ['No attached serial port has the name 7.', 'warning']
     ]);
+    expect(all.launch).not.toHaveBeenCalled();
     expect(all.newTerminal).not.toHaveBeenCalled();
-    expect(all.session.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('plugin: the device shell', () => {
+  /** The command line of a device shell, in words. */
+  const DEVICE_SHELL = ['jupyterlab-device', 'shell'];
+
+  it('ACC-PANEL-147 the command Device Shell calls basic-terminal:launch with the words jupyterlab-device shell and no folder, with no device attached, and types no line into a terminal', async () => {
+    const all = await lab();
+
+    await all.commands.execute(START_RUN);
+
+    expect(all.launch).toHaveBeenCalledTimes(1);
+    expect(launchedLines(all)).toEqual([DEVICE_SHELL]);
+    // No terminal with a shell is opened, so no line is typed.
+    expect(all.newTerminal).not.toHaveBeenCalled();
+    expect(notifications()).toEqual([]);
+    expect(getItem).not.toHaveBeenCalled();
+  });
+
+  it('ACC-PANEL-147 the Start button of the runs section launches the same words', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    button(all, '[data-section="runs"] [data-action="start-run"]').click();
+    await tick();
+
+    expect(all.launch).toHaveBeenCalledTimes(1);
+    expect(launchedLines(all)).toEqual([DEVICE_SHELL]);
+    expect(all.newTerminal).not.toHaveBeenCalled();
+    expect(notifications()).toEqual([]);
+  });
+
+  it('ACC-PANEL-147 the command is in the palette under Devices and in the Devices menu, and the menu entry launches the device shell', async () => {
+    const all = await lab({ settings: { showMenu: true } });
+    const [menu] = all.mainMenu.addMenu.mock.calls[0] as [Menu];
+
+    expect(all.commands.label(START_RUN)).toBe('Device Shell');
+    expect(all.palette.addItem.mock.calls).toContainEqual([
+      { command: START_RUN, category: 'Devices' }
+    ]);
+    expect(menu.items.map(item => item.command)).toContain(START_RUN);
+
+    const entry = menu.items.find(item => item.command === START_RUN)!;
+    await all.commands.execute(entry.command, entry.args);
+    expect(launchedLines(all)).toEqual([DEVICE_SHELL]);
+  });
+
+  it('ACC-TERM-111 where the server offers no terminals the command Device Shell and the Start button show the command line to run and launch nothing', async () => {
+    const all = await lab({ terminals: false });
+
+    await all.commands.execute(START_RUN);
+    button(all, '[data-section="runs"] [data-action="start-run"]').click();
+    await tick();
+
+    const text =
+      'This server offers no terminals. Run this command in a shell of the container: jupyterlab-device shell';
+    expect(emit.mock.calls).toEqual([
+      [text, 'info', { autoClose: false }],
+      [text, 'info', { autoClose: false }]
+    ]);
+    expect(all.launch).not.toHaveBeenCalled();
+    expect(all.newTerminal).not.toHaveBeenCalled();
+  });
+});
+
+describe('plugin: how a command line is started in a lab terminal', () => {
+  // Node's own module; the project has no type package for it.
+  const { spawn } = jest.requireActual('child_process') as {
+    spawn(
+      program: string,
+      words: string[]
+    ): {
+      exitCode: number | null;
+      kill(): void;
+      stdin: { write(text: string): void };
+      stdout: { on(event: 'data', listener: (chunk: unknown) => void): void };
+      on(event: 'close', listener: (status: number | null) => void): void;
+    };
+  };
+
+  const PROMPT = 'Press Enter to close this terminal. ';
+
+  /** Every bash that a test started; a test that fails must leave none running. */
+  const started: Array<{ kill(): void }> = [];
+  afterEach(() => {
+    for (const child of started.splice(0)) {
+      child.kill();
+    }
+  });
+
+  /** The script that the plugin gives to bash: the third word of a launch. */
+  async function launchScript(): Promise<string> {
+    const all = await lab();
+    await all.commands.execute(START_RUN);
+    return launches(all)[0][2];
+  }
+
+  /**
+   * Run a script with a command line as the basic terminal extension starts them:
+   * `/bin/bash -c <script> <command line>`. The standard input stays open, as that of
+   * a terminal does. The tests that call this run with the real timers.
+   */
+  function bash(script: string, ...commandLine: string[]) {
+    const child = spawn('/bin/bash', ['-c', script, ...commandLine]);
+    started.push(child);
+    let output = '';
+    child.stdout.on('data', chunk => {
+      output += String(chunk);
+    });
+    return {
+      child,
+      output: (): string => output,
+      /** Resolves with the exit status when the script has ended. */
+      ended: new Promise<number | null>(resolve => child.on('close', resolve)),
+      /** Resolves when the output ends with the prompt. */
+      prompted: (): Promise<void> =>
+        new Promise(resolve => {
+          const look = (): void => {
+            if (output.endsWith(PROMPT)) {
+              resolve();
+            } else {
+              setTimeout(look, 10);
+            }
+          };
+          look();
+        })
+    };
+  }
+
+  const pause = (ms: number): Promise<void> =>
+    new Promise(resolve => setTimeout(resolve, ms));
+
+  it('ACC-PANEL-149 both commands launch /bin/bash -c with the same script and their command line after it, and the script runs the command line, tests its status and the 5 seconds, prints the prompt and ends with the status', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    await all.commands.execute(START_RUN);
+    await all.commands.execute(OPEN_TERMINAL);
+
+    const [shell, terminal] = launches(all);
+    expect(shell).toEqual([
+      '/bin/bash',
+      '-c',
+      shell[2],
+      'jupyterlab-device',
+      'shell'
+    ]);
+    expect(terminal).toEqual([
+      '/bin/bash',
+      '-c',
+      shell[2],
+      'jupyterlab-device',
+      'terminal',
+      UNO_NAME
+    ]);
+    const lines = shell[2].split('\n');
+    // The command line is the words after the script.
+    expect(lines[0]).toBe('"$0" "$@"');
+    expect(lines[1]).toBe('status=$?');
+    expect(shell[2]).toContain('[ "$status" -ne 0 ]');
+    expect(shell[2]).toContain('[ "$SECONDS" -lt 5 ]');
+    expect(shell[2]).toContain(`printf '${PROMPT}'`);
+    expect(lines[lines.length - 1]).toBe('exit "$status"');
+  });
+
+  it('ACC-PANEL-149 run by bash: a command line that ends with status 3 at once has the prompt under its message, the script waits for one line and then ends with 3', async () => {
+    const script = await launchScript();
+    jest.useRealTimers();
+
+    const run = bash(
+      script,
+      '/bin/sh',
+      '-c',
+      'echo "error: the device is held by another program"; exit 3'
+    );
+    await run.prompted();
+    // The script waits: it has not ended, and it has printed nothing after the prompt.
+    await pause(200);
+    expect(run.child.exitCode).toBeNull();
+    expect(run.output()).toBe(
+      `error: the device is held by another program\n${PROMPT}`
+    );
+
+    run.child.stdin.write('\n');
+    expect(await run.ended).toBe(3);
+    expect(run.output()).toBe(
+      `error: the device is held by another program\n${PROMPT}`
+    );
+  });
+
+  it('ACC-PANEL-149 run by bash: a command line that ends with status 0 gets no prompt, and the script ends with 0 without a line of input', async () => {
+    const script = await launchScript();
+    jest.useRealTimers();
+
+    const run = bash(script, '/bin/sh', '-c', 'echo "bye"; exit 0');
+
+    // The standard input is open and gets no line: a script that waited would not end.
+    expect(await run.ended).toBe(0);
+    expect(run.output()).toBe('bye\n');
+  });
+
+  it('ACC-PANEL-149 run by bash: a command line that ends with status 3 when the script has run for 5 seconds gets no prompt, and one that ends at 4 seconds gets it', async () => {
+    const script = await launchScript();
+    jest.useRealTimers();
+
+    // Bash counts SECONDS on from a value that a script gives it.
+    const late = bash(`SECONDS=5\n${script}`, '/bin/sh', '-c', 'exit 3');
+    expect(await late.ended).toBe(3);
+    expect(late.output()).toBe('');
+
+    const early = bash(`SECONDS=4\n${script}`, '/bin/sh', '-c', 'exit 3');
+    await early.prompted();
+    early.child.stdin.write('\n');
+    expect(await early.ended).toBe(3);
+    expect(early.output()).toBe(PROMPT);
+  });
+
+  it('ACC-PANEL-150 in a lab without the command basic-terminal:launch the commands Device Shell and Serial Terminal and their buttons open nothing, and each shows its command line and the name jupyterlab_basic_terminal_extension', async () => {
+    const all = await lab({
+      ports: [new SimSerialPort(UNO)],
+      launcher: false
+    });
+    expect(all.commands.hasCommand(BASIC_TERMINAL_LAUNCH)).toBe(false);
+
+    await all.commands.execute(START_RUN);
+    await all.commands.execute(OPEN_TERMINAL);
+    button(all, '[data-section="runs"] [data-action="start-run"]').click();
+    button(all, `[data-device="${UNO_NAME}"] [data-action="terminal"]`).click();
+    await tick();
+
+    const shell =
+      'The lab has no jupyterlab_basic_terminal_extension. Run in a shell of the container: jupyterlab-device shell';
+    const terminal = `The lab has no jupyterlab_basic_terminal_extension. Run in a shell of the container: jupyterlab-device terminal ${UNO_NAME}`;
+    expect(emit.mock.calls).toEqual([
+      [shell, 'warning', { autoClose: false }],
+      [terminal, 'warning', { autoClose: false }],
+      [shell, 'warning', { autoClose: false }],
+      [terminal, 'warning', { autoClose: false }]
+    ]);
+    // The lab cuts a notification after 140 characters.
+    expect(terminal.length).toBeLessThanOrEqual(140);
+    expect(all.launch).not.toHaveBeenCalled();
+    expect(all.newTerminal).not.toHaveBeenCalled();
+  });
+});
+
+describe('plugin: the Info dialog of the runs section', () => {
+  // Node's own modules; the project has no type package for them.
+  const fs = jest.requireActual('fs') as {
+    readFileSync(file: string, encoding: 'utf8'): string;
+  };
+  const path = jest.requireActual('path') as {
+    resolve(...parts: string[]): string;
+  };
+
+  /** The three example lines of docs/design.md, word for word. */
+  const EXAMPLES: Record<string, string> = {
+    avrdude:
+      'avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i',
+    stm32flash: 'stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>',
+    esptool: 'esptool --port <path> write-flash 0x0 firmware.bin'
+  };
+  /** The example path that the README has in the command line of each tool. */
+  const README_PATHS: Record<string, string> = {
+    avrdude: '/run/devices/tty-2341-0043',
+    stm32flash: '/run/devices/tty-0403-6001',
+    esptool: '/run/devices/tty-10c4-ea60'
+  };
+  /** What a README line has in front of a tool that needs the shim. */
+  const RUN_PREFIX = 'jupyterlab-device run -- ';
+
+  /** Make the server list one run, so that the panel offers Info, and click Info. */
+  async function openInfo(all: ILab): Promise<void> {
+    all.server.running.splice(0, all.server.running.length, SHELL_RUN);
+    all.server.pushRuns();
+    await tick();
+    const info = button(all, '[data-section="runs"] [data-action="run-info"]');
+    expect(info.hidden).toBe(false);
+    info.click();
+    await tick();
+  }
+
+  /** The options of the dialog that the plugin opened last. A widget is never given to `expect`. */
+  const opened = (): {
+    title: unknown;
+    buttons: unknown;
+    body: HTMLElement;
+  } => {
+    const [options] = dialog.mock.calls[dialog.mock.calls.length - 1];
+    return {
+      title: options.title,
+      buttons: options.buttons,
+      body: (options.body as Widget).node
+    };
+  };
+
+  /** The devices the dialog lists: the name of each, and its path when it shows one. */
+  const listed = (body: HTMLElement): Array<Array<string | null>> =>
+    Array.from(
+      body.querySelectorAll<HTMLElement>('[data-info-device]'),
+      node => [
+        node.dataset.infoDevice!,
+        node.querySelector('[data-field="name"]')!.textContent,
+        node.querySelector('[data-field="path"]')?.textContent ?? null
+      ]
+    );
+
+  /** The example lines of the dialog, by the name of the tool. */
+  const examples = (body: HTMLElement): Record<string, string | null> => {
+    const lines: Record<string, string | null> = {};
+    body.querySelectorAll<HTMLElement>('[data-example]').forEach(node => {
+      lines[node.dataset.example!] = node.textContent;
+    });
+    return lines;
+  };
+
+  /** `EXAMPLES` with a path in place of the placeholder. */
+  const examplesWith = (devicePath: string): Record<string, string> => {
+    const lines: Record<string, string> = {};
+    for (const [tool, line] of Object.entries(EXAMPLES)) {
+      lines[tool] = line.replace('<path>', devicePath);
+    }
+    return lines;
+  };
+
+  it('ACC-PANEL-134 the Info button opens one dialog of the lab with the title How to connect a tool and the one button Close', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    await openInfo(all);
+
+    expect(dialog.mock.calls.length).toBe(1);
+    expect(opened().title).toBe('How to connect a tool');
+    expect(opened().buttons).toEqual([{ kind: 'ok', label: 'Close' }]);
+    expect(opened().body.classList.contains('jp-DeviceBridgeInfo')).toBe(true);
+    expect(notifications()).toEqual([]);
+  });
+
+  it('ACC-PANEL-134 the dialog lists each attached serial device with its path and each attached USB device by name, and the example lines carry the path of the first attached serial device', async () => {
+    const all = await lab({
+      ports: [new SimSerialPort(UNO), new SimSerialPort(NANO)],
+      devices: [new SimUsbDevice()]
+    });
+
+    await openInfo(all);
+
+    expect(listed(opened().body)).toEqual([
+      [UNO_NAME, UNO_NAME, `${DEVICE_DIR}/${UNO_NAME}`],
+      [NANO_NAME, NANO_NAME, `${DEVICE_DIR}/${NANO_NAME}`],
+      [PROBE_NAME, PROBE_NAME, null]
+    ]);
+    expect(examples(opened().body)).toEqual(
+      examplesWith(`${DEVICE_DIR}/${UNO_NAME}`)
+    );
+
+    // A detached device is not listed, and the next attached serial device gives the path.
+    for (const name of [UNO_NAME, PROBE_NAME]) {
+      button(all, `[data-device="${name}"] [data-action="detach"]`).click();
+    }
+    await tick();
+    await openInfo(all);
+
+    expect(dialog.mock.calls.length).toBe(2);
+    expect(listed(opened().body)).toEqual([
+      [NANO_NAME, NANO_NAME, `${DEVICE_DIR}/${NANO_NAME}`]
+    ]);
+    expect(examples(opened().body)).toEqual(
+      examplesWith(`${DEVICE_DIR}/${NANO_NAME}`)
+    );
+  });
+
+  it('ACC-PANEL-134 without an attached serial device the dialog says that no device is attached, and the three example lines are those of the design with <path>', async () => {
+    const all = await lab();
+
+    await openInfo(all);
+
+    expect(listed(opened().body)).toEqual([]);
+    expect(opened().body.textContent).toContain('No device is attached.');
+    expect(examples(opened().body)).toEqual(EXAMPLES);
+
+    // A USB device has no path: the lines keep the placeholder.
+    all.usb.dialog = new SimUsbDevice();
+    await all.commands.execute(CONNECT_USB);
+    await tick();
+    await openInfo(all);
+
+    expect(listed(opened().body)).toEqual([[PROBE_NAME, PROBE_NAME, null]]);
+    expect(opened().body.textContent).not.toContain('No device is attached.');
+    expect(examples(opened().body)).toEqual(EXAMPLES);
+  });
+
+  it('ACC-PANEL-134 each example line of the dialog, with the example path of the README in place of <path>, is a line of a bash block of the README section Working with an AI agent, without the prefix jupyterlab-device run', async () => {
+    const readme = fs.readFileSync(
+      path.resolve(expect.getState().testPath!, '../../../README.md'),
+      'utf8'
+    );
+    const section = readme
+      .split(/^## /m)
+      .find(part => part.startsWith('Working with an AI agent\n'));
+    expect(section).toBeDefined();
+    const commandLines: string[] = [];
+    const block = /^```bash\n([\s\S]*?)^```$/gm;
+    for (
+      let found = block.exec(section!);
+      found;
+      found = block.exec(section!)
+    ) {
+      commandLines.push(
+        ...found[1]
+          .split('\n')
+          .map(line =>
+            line.startsWith(RUN_PREFIX) ? line.slice(RUN_PREFIX.length) : line
+          )
+      );
+    }
+    const all = await lab();
+
+    await openInfo(all);
+    const shown = examples(opened().body);
+
+    expect(Object.keys(shown)).toEqual(['avrdude', 'stm32flash', 'esptool']);
+    for (const [tool, line] of Object.entries(shown)) {
+      // The placeholder stands once in a line, where the README has its example path.
+      expect(line!.split('<path>')).toHaveLength(2);
+      expect(commandLines).toContain(
+        line!.replace('<path>', README_PATHS[tool])
+      );
+    }
+  });
+
+  it('ACC-PANEL-134 the dialog says that the lines are typed in a device shell and that no line was run against a board', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    await openInfo(all);
+
+    const note = opened().body.querySelector('[data-field="note"]')!;
+    expect(note.textContent).toContain('Type a line in a device shell.');
+    expect(note.textContent).toContain('No line was run against a board.');
+  });
+
+  it('ACC-PANEL-140 the note of the Info dialog names a device shell and the section Device shell and tools, word for word', async () => {
+    const all = await lab();
+
+    await openInfo(all);
+
+    expect(
+      opened().body.querySelector('[data-field="note"]')!.textContent
+    ).toBe(
+      'Type a line in a device shell. The button Start of the section Device shell and tools opens one. No line was run against a board.'
+    );
+  });
+});
+
+describe('plugin: no text of the lab holds the word shim', () => {
+  // Node's own modules; the project has no type package for them.
+  const fs = jest.requireActual('fs') as {
+    readFileSync(file: string, encoding: 'utf8'): string;
+  };
+  const path = jest.requireActual('path') as {
+    resolve(...parts: string[]): string;
+  };
+
+  /** Every text an element shows: its text content, and each title, label for a screen reader and placeholder in it. */
+  const textsOf = (root: HTMLElement): string[] => {
+    const texts = [root.textContent || ''];
+    for (const attribute of ['title', 'aria-label', 'placeholder']) {
+      root
+        .querySelectorAll(`[${attribute}]`)
+        .forEach(node => texts.push(node.getAttribute(attribute)!));
+    }
+    return texts;
+  };
+
+  it('ACC-PANEL-140 the command start-run is labelled Device Shell, in the palette and in the Devices menu, and its caption says what a device shell is', async () => {
+    const all = await lab({ settings: { showMenu: true } });
+    const [menu] = all.mainMenu.addMenu.mock.calls[0] as [Menu];
+
+    expect(all.commands.label(START_RUN)).toBe('Device Shell');
+    expect(all.commands.caption(START_RUN)).toBe(
+      'Open a device shell: a lab terminal in which tools control the lines of the serial ports'
+    );
+    expect(menu.items.find(item => item.command === START_RUN)!.label).toBe(
+      'Device Shell'
+    );
+    // The command id stays, and the command starts a device shell.
+    await all.commands.execute(START_RUN);
+    expect(launchedLines(all)).toEqual([['jupyterlab-device', 'shell']]);
+  });
+
+  it('ACC-PANEL-140 no text that the panel, the Info dialog, the commands, the Devices menu and the notification of a server without terminals show holds the word shim, in any letter case', async () => {
+    // A server without terminals: the commands that open a terminal raise a notification.
+    const all = await lab({
+      ports: [new SimSerialPort(UNO)],
+      devices: [new SimUsbDevice()],
+      settings: { showPanel: true, showMenu: true },
+      terminals: false
+    });
+    const texts: string[] = [];
+
+    // The panel without a run, then with one.
+    texts.push(...textsOf(all.panel.node), all.panel.title.caption);
+    all.server.running.push(SHELL_RUN);
+    all.server.pushRuns();
+    await tick();
+    texts.push(...textsOf(all.panel.node));
+
+    // The Info dialog.
+    button(all, '[data-section="runs"] [data-action="run-info"]').click();
+    await tick();
+    const [options] = dialog.mock.calls[0] as [
+      { title: string; body: Widget; buttons: Array<{ label: string }> }
+    ];
+    texts.push(
+      options.title,
+      ...options.buttons.map(shown => shown.label),
+      ...textsOf(options.body.node)
+    );
+
+    // The commands, as the palette and the Devices menu show them.
+    const ids = all.commands
+      .listCommands()
+      .filter(id => id.startsWith('device-bridge:'));
+    for (const id of ids) {
+      texts.push(all.commands.label(id), all.commands.caption(id));
+    }
+    const [menu] = all.mainMenu.addMenu.mock.calls[0] as [Menu];
+    texts.push(menu.title.label, ...menu.items.map(item => item.label));
+
+    // The notifications of the two commands that open a terminal.
+    button(all, '[data-section="runs"] [data-action="start-run"]').click();
+    await all.commands.execute(OPEN_TERMINAL);
+    await tick();
+    texts.push(...notifications().map(([text]) => text));
+
+    // The collection holds the texts of each part.
+    expect(ids).toHaveLength(5);
+    expect(texts).toEqual(
+      expect.arrayContaining([
+        'Devices',
+        'How to connect a tool',
+        'Close',
+        'Device Shell',
+        'Open a device shell',
+        'This server offers no terminals. Run this command in a shell of the container: jupyterlab-device shell'
+      ])
+    );
+    expect(texts.join('\n')).toContain('Device shell and tools');
+    expect(texts.join('\n')).toContain('No line was run against a board.');
+    expect(texts.join('\n')).toContain('pid 4242');
+
+    for (const text of texts) {
+      expect(text).not.toMatch(/shim/i);
+    }
+  });
+
+  it('ACC-PANEL-140 no text literal in the source of the plugin, the panel, the status bar item and the model holds the word shim', () => {
+    const directory = path.resolve(expect.getState().testPath!, '../..');
+    for (const file of ['index.ts', 'panel.ts', 'status.ts', 'model.ts']) {
+      const code = fs
+        .readFileSync(path.resolve(directory, file), 'utf8')
+        // Without comments: a comment may hold the word and is no text for the user.
+        .replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+      const literals =
+        code.match(/'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g) || [];
+
+      expect(literals.length).toBeGreaterThan(10);
+      for (const literal of literals) {
+        expect(literal).not.toMatch(/shim/i);
+      }
+    }
   });
 });
 
@@ -901,7 +1486,7 @@ describe('plugin: the Devices menu', () => {
     expect(menus(all)).toEqual([]);
   });
 
-  it('ACC-PANEL-69 with showMenu true the lab gets a Devices menu with the four commands', async () => {
+  it('ACC-PANEL-69 with showMenu true the lab gets a Devices menu with the five commands', async () => {
     const all = await lab({ settings: { showMenu: true } });
 
     expect(menus(all)).toHaveLength(1);
@@ -913,12 +1498,14 @@ describe('plugin: the Devices menu', () => {
       CONNECT_SERIAL,
       CONNECT_USB,
       OPEN_TERMINAL,
+      START_RUN,
       SHOW_PANEL
     ]);
     expect(menu.items.map(item => item.label)).toEqual([
       'Connect Serial Port',
       'Connect USB Device',
       'Serial Terminal',
+      'Device Shell',
       'Show Devices Panel'
     ]);
   });
@@ -942,7 +1529,7 @@ describe('plugin: the Devices menu', () => {
     all.setShowMenu(true);
     expect(menus(all)).toHaveLength(2);
     expect(menus(all)[1].isDisposed).toBe(false);
-    expect(menus(all)[1].items).toHaveLength(4);
+    expect(menus(all)[1].items).toHaveLength(5);
   });
 
   it('ACC-PANEL-69 the entry Connect Serial Port of the menu opens the port dialog', async () => {

@@ -52,9 +52,12 @@ test.beforeAll(async () => {
 
   const status = await runCli(['status', '--json']);
   expect(status.code, `stderr: ${status.stderr}`).toBe(0);
+  // The shell command of the terminals is the one that the config of the test server
+  // pins: a device shell is that command, on every machine.
   expect(JSON.parse(status.stdout)).toMatchObject({
     server: SERVER,
-    deviceDir: DEVICE_DIR
+    deviceDir: DEVICE_DIR,
+    shell: ['/bin/bash']
   });
 });
 

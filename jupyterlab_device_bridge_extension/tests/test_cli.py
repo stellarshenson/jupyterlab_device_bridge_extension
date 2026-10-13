@@ -22,8 +22,12 @@ import tomllib
 from typing import NamedTuple
 
 import pytest
+import tornado.web
 
-from jupyterlab_device_bridge_extension import cli
+from jupyterlab_device_bridge_extension import cli, shim_build
+from jupyterlab_device_bridge_extension import manager as manager_module
+from jupyterlab_device_bridge_extension.manager import BridgeError
+from jupyterlab_device_bridge_extension.routes import DevicesHandler, RunsHandler, StatusHandler
 from jupyterlab_device_bridge_extension.tests.fake_tab import (
     DEVICE_DESCRIPTOR,
     SERIAL_NAME,
@@ -41,6 +45,7 @@ from .test_client import (  # noqa: F401 - `lab` is a fixture
     list_server,
 )
 from .test_manager import HOLD, end, holding, record
+from .test_readme import command_lines, readme
 
 MODULE = "jupyterlab_device_bridge_extension.cli"
 SCRIPTS = {"jupyterlab-device": f"{MODULE}:main"}
@@ -67,7 +72,7 @@ USB_FIELDS = {"name", "state", "tab", "vendorId", "productId", "productName", "m
 # The command table of docs/design.md.
 COMMANDS = {
     "list", "status", "profiles", "profile", "monitor read", "monitor write", "terminal", "signals",
-    "action", "run", "request", "usb list", "usb describe", "usb open", "usb close", "usb claim",
+    "action", "run", "shell", "request", "usb list", "usb describe", "usb open", "usb close", "usb claim",
     "usb release", "usb configuration", "usb alternate", "usb clear-halt", "usb reset", "usb control",
     "usb transfer",
 }
@@ -257,12 +262,14 @@ async def test_acc_cli_81_help_runs_without_a_server(cli_run, monkeypatch):
     """ACC-CLI-81 the real command prints help with exit 0 where no server answers; a bare call prints it with exit 2."""
     cli_run.server_list(None)
     monkeypatch.setenv("JUPYTER_PORT", "9")
+    # The top-level help names the upload tools on PATH, so this process and the command get one PATH.
+    monkeypatch.setenv("PATH", str(cli_run.binaries))
 
     top = await cli_run("--help")
     nested = await cli_run("monitor", "read", "--help")
     bare = await cli_run()
 
-    assert (top.status, top.err) == (0, "") and top.out.decode() == PARSERS[()].format_help()
+    assert (top.status, top.err) == (0, "") and top.out.decode() == cli.build_parser().format_help()
     assert (nested.status, nested.err) == (0, "")
     assert nested.out.decode() == PARSERS[("monitor", "read")].format_help()
     assert "\x1b" not in top.out.decode()
@@ -286,7 +293,7 @@ async def test_acc_cli_82_list_and_status_print_one_json_document(cli_run, fake_
         SERIAL_NAME, path, "attached", None)
     assert (usb["name"], usb["state"], usb["opened"]) == (USB_NAME, "attached", False)
     document = json.loads(status.out)
-    assert set(document) == {"server", "version", "deviceDir", "shimDir", "tabs", "counts"}
+    assert set(document) == {"server", "version", "deviceDir", "shimDir", "shell", "tabs", "counts"}
     assert document["server"] == bridge_address[0]
     assert (document["deviceDir"], document["shimDir"]) == (device_dir, os.path.join(device_dir, ".shim"))
     (lab_tab,) = document["tabs"]
@@ -607,6 +614,14 @@ async def test_acc_term_108_terminal_becomes_pyserial_miniterm(cli_run, fake_tab
     assert any(requirement.startswith("pyserial") for requirement in project()["dependencies"])
 
 
+def test_acc_cli_151_the_wheel_requires_the_basic_terminal_extension():
+    """ACC-CLI-151 pyproject.toml lists `jupyterlab-basic-terminal-extension>=1.0.7,<2` among the dependencies of the project, so pip installs it with the wheel."""
+    requirements = [requirement for requirement in project()["dependencies"]
+                    if requirement.startswith("jupyterlab-basic-terminal-extension")]
+
+    assert requirements == ["jupyterlab-basic-terminal-extension>=1.0.7,<2"]
+
+
 async def test_acc_term_108_miniterm_runs_on_the_virtual_device(cli_run, fake_tab):
     """ACC-TERM-108 the real `terminal` command becomes miniterm on the device: it shows what the port sends, sends what is typed, and Ctrl+] ends it."""
     tab, _ = await attach_serial(fake_tab)
@@ -707,6 +722,16 @@ async def test_acc_shim_35_run_does_not_start_the_tool_without_its_device(cli_ru
     assert missing.status == 127 and "cannot start no-such-tool-7c1f" in missing.err
 
 
+async def test_def_cli_13_run_with_an_empty_tool_name_says_so_and_exits_127(cli_run, fake_tab):
+    """DEF-CLI-13 `run` with an empty word as the tool prints one message and exits 127, as for a tool that does not exist; it prints no traceback."""
+    await attach_serial(fake_tab)
+
+    outcome = await cli_run("run", "--", "")
+
+    assert (outcome.status, outcome.out) == (127, b"")
+    assert outcome.err.startswith(f"{cli.PROG}: cannot start ") and outcome.err.count("\n") == 1
+
+
 async def test_acc_shim_37_run_without_a_c_compiler_names_profiles(cli_run, fake_tab, monkeypatch):
     """ACC-SHIM-37 without a C compiler `run` exits 1, starts nothing, and says that a profile needs no shim."""
     await attach_serial(fake_tab)
@@ -718,6 +743,728 @@ async def test_acc_shim_37_run_without_a_c_compiler_names_profiles(cli_run, fake
     assert outcome.err == (
         f"{cli.PROG}: no C compiler (cc or gcc) is installed, so the preload shim cannot be built - "
         f"set a profile with `{cli.PROG} profile <device> <id>` instead: a profile needs no shim\n")
+
+
+# Prints its process id, then waits for a line on stdin.
+SAY_PID = "import os, sys; print(os.getpid(), flush=True); sys.stdin.readline()"
+
+
+async def test_acc_shim_128_run_registers_the_process_it_then_becomes(cli_run, fake_tab, api):
+    """ACC-SHIM-128 `run` posts its process id, the words of the tool and its `--device` before it becomes the tool: the run the server lists has the process id of the tool."""
+    tab, _ = await attach_serial(fake_tab)
+    command = [sys.executable, "-c", SAY_PID]
+
+    child = await cli_run.start("run", "--device", SERIAL_NAME, "--", *command, stdin=asyncio.subprocess.PIPE)
+    pid = int(await asyncio.wait_for(child.stdout.readline(), 20))
+
+    assert pid == child.pid, "the CLI process itself became the tool"
+    run = {"pid": pid, "program": os.path.basename(sys.executable), "command": " ".join(command)[:200],
+           "device": SERIAL_NAME}
+    # The tool does not talk to the server, so the run was listed before the tool began.
+    assert (await api("GET", "runs")) == (200, {"runs": [run]})
+    await tab.until(lambda: tab.runs["running"])
+    assert tab.runs == {"type": "runs", "running": [run]}
+
+    await end(child)
+    assert child.returncode == 0
+    await tab.until(lambda: tab.runs["running"] == [], timeout=2)
+
+
+async def test_acc_shim_128_run_starts_the_tool_when_the_server_refuses_the_run(
+        cli_run, fake_tab, manager, monkeypatch):
+    """ACC-SHIM-128 when `POST runs` refuses the run, the tool starts all the same and exits with its own status, and `run` prints nothing about the refusal; a run without `--device` posts no device."""
+    await fake_tab()
+    asked = []
+
+    def refuse(body):
+        asked.append(body)
+        raise BridgeError(400, "bad-request", "pid: refused by this test")
+
+    monkeypatch.setattr(manager, "register_run", refuse)
+    script = "echo started; exit 7"
+
+    outcome = await cli_run("run", "--", "sh", "-c", script)
+
+    assert asked == [{"pid": cli_run.children[-1].pid, "command": ["sh", "-c", script]}]
+    assert outcome == (7, b"started\n", "")
+
+
+async def test_acc_shim_128_run_starts_the_tool_when_the_server_does_not_answer_within_2_s(
+        cli_run, fake_tab, monkeypatch):
+    """ACC-SHIM-128 when `POST runs` gives no answer, `run` waits 2 s for it, then starts the tool and prints nothing about it."""
+    await fake_tab()
+    asked = []
+    answer = asyncio.Event()
+
+    async def silent(handler):
+        asked.append(time.monotonic())
+        await answer.wait()
+
+    monkeypatch.setattr(RunsHandler, "post", silent)
+
+    outcome = await cli_run("run", "--", "sh", "-c", "echo started; exit 7")
+    ended = time.monotonic()
+    answer.set()
+    await asyncio.sleep(0.1)  # the handler ends within the test
+
+    assert outcome == (7, b"started\n", "")
+    # 2 s is the time of the registration, 10 s the time of every other call of the CLI.
+    assert len(asked) == 1 and 1.8 < ended - asked[0] < 5
+
+
+# The banner of a device shell, as the criteria and docs/design.md have it: the square wave
+# and the name line above the lines of the tools and of the devices; an empty line, the two
+# hint lines and the rule under them.
+BANNER_TOP = """\
+────┐   ┌─┐ ┌─┐   ┌─┐ ┌─┐     ┌───┐   ┌─┐ ┌───────────
+    └───┘ └─┘ └───┘ └─┘ └─────┘   └───┘ └─┘
+◆ jupyterlab-device                       device shell
+
+"""
+BANNER_BOTTOM = """
+jupyterlab-device list      all devices
+jupyterlab-device --help    example commands
+──────────────────────────────────────────────────────"""
+NO_DEVICE = "No device is attached."
+# The tool line with all three known upload tools on PATH, and the two lines with none of them.
+THREE_TOOLS = ("avrdude", "stm32flash", "esptool")
+FOR_THREE_TOOLS = ("For avrdude, stm32flash, esptool.",)
+NO_TOOL = ("No avrdude, stm32flash or esptool on PATH.", "Install one to make use of the device shell.")
+
+
+def banner(*device_lines, tools=FOR_THREE_TOOLS):
+    """What a terminal gets for the banner with these lines of the tools and of the devices.
+
+    Pale cyan comes before the banner, the colour reset and an empty line after it.
+    """
+    lines = "".join(f"{line}\n" for line in (*tools, *device_lines))
+    return f"\x1b[38;2;159;224;238m{BANNER_TOP}{lines}{BANNER_BOTTOM}\x1b[0m\n\n"
+
+
+def device_calls(monkeypatch):
+    """Record the calls of `GET devices` that the test server gets from now on, one entry for each."""
+    asked, get = [], DevicesHandler.get
+
+    def recorded(handler):
+        asked.append(handler.request.uri)
+        return get(handler)
+
+    monkeypatch.setattr(DevicesHandler, "get", recorded)
+    return asked
+
+
+def stand_in(path):
+    """Make a program that prints `started` and ends, in place of a shell that would wait for input."""
+    path.write_text("#!/bin/sh\necho started\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+class Screen:
+    """A terminal for one child process, and what that process displayed on it."""
+
+    def __init__(self):
+        self.keyboard, self.terminal = pty.openpty()
+        os.set_blocking(self.keyboard, False)
+        self.closed = False
+        self._bytes = b""
+
+    def displayed(self):
+        """What the terminal displayed so far, with the line ends as the programs wrote them."""
+        try:
+            while chunk := os.read(self.keyboard, 65536):
+                self._bytes += chunk
+        except BlockingIOError:
+            pass  # nothing more for now
+        except OSError:
+            self.closed = True  # every process has closed the terminal
+        return self._bytes.replace(b"\r\n", b"\n").decode()
+
+
+@pytest.fixture
+def upload_tools(cli_run, tmp_path, monkeypatch):
+    """Decide which upload tools the CLI finds: `upload_tools("avrdude", "esptool")`.
+
+    The fixture leaves a PATH of two folders: a new one, into which the call puts stand-in
+    programs with these names, and the one of the private `jupyter`. So what the machine of
+    the test run has installed does not reach the CLI. This PATH holds no C compiler, so the
+    shim is built first, with the PATH of the test run.
+
+    Returns:
+        The call that adds the programs. It returns the new folder.
+    """
+    shim_build.build()
+    folder = tmp_path / "upload-tools"
+    folder.mkdir()
+    monkeypatch.setenv("PATH", os.pathsep.join([str(folder), str(cli_run.binaries)]))
+    monkeypatch.delenv("JUPYTERLAB_DEVICE_SHIM_DIR", raising=False)
+
+    def install(*names):
+        for name in names:
+            stand_in(folder / name)
+        return folder
+
+    return install
+
+
+@pytest.fixture
+def three_upload_tools(upload_tools):
+    """The three known upload tools are on the PATH of the CLI, and nothing else of the machine."""
+    upload_tools(*THREE_TOOLS)
+
+
+def terminal_shell(jp_serverapp, monkeypatch, *words):
+    """Make these words the shell command of the terminals of the test server."""
+    monkeypatch.setattr(jp_serverapp.web_app.settings["terminal_manager"], "shell_command", list(words))
+
+
+@pytest.fixture
+def lab_shell(jp_serverapp, tmp_path, monkeypatch):
+    """The terminals of the test server start one stand-in program, and the CLI has no variable SHELL.
+
+    Returns:
+        The path of the stand-in, which prints `started` and ends.
+    """
+    shell = stand_in(tmp_path / "lab-shell")
+    terminal_shell(jp_serverapp, monkeypatch, shell)
+    monkeypatch.delenv("SHELL", raising=False)
+    return shell
+
+
+@pytest.fixture
+def screen():
+    """A `Screen`; `on_a_terminal` runs the CLI on it."""
+    made = Screen()
+    yield made
+    os.close(made.keyboard)
+
+
+async def on_a_terminal(cli_run, screen, *arguments, streams=("stdin", "stdout")):
+    """Run the CLI to its end with the terminal of `screen` as these standard streams.
+
+    Returns:
+        The exit status, what the terminal displayed, and `(stdout, stderr)` of the CLI:
+        the bytes of a stream that is a pipe, None for a stream that is the terminal.
+    """
+    try:
+        child = await cli_run.start(*arguments, **dict.fromkeys(streams, screen.terminal))
+    finally:
+        os.close(screen.terminal)
+    piped = await asyncio.wait_for(child.communicate(), 30)
+    deadline = time.monotonic() + 5
+    while not screen.closed:
+        assert time.monotonic() < deadline, "a process still has the terminal open"
+        screen.displayed()
+        await asyncio.sleep(0.01)
+    return child.returncode, screen.displayed(), piped
+
+
+@pytest.mark.usefixtures("three_upload_tools", "lab_shell")
+async def test_acc_shim_145_shell_prints_the_banner_on_a_terminal_before_it_becomes_the_shell(
+        cli_run, manager, screen, monkeypatch):
+    """ACC-SHIM-145 `shell` on a terminal prints the banner in pale cyan, with the colour reset and an empty line after it, after the registration of the run and before the first output of the shell. The CLI has no variable SHELL, and the server of this test has no device."""
+    register, at_registration = manager.register_run, []
+
+    def registered(body):
+        at_registration.append(screen.displayed())
+        return register(body)
+
+    monkeypatch.setattr(manager, "register_run", registered)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner(NO_DEVICE) + "started\n"
+    assert at_registration == [""], "the terminal displayed nothing before the run was registered"
+
+
+@pytest.mark.usefixtures("three_upload_tools", "lab_shell")
+async def test_acc_shim_136_the_banner_reaches_the_terminal_where_the_encoding_of_standard_output_lacks_its_characters(
+        cli_run, screen, monkeypatch):
+    """ACC-SHIM-136 (the banner, which `shell` prints since ACC-SHIM-145) the banner reaches the terminal as UTF-8 and the shell starts, also where Python's encoding of standard output has no character for the wave, the rule and the diamond."""
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner(NO_DEVICE) + "started\n"
+
+
+@pytest.mark.usefixtures("lab_shell")
+async def test_acc_shim_145_shell_prints_no_banner_when_standard_output_is_no_terminal(cli_run, screen):
+    """ACC-SHIM-145 `shell` with a pipe as standard output prints nothing of its own and starts the shell, also while standard input and standard error are a terminal."""
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell", streams=("stdin", "stderr"))
+
+    assert (status, piped) == (0, (b"started\n", None))
+    assert displayed == "", "the banner did not go to standard error either"
+
+
+@pytest.mark.parametrize("tool", ["shell", "other"], ids=["the value of SHELL as its tool", "another tool"])
+async def test_acc_shim_145_run_prints_no_banner_on_a_terminal(tool, cli_run, screen, lab_shell, tmp_path, monkeypatch):
+    """ACC-SHIM-145 `run` on a terminal prints nothing of its own for any tool: not for the program that the variable SHELL names, which is the shell command of the lab's terminals too, and not for another program."""
+    programs = {"shell": lab_shell, "other": stand_in(tmp_path / "tool")}
+    monkeypatch.setenv("SHELL", lab_shell)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "run", "--", programs[tool])
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == "started\n"
+
+
+def test_acc_shim_145_run_help_says_that_run_prints_nothing_of_its_own():
+    """ACC-SHIM-145 `run --help` says that `run` prints nothing of its own, names `shell` for a shell in which every tool has the library, and holds no word about a banner."""
+    text = " ".join(PARSERS[("run",)].format_help().split())  # the help text breaks its lines
+
+    assert ("The command prints nothing of its own on standard output. `jupyterlab-device shell` starts "
+            "a shell in which every tool has the library.") in text
+    assert "banner" not in text
+
+
+# ---------------------------------------------------------------------- the device shell
+
+# A shell command for the terminals of the test server. It prints its process id, its words,
+# whether the shim is in its memory, and the two variables of the shim, then ends with status 7.
+# It uses only what `sh` has built in, so it needs no program of PATH.
+REPORTING_SHELL = """#!/bin/sh
+shim=no
+while read -r line; do
+    case "$line" in *devshim-*) shim=yes;; esac
+done < /proc/$$/maps
+echo "pid $$"
+echo "words $*"
+echo "shim $shim"
+echo "preload $LD_PRELOAD"
+echo "directory $JUPYTERLAB_DEVICE_SHIM_DIR"
+exit 7
+"""
+
+
+@pytest.mark.parametrize("variable", [False, True], ids=["no variable SHELL", "SHELL names another program"])
+async def test_acc_cli_144_shell_becomes_the_shell_command_of_the_lab_terminals_with_the_shim(
+        variable, cli_run, manager, jp_serverapp, screen, device_dir, tmp_path, monkeypatch):
+    """ACC-CLI-144 `shell` on a terminal becomes the shell command that `GET status` reports, every word of it, with the shim loaded and both variables of the shim set, and exits with its status; before that it registers its process id as a run with the command `jupyterlab-device shell`. It does not start what the variable SHELL names."""
+    launcher = tmp_path / "launch-shell.sh"
+    launcher.write_text(REPORTING_SHELL)
+    launcher.chmod(0o755)
+    terminal_shell(jp_serverapp, monkeypatch, str(launcher), "--login")
+    monkeypatch.delenv("SHELL", raising=False)
+    if variable:
+        monkeypatch.setenv("SHELL", stand_in(tmp_path / "other-shell"))
+    register, registered = manager.register_run, []
+
+    def recorded(body):
+        registered.append((body, register(body)))
+        return registered[-1][1]
+
+    monkeypatch.setattr(manager, "register_run", recorded)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    pid = cli_run.children[-1].pid
+    report = dict(line.split(" ", 1) for line in displayed.split("\n")
+                  if line.startswith(("pid ", "words ", "shim ", "preload ", "directory ")))
+    assert (status, piped) == (7, (None, b""))
+    assert report == {"pid": str(pid), "words": "--login", "shim": "yes", "preload": str(shim_build.build()),
+                      "directory": os.path.join(device_dir, ".shim")}
+    assert "started" not in displayed, "the program that SHELL names did not start"
+    assert registered == [({"pid": pid, "command": ["jupyterlab-device", "shell"]},
+                           {"pid": pid, "program": "jupyterlab-device", "command": "jupyterlab-device shell",
+                            "device": None})]
+
+
+@pytest.mark.parametrize("words", [("bash",), ("--device", SERIAL_NAME), ("--", "bash")], ids=" ".join)
+async def test_acc_cli_144_shell_takes_no_argument(words, cli_run, lab_shell):
+    """ACC-CLI-144 `shell` with a word, with `--device` or with `--` and a tool after it exits 2, names the words it does not take on stderr, and starts no shell."""
+    outcome = await cli_run("shell", *words)
+
+    assert (outcome.status, outcome.out) == (2, b"")
+    assert outcome.err.endswith(f"{cli.PROG}: error: unrecognized arguments: {' '.join(words)}\n")
+
+
+async def test_acc_cli_144_shell_exits_127_when_the_shell_command_cannot_be_started(
+        cli_run, jp_serverapp, tmp_path, monkeypatch):
+    """ACC-CLI-144 when the shell command of the lab's terminals cannot be started, `shell` exits 127, as `run` does for its tool, with one line that names the command and where the server shows it."""
+    missing = str(tmp_path / "no-such-shell")
+    terminal_shell(jp_serverapp, monkeypatch, missing, "--login")
+
+    outcome = await cli_run("shell")
+
+    assert (outcome.status, outcome.out) == (127, b"")
+    assert outcome.err == (
+        f"{cli.PROG}: cannot start {missing}: No such file or directory - it is the shell command of "
+        f"the lab's terminals, which `{cli.PROG} status --json` shows as shell\n")
+
+
+async def test_acc_cli_144_shell_starts_nothing_when_the_server_reports_no_shell_command(cli_run, monkeypatch):
+    """ACC-CLI-144 against a server whose `GET status` has no `shell`, as a server of an earlier version that still runs, `shell` exits 1 with one line that says to restart JupyterLab, and starts nothing."""
+    def earlier(handler):
+        handler.finish(json.dumps({"version": "0.6.23", **handler.manager.status()}))
+
+    monkeypatch.setattr(StatusHandler, "get", earlier)
+
+    outcome = await cli_run("shell")
+
+    assert (outcome.status, outcome.out) == (1, b"")
+    assert outcome.err == (
+        f"{cli.PROG}: the server (device bridge 0.6.23) does not report the shell command of its "
+        "terminals - restart JupyterLab, so that the server runs the version of this command\n")
+
+
+def test_acc_cli_146_the_top_level_help_has_a_line_for_shell():
+    """ACC-CLI-146 the list of commands in `jupyterlab-device --help` has a line for `shell` that says that it starts a device shell."""
+    lines = [line for line in PARSERS[()].format_help().splitlines() if line.startswith("    shell ")]
+
+    assert len(lines) == 1 and "start a device shell" in lines[0]
+
+
+def test_acc_cli_146_shell_help_says_which_shell_it_starts_that_it_is_a_run_and_when_the_banner_prints():
+    """ACC-CLI-146 `shell --help` says that it starts the shell command of the lab's terminals and does not read SHELL, that the Devices panel lists it as a run that the user can stop there, and that the banner prints when standard output is a terminal; its example is the bare command."""
+    parser = PARSERS[("shell",)]
+    text = " ".join(parser.format_help().split())  # the help text breaks its lines
+
+    assert "Starts the shell command of the lab's terminals" in text
+    assert "The variable SHELL is not read" in text
+    assert f"the Devices panel of the lab {VIEW_ITEM} lists it as a run" in text
+    assert "the user can stop it there" in text
+    assert "When standard output is a terminal the command first prints a banner" in text
+    assert examples(parser) == [["shell"]]
+
+
+def test_acc_cli_146_no_help_text_holds_the_line_that_started_a_shell_through_run():
+    """ACC-CLI-146 no help text of the command holds `run -- "$SHELL"`, nor the variable in that form at all."""
+    for words, parser in PARSERS.items():
+        text = parser.format_help()
+        assert "$SHELL" not in text and 'run -- "' not in text, " ".join(words)
+
+
+# ------------------------------------------------------------ the devices in the banner
+
+SERIAL_KEYS = [f"s:2341:0043:{n}" for n in range(4)]
+SERIAL_NAMES = [SERIAL_NAME, *(f"{SERIAL_NAME}-{n}" for n in (2, 3, 4))]
+SECOND_USB_KEY, SECOND_USB_NAME = "u:cafe:4001:SN0002", f"{USB_NAME}-2"
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_139_the_banner_lists_an_attached_serial_port_and_an_attached_usb_device(
+        cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-139 with one attached serial port and one attached USB device the banner has, under the name line, the line that names the tools, line (1) with the path of the port and ` (COM)`, and line (2) with the name of the USB device and ` (USB)`; `shell` reads the devices with one call."""
+    tab, path = await attach_serial(fake_tab)
+    assert (await tab.claim_usb())["ok"]
+    await tab.until(lambda: tab.devices["usb"])
+    asked = device_calls(monkeypatch)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner(f"(1) {path} (COM)", f"(2) {USB_NAME} (USB)") + "started\n"
+    assert len(asked) == 1
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_139_the_banner_lists_no_detached_device_and_no_device_with_an_error(
+        cli_run, fake_tab, screen, lab_shell):
+    """ACC-SHIM-139 a detached device and a device whose record has an error get no line: the numbers count the listed devices over both kinds, serial devices first, in the order of the server's table."""
+    tab = await fake_tab()
+    # The USB devices are claimed first: the banner still lists them after the serial ports.
+    assert (await tab.claim_usb())["ok"] and (await tab.claim_usb(SECOND_USB_KEY))["ok"]
+    for key in SERIAL_KEYS:
+        assert (await tab.claim_serial(key))["ok"]
+    await tab.release(USB_NAME)
+    await tab.release(SERIAL_NAMES[1])
+    await tab.send({"type": "serial-state", "name": SERIAL_NAMES[2], "state": "error", "settings": None,
+                    "signals": {}, "error": "Failed to open serial port."})
+    await tab.until(lambda: [device["state"] for device in tab.devices["usb"]] == ["detached", "attached"])
+    await tab.until(lambda: [(device["state"], device["portState"]) for device in tab.devices["serial"]] == [
+        ("attached", "open"), ("detached", "closed"), ("attached", "error"), ("attached", "open")])
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    assert status == 0
+    assert displayed == banner(
+        f"(1) {record(tab, SERIAL_NAMES[0])['path']} (COM)",
+        f"(2) {record(tab, SERIAL_NAMES[3])['path']} (COM)",
+        f"(3) {SECOND_USB_NAME} (USB)") + "started\n"
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_139_the_banner_says_that_no_device_is_attached(
+        cli_run, fake_tab, screen, lab_shell):
+    """ACC-SHIM-139 when the server has devices and none of them is attached without an error, the one line under the tools reads `No device is attached.`"""
+    tab, _ = await attach_serial(fake_tab)
+    assert (await tab.claim_usb())["ok"]
+    await tab.close()
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    assert status == 0
+    assert displayed == banner("No device is attached.") + "started\n"
+
+
+def refused(handler):
+    raise tornado.web.HTTPError(500)
+
+
+def no_table(handler):
+    handler.finish(json.dumps({"devices": []}))
+
+
+@pytest.mark.parametrize("answer", [refused, no_table], ids=["the server answers 500", "the answer is no device table"])
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_139_the_banner_has_no_device_line_when_the_devices_cannot_be_read(
+        answer, cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-139 when `GET devices` fails, or answers something that is no device table, the banner has no device line and no line that says that no device is attached; the shell starts and nothing is printed about the failure."""
+    await attach_serial(fake_tab)
+    monkeypatch.setattr(DevicesHandler, "get", answer)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner() + "started\n"
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_139_shell_waits_2_s_for_the_devices_then_starts(
+        cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-139 when `GET devices` gives no answer, `shell` waits 2 s for it, then prints the banner without a device line and starts the shell."""
+    await attach_serial(fake_tab)
+    asked = []
+    answer = asyncio.Event()
+
+    async def silent(handler):
+        asked.append(time.monotonic())
+        await answer.wait()
+
+    monkeypatch.setattr(DevicesHandler, "get", silent)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+    ended = time.monotonic()
+    answer.set()
+    await asyncio.sleep(0.1)  # the handler ends within the test
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner() + "started\n"
+    # 2 s is the time of this call, 10 s the time of every other call of the CLI.
+    assert len(asked) == 1 and 1.8 < ended - asked[0] < 5
+
+
+@pytest.mark.parametrize("words, streams", [(("run", "--", "{shell}"), ("stdin", "stdout")),
+                                            (("shell",), ("stdin", "stderr"))],
+                         ids=["run with a tool on a terminal", "shell with a pipe as standard output"])
+async def test_acc_shim_139_the_devices_are_read_only_when_the_banner_is_printed(
+        words, streams, cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-139 a command that prints no banner makes no call for the devices: `run`, and `shell` whose standard output is no terminal."""
+    await attach_serial(fake_tab)
+    asked = device_calls(monkeypatch)
+
+    status, _, _ = await on_a_terminal(
+        cli_run, screen, *(word.format(shell=lab_shell) for word in words), streams=streams)
+
+    assert status == 0 and asked == []
+
+
+# What the tool line of the banner is for the upload tools on PATH, in the order they are put there.
+TOOL_LINES = {
+    ("avrdude", "stm32flash", "esptool"): "For avrdude, stm32flash, esptool.",
+    ("esptool", "avrdude"): "For avrdude, esptool.",
+    ("esptool",): "For esptool.",
+}
+
+
+@pytest.mark.parametrize("tools, line", TOOL_LINES.items(), ids=map(", ".join, TOOL_LINES))
+async def test_acc_shim_142_the_tool_line_of_the_banner_names_the_upload_tools_on_path(
+        tools, line, cli_run, screen, upload_tools, lab_shell):
+    """ACC-SHIM-142 the tool line of the banner names the known upload tools that PATH holds and no other, in the order avrdude, stm32flash, esptool; the top-level help of the same shell has an example for exactly these tools."""
+    upload_tools(*tools)
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner(NO_DEVICE, tools=[line]) + "started\n"
+    assert top_help().endswith(EXAMPLES_HEAD + example_lines(tools))
+
+
+@pytest.mark.parametrize("file", [None, "avrdude"], ids=["an empty PATH folder", "a file avrdude that is no program"])
+async def test_acc_shim_142_the_banner_says_to_install_a_tool_when_none_is_on_path(
+        file, cli_run, screen, upload_tools, lab_shell):
+    """ACC-SHIM-142 with no known upload tool that can be run on PATH the banner has, in place of the tool line, the line that none of the three is on PATH and the line that says to install one; no line starts with `For `, and the top-level help of the same shell says that no upload tool is on PATH."""
+    folder = upload_tools()
+    if file:
+        (folder / file).write_text("no program\n")
+
+    status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
+
+    assert (status, piped) == (0, (None, b""))
+    assert displayed == banner(NO_DEVICE, tools=NO_TOOL) + "started\n"
+    assert displayed.split("\n")[4:6] == [
+        "No avrdude, stm32flash or esptool on PATH.", "Install one to make use of the device shell."]
+    assert not any(row.startswith("For ") for row in displayed.split("\n")) and "shim" not in displayed.lower()
+    assert top_help().endswith(NO_UPLOAD_TOOL)
+
+
+async def test_acc_shim_142_a_file_that_is_no_program_is_not_named_in_the_tool_line(
+        cli_run, screen, upload_tools, lab_shell):
+    """ACC-SHIM-142 a file on PATH that has the name of a known upload tool and cannot be run is not named in the tool line beside a tool that can be run."""
+    folder = upload_tools("esptool")
+    (folder / "stm32flash").write_text("no program\n")
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    assert status == 0
+    assert displayed == banner(NO_DEVICE, tools=["For esptool."]) + "started\n"
+
+
+async def test_acc_panel_140_the_banner_names_a_device_shell_and_does_not_hold_the_word_shim(
+        cli_run, screen, lab_shell):
+    """ACC-PANEL-140 the name line of the banner is 54 columns wide, starts with the name of the command and ends with `device shell`, and the banner does not hold the word shim."""
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    name_line = displayed.split("\n")[2]
+    assert status == 0
+    assert name_line == "◆ jupyterlab-device" + " " * 23 + "device shell" and len(name_line) == 54
+    assert "shim" not in displayed.lower()
+
+
+async def test_acc_cli_141_the_banner_names_the_commands_list_and_help(cli_run, screen, lab_shell):
+    """ACC-CLI-141 above its rule the banner has an empty line and two lines that name `jupyterlab-device list` with `all devices` and `jupyterlab-device --help` with `example commands`, the two texts in one column."""
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    lines = displayed.split("\n")
+    rule = lines.index("\u2500" * 54 + "\x1b[0m")
+    assert status == 0
+    assert lines[rule - 3:rule] == [
+        "", "jupyterlab-device list      all devices", "jupyterlab-device --help    example commands"]
+    assert lines[rule - 2].index("all devices") == lines[rule - 1].index("example commands")
+
+
+# -------------------------------------------------- the examples in the top-level help
+
+# The known upload tools in the order of the help. For each: its example line outside a
+# device shell, and the path that the README has in that line in place of <path>.
+UPLOAD_EXAMPLES = {
+    "avrdude": ("avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i",
+                "/run/devices/tty-2341-0043"),
+    "stm32flash": ("jupyterlab-device run -- stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>",
+                   "/run/devices/tty-0403-6001"),
+    "esptool": ("jupyterlab-device run -- esptool --port <path> write-flash 0x0 firmware.bin",
+                "/run/devices/tty-10c4-ea60"),
+}
+EXAMPLES_HEAD = """
+examples for the upload tools on PATH; <path> is the path of the serial device,
+which `jupyterlab-device list` prints:
+"""
+NO_UPLOAD_TOOL = "\nNo upload tool is on PATH. Known tools: avrdude, stm32flash, esptool.\n"
+
+
+def path_with(monkeypatch, folder, *tools):
+    """Make PATH one new folder that holds stand-in programs with these names, outside a device shell."""
+    folder.mkdir()
+    for tool in tools:
+        stand_in(folder / tool)
+    monkeypatch.setenv("PATH", str(folder))
+    monkeypatch.delenv("JUPYTERLAB_DEVICE_SHIM_DIR", raising=False)
+
+
+def top_help():
+    """The top-level help as the command prints it at this moment."""
+    return cli.build_parser().format_help()
+
+
+def example_lines(tools, prefixed=True):
+    """The example lines of the help for these tools, in the order of the help."""
+    lines = (UPLOAD_EXAMPLES[tool][0] for tool in UPLOAD_EXAMPLES if tool in tools)
+    return "".join(f"  {line if prefixed else line.removeprefix('jupyterlab-device run -- ')}\n" for line in lines)
+
+
+@pytest.mark.parametrize("tools", [("avrdude",), ("esptool", "stm32flash"), ("esptool", "avrdude", "stm32flash")],
+                         ids=", ".join)
+def test_acc_cli_141_the_top_level_help_ends_with_one_example_for_each_upload_tool_on_path(
+        tools, tmp_path, monkeypatch):
+    """ACC-CLI-141 the top-level help ends with one example line for each known upload tool that PATH holds, in the order avrdude, stm32flash, esptool, and has no line for a tool that PATH does not hold; one sentence above the lines says what <path> stands for."""
+    path_with(monkeypatch, tmp_path / "tools", *tools)
+
+    text = top_help()
+
+    assert text.endswith(EXAMPLES_HEAD + example_lines(tools))
+    assert text.count("<path>") == 1 + len(tools) and "No upload tool" not in text
+
+
+@pytest.mark.parametrize("executable", [None, False], ids=["an empty PATH folder", "a file avrdude that is no program"])
+def test_acc_cli_141_the_top_level_help_says_that_no_upload_tool_is_on_path(executable, tmp_path, monkeypatch):
+    """ACC-CLI-141 with no known upload tool that can be run on PATH the top-level help ends with the sentence that says so and names the three known tools, and has no example line."""
+    path_with(monkeypatch, tmp_path / "tools")
+    if executable is False:
+        (tmp_path / "tools" / "avrdude").write_text("no program\n")
+
+    text = top_help()
+
+    assert text.endswith(NO_UPLOAD_TOOL)
+    assert "<path>" not in text and "examples for the upload tools" not in text
+
+
+def test_acc_cli_141_inside_a_device_shell_the_examples_have_no_run_prefix(tmp_path, monkeypatch):
+    """ACC-CLI-141 inside a device shell, where JUPYTERLAB_DEVICE_SHIM_DIR is set, the stm32flash line and the esptool line have no `jupyterlab-device run -- ` before the tool; outside one they have it, and the avrdude line never has it."""
+    path_with(monkeypatch, tmp_path / "tools", *UPLOAD_EXAMPLES)
+    outside = top_help()
+    monkeypatch.setenv("JUPYTERLAB_DEVICE_SHIM_DIR", "/run/devices/.shim")
+
+    inside = top_help()
+
+    assert outside.endswith(EXAMPLES_HEAD + example_lines(UPLOAD_EXAMPLES))
+    assert inside.endswith(EXAMPLES_HEAD + example_lines(UPLOAD_EXAMPLES, prefixed=False))
+    assert inside.splitlines()[-3:] == [
+        "  avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i",
+        "  stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>",
+        "  esptool --port <path> write-flash 0x0 firmware.bin"]
+    assert outside.splitlines()[-3:] == [f"  {line}" for line, _ in UPLOAD_EXAMPLES.values()]
+
+
+def test_acc_cli_141_each_example_of_the_help_is_a_command_line_of_the_readme(tmp_path, monkeypatch):
+    """ACC-CLI-141 each example line of the help outside a device shell, with the example path of the README in place of <path>, is a line of a `bash` block of the README section Working with an AI agent."""
+    path_with(monkeypatch, tmp_path / "tools", *UPLOAD_EXAMPLES)
+    documented = command_lines(readme()["Working with an AI agent"])
+
+    printed = [line.strip() for line in top_help().splitlines() if line.startswith("  ") and "<path>" in line]
+
+    assert len(printed) == 3
+    for line, (_, device) in zip(printed, UPLOAD_EXAMPLES.values()):
+        assert line.replace("<path>", device) in documented, line
+
+
+def test_acc_cli_141_the_help_of_the_subcommands_does_not_change(tmp_path, monkeypatch):
+    """ACC-CLI-141 the help of every subcommand is the same with all three upload tools on PATH and with none, and holds no example of the top-level help."""
+    def subcommands():
+        return {words: parser.format_help() for words, parser in parsers(cli.build_parser()) if words}
+
+    path_with(monkeypatch, tmp_path / "tools", *UPLOAD_EXAMPLES)
+    with_tools = subcommands()
+    path_with(monkeypatch, tmp_path / "none")
+
+    assert subcommands() == with_tools and len(with_tools) == len(SUBCOMMANDS)
+    for text in with_tools.values():
+        assert "<path>" not in text and "upload tools on PATH;" not in text and "No upload tool" not in text
+
+
+async def test_acc_cli_141_the_command_prints_the_examples_where_no_server_answers(cli_run, tmp_path, monkeypatch):
+    """ACC-CLI-141 the real command ends `--help` with the example of the one upload tool on its PATH, with exit 0 and nothing on stderr, where no server answers and PATH holds no `jupyter` to find one with."""
+    cli_run.server_list(None)
+    monkeypatch.setenv("JUPYTER_PORT", "9")
+    path_with(monkeypatch, tmp_path / "tools", "avrdude")
+
+    outcome = await cli_run("--help")
+
+    assert (outcome.status, outcome.err) == (0, "")
+    assert outcome.out.decode().endswith(EXAMPLES_HEAD + example_lines(["avrdude"]))
+
+
+def test_acc_cli_135_run_help_says_that_the_devices_panel_lists_the_run_and_that_the_user_can_stop_it():
+    """ACC-CLI-135 `run --help` states that the Devices panel of the lab lists the run, that the user can stop it there, and which signals the tool then receives."""
+    text = " ".join(PARSERS[("run",)].format_help().split())  # the help text breaks its lines
+
+    assert f"the Devices panel of the lab {VIEW_ITEM} lists the run" in text
+    assert "the user can stop it there" in text
+    assert f"receives SIGTERM, and SIGKILL {manager_module.RUN_KILL_S:g} s later when it still runs" in text
 
 
 # ---------------------------------------------------------------------------- requests

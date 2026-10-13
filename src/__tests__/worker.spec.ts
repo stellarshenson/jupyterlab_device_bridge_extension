@@ -9,6 +9,8 @@ import * as ts from 'typescript';
 
 import type {
   IAckMessage,
+  IDeviceActivity,
+  IRunRecord,
   ISerialDefaults,
   ISerialSettings
 } from '../protocol';
@@ -1027,6 +1029,41 @@ describe('WebSocket', () => {
 
     expect(server.sent('hello')[0].tabId).toMatch(/^tab-[0-9a-f]+$/);
   });
+
+  it('ACC-PANEL-131 the worker passes every runs message of the server to the page unchanged', async () => {
+    const all = rig();
+    const shell: IRunRecord = {
+      pid: 4242,
+      program: 'bash',
+      command: '/bin/bash',
+      device: null
+    };
+    const upload: IRunRecord = {
+      pid: 4250,
+      program: 'avrdude',
+      command: 'avrdude -c arduino -P /run/devices/tty-2341-0043',
+      device: UNO_NAME
+    };
+    all.server.running.push(shell);
+    await connect(all);
+
+    // The runs follow the welcome.
+    expect(all.scope.postedOf('runs')).toEqual([
+      { type: 'runs', running: [shell] }
+    ]);
+
+    all.server.running.push(upload);
+    all.server.pushRuns();
+    all.server.running.length = 0;
+    all.server.pushRuns();
+    await tick();
+
+    expect(all.scope.postedOf('runs')).toEqual([
+      { type: 'runs', running: [shell] },
+      { type: 'runs', running: [shell, upload] },
+      { type: 'runs', running: [] }
+    ]);
+  });
 });
 
 describe('USB device', () => {
@@ -1810,40 +1847,289 @@ describe('default serial settings', () => {
   });
 });
 
+describe('activity of the devices, for the lamps of the page', () => {
+  const NANO = { usbVendorId: 0x1a86, usbProductId: 0x7523 };
+  const NANO_NAME = 'tty-1a86-7523';
+
+  /** The devices of every activity message the worker posted to the page, in order. */
+  const activity = (scope: SimScope): IDeviceActivity[][] =>
+    scope.postedOf('activity').map(message => message.devices);
+
+  /** One USB operation on the probe, as the server sends it. */
+  const probe = (
+    server: SimServer,
+    op: 'open' | 'close' | 'out' | 'in'
+  ): number => {
+    if (op === 'out') {
+      return server.command({
+        type: 'usb',
+        name: PROBE_NAME,
+        op: 'transfer-out',
+        args: { endpointNumber: BULK_ENDPOINT, data: toBase64([1, 2, 3]) }
+      });
+    }
+    if (op === 'in') {
+      return server.command({
+        type: 'usb',
+        name: PROBE_NAME,
+        op: 'transfer-in',
+        args: { endpointNumber: BULK_ENDPOINT, length: 64 }
+      });
+    }
+    return server.command({ type: 'usb', name: PROBE_NAME, op });
+  };
+
+  it('ACC-PANEL-138 the worker posts one activity message for a 50 ms period in which a port sent bytes, with rx true and tx false, and none for a period without bytes', async () => {
+    const { scope, port } = await withPort();
+
+    // An open port without traffic.
+    await tick(1000);
+    expect(activity(scope)).toEqual([]);
+
+    port.receive([1, 2, 3]);
+    await tick(49);
+    expect(activity(scope)).toEqual([]);
+    await tick(1);
+    expect(activity(scope)).toEqual([
+      [{ name: UNO_NAME, rx: true, tx: false }]
+    ]);
+
+    // No byte since: no message, however long the port stays open.
+    await tick(5000);
+    expect(activity(scope)).toHaveLength(1);
+
+    port.receive([4]);
+    await tick(50);
+    port.receive([5]);
+    await tick(50);
+    expect(activity(scope)).toEqual([
+      [{ name: UNO_NAME, rx: true, tx: false }],
+      [{ name: UNO_NAME, rx: true, tx: false }],
+      [{ name: UNO_NAME, rx: true, tx: false }]
+    ]);
+  });
+
+  it('ACC-PANEL-138 bytes written to a port give tx true, and bytes in both directions in one period give one message with both true', async () => {
+    const port = new SimSerialPort(UNO);
+    port.echo = false;
+    const all = rig([port]);
+    await connect(all);
+
+    all.server.sendData(1, [9, 9]);
+    await tick(50);
+    expect(activity(all.scope)).toEqual([
+      [{ name: UNO_NAME, rx: false, tx: true }]
+    ]);
+
+    all.server.sendData(1, [8]);
+    port.receive([7]);
+    await tick(50);
+    expect(activity(all.scope)).toEqual([
+      [{ name: UNO_NAME, rx: false, tx: true }],
+      [{ name: UNO_NAME, rx: true, tx: true }]
+    ]);
+    expect(port.written).toEqual([9, 9, 8]);
+  });
+
+  it('ACC-PANEL-138 one activity message names each device that moved bytes in the period, serial and USB, each with its direction, and no device that moved none', async () => {
+    const uno = new SimSerialPort(UNO);
+    const nano = new SimSerialPort(NANO);
+    const all = rig([uno, nano], [new SimUsbDevice()]);
+    await connect(all);
+    probe(all.server, 'open');
+    await tick();
+    expect(activity(all.scope)).toEqual([]);
+
+    nano.receive([1]);
+    probe(all.server, 'out');
+    await tick(50);
+
+    expect(activity(all.scope)).toHaveLength(1);
+    expect(activity(all.scope)[0]).toHaveLength(2);
+    expect(activity(all.scope)[0]).toEqual(
+      expect.arrayContaining([
+        { name: NANO_NAME, rx: true, tx: false },
+        { name: PROBE_NAME, rx: false, tx: true }
+      ])
+    );
+
+    // The probe gives back what it got: bytes from the device.
+    probe(all.server, 'in');
+    await tick(50);
+    expect(activity(all.scope)[1]).toEqual([
+      { name: PROBE_NAME, rx: true, tx: false }
+    ]);
+  });
+
+  it('ACC-PANEL-138 the worker has its 50 ms timer only while it holds an open device: none before a USB device is opened and none after it is closed', async () => {
+    const { server, scope } = await withDevice();
+    const idle = jest.getTimerCount();
+
+    await tick(1000);
+    expect(jest.getTimerCount()).toBe(idle);
+
+    probe(server, 'open');
+    await tick();
+    expect(jest.getTimerCount()).toBe(idle + 1);
+
+    // A second open of an open device starts no second timer.
+    probe(server, 'open');
+    await tick();
+    expect(jest.getTimerCount()).toBe(idle + 1);
+
+    probe(server, 'out');
+    probe(server, 'close');
+    await tick();
+    expect(jest.getTimerCount()).toBe(idle);
+
+    await tick(1000);
+    expect(activity(scope)).toEqual([]);
+  });
+
+  it('ACC-PANEL-138 an open USB device that the page detaches, and one that is unplugged, each end the 50 ms timer', async () => {
+    const { server, scope, usb, device } = await withDevice();
+    const idle = jest.getTimerCount();
+
+    probe(server, 'open');
+    await tick();
+    expect(jest.getTimerCount()).toBe(idle + 1);
+
+    scope.post({ type: 'detach', keys: [PROBE_KEY] });
+    await tick();
+    expect(device.opened).toBe(false);
+    expect(jest.getTimerCount()).toBe(idle);
+
+    scope.post({ type: 'attach', keys: [PROBE_KEY] });
+    await tick();
+    probe(server, 'open');
+    await tick();
+    expect(device.opened).toBe(true);
+    expect(jest.getTimerCount()).toBe(idle + 1);
+
+    usb.unplug(device);
+    await tick();
+    expect(jest.getTimerCount()).toBe(idle);
+  });
+
+  it('ACC-PANEL-138 after its last port closed the worker has no 50 ms timer and posts no activity message, and bytes from before the close give none after the port is open again', async () => {
+    const { scope, port } = await withPort();
+    const open = jest.getTimerCount();
+
+    port.receive([1, 2, 3]);
+    scope.post({ type: 'detach', keys: [UNO_KEY] });
+    await tick();
+    expect(port.isOpen).toBe(false);
+    expect(jest.getTimerCount()).toBe(open - 1);
+
+    await tick(1000);
+    expect(activity(scope)).toEqual([]);
+
+    scope.post({ type: 'attach', keys: [UNO_KEY] });
+    await tick();
+    expect(port.isOpen).toBe(true);
+    expect(jest.getTimerCount()).toBe(open);
+
+    await tick(1000);
+    expect(activity(scope)).toEqual([]);
+
+    port.receive([4]);
+    await tick(50);
+    expect(activity(scope)).toEqual([
+      [{ name: UNO_NAME, rx: true, tx: false }]
+    ]);
+  });
+
+  it('ACC-PANEL-138 with two open ports the 50 ms timer runs until the second one is gone: one is unplugged, the other is forgotten', async () => {
+    const uno = new SimSerialPort(UNO);
+    const nano = new SimSerialPort(NANO);
+    const all = rig([uno, nano]);
+    await connect(all);
+    const open = jest.getTimerCount();
+
+    all.serial.unplug(uno);
+    await tick();
+    expect(jest.getTimerCount()).toBe(open);
+
+    nano.receive([1]);
+    await tick(50);
+    expect(activity(all.scope)).toEqual([
+      [{ name: NANO_NAME, rx: true, tx: false }]
+    ]);
+
+    all.scope.post({
+      type: 'forget',
+      name: NANO_NAME,
+      keys: ['s:1a86:7523:0']
+    });
+    await tick();
+    expect(nano.forgotten).toBe(true);
+    expect(jest.getTimerCount()).toBe(open - 1);
+  });
+
+  it('ACC-PANEL-138 the activity messages go to the page only: the server receives the same frames and the same stats message once a second, and nothing else', async () => {
+    const { server, scope, port } = await withPort();
+    const before = server.received.length;
+
+    for (let n = 0; n < 10; n++) {
+      port.receive([n]);
+      await tick(100);
+    }
+
+    expect(activity(scope)).toHaveLength(10);
+    expect(server.frames).toEqual(
+      Array.from({ length: 10 }, (_, n) => ({ sid: 1, data: [n] }))
+    );
+    expect(server.received.slice(before)).toEqual([
+      { type: 'stats', name: UNO_NAME, rx: 10, tx: 0 }
+    ]);
+  });
+});
+
+/**
+ * The text of `workerMain` as it ships. Jest rewrites the functions it loads for
+ * coverage, so the source file itself is compiled with the options of the build.
+ */
+function shippedWorkerText(): string {
+  const node = <T>(name: string): T => jest.requireActual(name) as T;
+  const fs = node<{ readFileSync(file: string, encoding: string): string }>(
+    'fs'
+  );
+  const vm = node<{ runInNewContext(code: string, context: object): void }>(
+    'vm'
+  );
+  const tsconfig = node<{ compilerOptions: object }>('../../tsconfig.json');
+  const { options } = ts.convertCompilerOptionsFromJson(
+    tsconfig.compilerOptions,
+    __dirname
+  );
+  const { outputText } = ts.transpileModule(
+    fs.readFileSync(`${__dirname}/../worker.ts`, 'utf8'),
+    {
+      fileName: 'worker.ts',
+      compilerOptions: { ...options, module: ts.ModuleKind.CommonJS }
+    }
+  );
+  const compiled: { workerMain?: (scope: unknown) => void } = {};
+  vm.runInNewContext(outputText, { exports: compiled });
+  return compiled.workerMain!.toString();
+}
+
+/** Run a text of `workerMain` as `createWorker()` builds it: in a context with no global but `self`. */
+function runShipped(text: string, scope: SimScope): void {
+  const vm = jest.requireActual('vm') as {
+    runInNewContext(code: string, context: object): void;
+  };
+  vm.runInNewContext(`(${text})(self);`, { self: scope });
+}
+
 describe('the worker as the browser runs it', () => {
   it('ACC-SERIAL-14 the text of workerMain moves bytes with nothing but the worker scope', async () => {
-    // Jest rewrites the functions it loads for coverage. This test compiles the source
-    // file itself with the options of the build, so the text is the text that ships.
-    const node = <T>(name: string): T => jest.requireActual(name) as T;
-    const fs = node<{ readFileSync(file: string, encoding: string): string }>(
-      'fs'
-    );
-    const vm = node<{ runInNewContext(code: string, context: object): void }>(
-      'vm'
-    );
-    const tsconfig = node<{ compilerOptions: object }>('../../tsconfig.json');
-    const { options } = ts.convertCompilerOptionsFromJson(
-      tsconfig.compilerOptions,
-      __dirname
-    );
-    const { outputText } = ts.transpileModule(
-      fs.readFileSync(`${__dirname}/../worker.ts`, 'utf8'),
-      {
-        fileName: 'worker.ts',
-        compilerOptions: { ...options, module: ts.ModuleKind.CommonJS }
-      }
-    );
-    const compiled: { workerMain?: (scope: unknown) => void } = {};
-    vm.runInNewContext(outputText, { exports: compiled });
-    const text = compiled.workerMain!.toString();
-
     const port = new SimSerialPort(UNO);
     const device = new SimUsbDevice();
     const server = new SimServer();
     const serial = new SimSerial(port);
     const scope = new SimScope(server, serial, new SimUsb(device));
-    // As createWorker() builds it. The context has no global but `self`.
-    vm.runInNewContext(`(${text})(self);`, { self: scope });
+    runShipped(shippedWorkerText(), scope);
     scope.post({ type: 'start', url: WS_URL });
     await tick();
 
@@ -1878,6 +2164,30 @@ describe('the worker as the browser runs it', () => {
     server.drop();
     await tick(500);
     expect(server.sent('hello')).toHaveLength(2);
+  });
+
+  it('ACC-PANEL-138 the text of workerMain posts the activity message and ends its 50 ms timer with nothing but the worker scope', async () => {
+    const port = new SimSerialPort(UNO);
+    const server = new SimServer();
+    const scope = new SimScope(server, new SimSerial(port));
+    runShipped(shippedWorkerText(), scope);
+    scope.post({ type: 'start', url: WS_URL });
+    await tick();
+    const open = jest.getTimerCount();
+
+    port.receive([1, 2, 3]);
+    await tick(50);
+    expect(scope.postedOf('activity')).toEqual([
+      {
+        type: 'activity',
+        devices: [{ name: UNO_NAME, rx: true, tx: false }]
+      }
+    ]);
+
+    scope.post({ type: 'detach', keys: [UNO_KEY] });
+    await tick();
+    expect(port.isOpen).toBe(false);
+    expect(jest.getTimerCount()).toBe(open - 1);
   });
 
   it('ACC-SERIAL-14 createWorker starts a dedicated worker from a Blob URL, so the labextension serves no extra file', () => {

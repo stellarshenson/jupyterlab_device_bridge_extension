@@ -90,6 +90,29 @@ def test_acc_cli_126_one_rule_of_the_skill_names_the_firmware_installers_and_ask
     assert "Ask user before running one" in rule
 
 
+def test_acc_cli_135_one_rule_of_the_skill_says_that_the_devices_panel_lists_a_run_and_that_the_user_can_stop_it():
+    """ACC-CLI-135 one rule of the skill states that the Devices panel of the lab lists a tool started under `run --` and that the user can stop it there."""
+    rules = REPOSITORY_COPY.read_text().split("## Rules", 1)[1]
+    lines = [line for line in rules.splitlines() if "user can stop it there" in line]
+
+    assert len(lines) == 1, f"{len(lines)} rules of the skill say that the user can stop a run"
+    (rule,) = lines
+    assert "under `run --`" in rule
+    assert "Devices panel of the lab (if no sidebar has the panel: menu View, item Show Devices Panel) lists it" in rule
+
+
+def test_acc_cli_146_the_skill_has_one_rule_for_shell_and_does_not_hold_the_old_line():
+    """ACC-CLI-146 the skill does not hold `run -- "$SHELL"` nor the variable in that form, and one rule says that `shell` is a device shell for a person and that an agent starts each tool under `run --`."""
+    skill = REPOSITORY_COPY.read_text()
+    lines = [line for line in skill.split("## Rules", 1)[1].splitlines() if "`shell`" in line]
+
+    assert "$SHELL" not in skill and 'run -- "' not in skill
+    assert len(lines) == 1, f"{len(lines)} rules of the skill name the command shell"
+    (rule,) = lines
+    assert "device shell for a person at a terminal" in rule
+    assert "Agent starts each tool under `run --`" in rule
+
+
 def test_acc_cli_126_the_wheel_installs_the_firmware_installers_beside_the_skill():
     """ACC-CLI-126 pyproject.toml maps resources/envs into the folder of the installed skill, and the installed files are the repository's, the installers executable."""
     shared = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())[

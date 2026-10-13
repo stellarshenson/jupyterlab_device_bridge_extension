@@ -11,6 +11,7 @@ import { ServerConnection } from '@jupyterlab/services';
 import { DeviceBridgeModel, GrantError } from '../model';
 import type {
   IDeviceRequest,
+  IRunRecord,
   ISerialDefaults,
   ISerialRecord,
   IUsbRecord,
@@ -47,6 +48,19 @@ const NO_GESTURE = new DOMException(
   'Must be handling a user gesture to show a permission request.',
   'SecurityError'
 );
+/** A terminal shell that runs with the shim, and an upload that names its device. */
+const SHELL_RUN: IRunRecord = {
+  pid: 4242,
+  program: 'bash',
+  command: '/bin/bash',
+  device: null
+};
+const UPLOAD_RUN: IRunRecord = {
+  pid: 4250,
+  program: 'avrdude',
+  command: `avrdude -c arduino -p atmega328p -P /run/devices/${UNO_NAME}`,
+  device: UNO_NAME
+};
 /** Default serial settings of a lab; each value differs from profile monitor. */
 const DEFAULTS: ISerialDefaults = {
   baudRate: 9600,
@@ -230,6 +244,77 @@ describe('DeviceBridgeModel: what it reports', () => {
 
     expect(model.requests).toEqual([PROBE_REQUEST]);
     expect(requests).toEqual([[PROBE_REQUEST]]);
+  });
+
+  it('ACC-PANEL-131 the runs arrive from the server after the welcome and on every change, each time with their signal', async () => {
+    const { model, server } = lab({
+      prepare: prepared => {
+        prepared.running.push(SHELL_RUN);
+      }
+    });
+    const runs = emitted(model.runsChanged);
+
+    // Before the server answered the model has no run, and reading it does not fail.
+    expect(model.runs).toEqual([]);
+    await tick();
+
+    expect(model.runs).toEqual([SHELL_RUN]);
+    expect(runs).toEqual([[SHELL_RUN]]);
+
+    server.running.push(UPLOAD_RUN);
+    server.pushRuns();
+    await tick();
+    expect(model.runs).toEqual([SHELL_RUN, UPLOAD_RUN]);
+
+    server.running.length = 0;
+    server.pushRuns();
+    await tick();
+    expect(model.runs).toEqual([]);
+    expect(runs).toEqual([[SHELL_RUN], [SHELL_RUN, UPLOAD_RUN], []]);
+  });
+
+  it('ACC-PANEL-131 while the WebSocket is closed the model reports no run, with the signal, and the runs come again when the server answers', async () => {
+    const { model, server } = await connectedLab({
+      prepare: prepared => {
+        prepared.running.push(SHELL_RUN);
+      }
+    });
+    const runs = emitted(model.runsChanged);
+    expect(model.runs).toEqual([SHELL_RUN]);
+
+    server.accepting = false;
+    server.drop();
+
+    expect(model.runs).toEqual([]);
+    expect(runs).toEqual([[]]);
+
+    // The worker connects again after 0.5 s, and the server lists its runs.
+    server.accepting = true;
+    await tick(500);
+
+    expect(model.runs).toEqual([SHELL_RUN]);
+    expect(runs).toEqual([[], [SHELL_RUN]]);
+  });
+
+  it('ACC-PANEL-138 the model passes each activity message of the worker on with its signal, once per message and with the devices of that message', async () => {
+    const port = new SimSerialPort(UNO);
+    port.echo = false;
+    const { model, server } = await connectedLab({ ports: [port] });
+    const activity = emitted(model.activity);
+
+    // An open port without traffic: the worker posts nothing.
+    await tick(1000);
+    expect(activity).toEqual([]);
+
+    port.receive([1, 2, 3]);
+    await tick(50);
+    server.sendData(1, [9]);
+    await tick(50);
+
+    expect(activity).toEqual([
+      [{ name: UNO_NAME, rx: true, tx: false }],
+      [{ name: UNO_NAME, rx: false, tx: true }]
+    ]);
   });
 
   it('ACC-SERIAL-20 while the WebSocket is closed the model reports no device, no request and no round trip', async () => {
@@ -634,6 +719,38 @@ describe('DeviceBridgeModel: attach, detach, forget, profile', () => {
     await expect(
       model.setProfile(UNO_NAME, { profile: 'nope' })
     ).rejects.toThrow('Unknown profile nope');
+  });
+});
+
+describe('DeviceBridgeModel: runs', () => {
+  it('ACC-PANEL-133 stopRun sends DELETE to runs/<pid> with no body and takes the answer 204, which has none', async () => {
+    const { model, fetch } = await connectedLab();
+    fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(model.stopRun(4242)).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [request] = fetch.mock.calls[0] as unknown as [Request];
+    expect(request.method).toBe('DELETE');
+    // The lab adds a query to a request that must not come from a cache.
+    expect(request.url.split('?')[0]).toBe(
+      'http://lab.test/jupyterlab-device-bridge-extension/runs/4242'
+    );
+    expect(await request.text()).toBe('');
+  });
+
+  it('ACC-PANEL-133 a stop that the server refuses rejects with the message of the server', async () => {
+    const { model, fetch } = await connectedLab();
+    const refusal = {
+      error: { code: 'unknown-run', message: 'No run has the pid 4242' }
+    };
+    fetch.mockResolvedValueOnce(
+      new Response(JSON.stringify(refusal), { status: 404 })
+    );
+
+    await expect(model.stopRun(4242)).rejects.toThrow(
+      'No run has the pid 4242'
+    );
   });
 });
 

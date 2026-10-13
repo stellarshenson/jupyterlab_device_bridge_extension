@@ -18,16 +18,19 @@ import type {
   IDeviceRequest,
   IProfile,
   IProfileChange,
+  IRunRecord,
   ISerialRecord
 } from '../protocol';
 import { createWorker, workerMain } from '../worker';
 import {
+  BULK_ENDPOINT,
   SimScope,
   SimSerial,
   SimSerialPort,
   SimServer,
   SimUsb,
-  SimUsbDevice
+  SimUsbDevice,
+  toBase64
 } from './sim';
 
 jest.mock('@jupyterlab/apputils', () => ({
@@ -64,6 +67,19 @@ const PROBE_REQUEST: IDeviceRequest = {
   reason: 'flash the board',
   program: 'pyocd'
 };
+/** A terminal shell that runs with the shim, and an upload that names its device. */
+const SHELL_RUN: IRunRecord = {
+  pid: 4242,
+  program: 'bash',
+  command: '/bin/bash',
+  device: null
+};
+const UPLOAD_RUN: IRunRecord = {
+  pid: 4250,
+  program: 'avrdude',
+  command: `avrdude -c arduino -p atmega328p -b 115200 -P /run/devices/${UNO_NAME} -U flash:w:firmware.hex:i`,
+  device: UNO_NAME
+};
 /** A serial port that another tab holds, as the server lists it. */
 const HELD: ISerialRecord = {
   name: UNO_NAME,
@@ -91,6 +107,10 @@ interface ILab {
   changes: IProfileChange[];
   /** How the server answers a profile change; it accepts unless a test says otherwise. */
   answer: (change: IProfileChange) => Response;
+  /** The method and the path of every stop of a run the page sent to the server, in order. */
+  stops: string[];
+  /** How the server answers the stop of a run; with 204 unless a test says otherwise. */
+  stopAnswer: () => Response;
   fetch: jest.Mock;
   model: DeviceBridgeModel;
   panel: DeviceBridgePanel;
@@ -99,6 +119,8 @@ interface ILab {
     connectUsb: jest.Mock;
     grantRequest: jest.Mock;
     openTerminal: jest.Mock;
+    startRun: jest.Mock;
+    showRunInfo: jest.Mock;
   };
 }
 
@@ -123,8 +145,8 @@ function setInterface(name: 'serial' | 'usb', value?: object): void {
   }
 }
 
-/** A lab page with the panel in the document, after the server answered. */
-async function lab(options: ILabOptions = {}): Promise<ILab> {
+/** A lab page with the panel in the document, before the worker sent the page a message. */
+function newLab(options: ILabOptions = {}): ILab {
   const interfaces = options.interfaces || ['serial', 'usb'];
   const server = new SimServer();
   const serial = new SimSerial(...(options.ports || []));
@@ -144,8 +166,15 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     options.prepare(server);
   }
   const changes: IProfileChange[] = [];
+  const stops: string[] = [];
   // The lab always calls fetch with a Request object.
   const fetch = jest.fn(async (request: RequestInfo) => {
+    const { method, url } = request as Request;
+    // The stop of a run is the one call of the panel without a body.
+    if (method === 'DELETE') {
+      stops.push(`${method} ${new URL(url).pathname}`);
+      return all.stopAnswer();
+    }
     const change = JSON.parse(
       await (request as Request).text()
     ) as IProfileChange;
@@ -163,7 +192,9 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     connectSerial: jest.fn(),
     connectUsb: jest.fn(),
     grantRequest: jest.fn(),
-    openTerminal: jest.fn()
+    openTerminal: jest.fn(),
+    startRun: jest.fn(),
+    showRunInfo: jest.fn()
   };
   const panel = new DeviceBridgePanel({ model, ...handlers });
   Widget.attach(panel, document.body);
@@ -173,11 +204,19 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     usb,
     changes,
     answer: () => new Response('{}', { status: 200 }),
+    stops,
+    stopAnswer: () => new Response(null, { status: 204 }),
     fetch,
     model,
     panel,
     handlers
   };
+  return all;
+}
+
+/** A lab page with the panel in the document, after the server answered. */
+async function lab(options: ILabOptions = {}): Promise<ILab> {
+  const all = newLab(options);
   await tick();
   return all;
 }
@@ -308,6 +347,34 @@ describe('the stylesheet', () => {
     expect(css).toContain('.jp-DeviceBridgePanel ');
     expect(css).toContain('.jp-DeviceBridgeStatus ');
   });
+
+  it('ACC-PANEL-138 the stylesheet draws a lamp that is not lit as a circle with a border and a background, and a lit lamp with another background, each a JupyterLab variable', () => {
+    /** The declarations of the one rule with exactly this selector. */
+    const rule = (selector: string): Record<string, string> => {
+      const found = css.split('}').filter(
+        // What stands before the brace is the selector of the rule.
+        text => text.split('{')[0].trim() === selector
+      );
+      expect(found).toHaveLength(1);
+      const values: Record<string, string> = {};
+      for (const part of found[0].split('{')[1].split(';')) {
+        const [property, ...value] = part.split(':');
+        if (value.length > 0) {
+          values[property.trim()] = value.join(':').trim();
+        }
+      }
+      return values;
+    };
+    const unlit = rule('.jp-DeviceBridgePanel-lamp::before');
+    const lit = rule('.jp-DeviceBridgePanel-lamp[data-lit]::before');
+
+    expect(unlit['border-radius']).toBe('50%');
+    expect(unlit.width).toBe(unlit.height);
+    expect(unlit.border).toMatch(/^1px solid var\(--jp-[\w-]+\)$/);
+    expect(unlit.background).toMatch(/^var\(--jp-[\w-]+\)$/);
+    expect(lit.background).toMatch(/^var\(--jp-[\w-]+\)$/);
+    expect(lit.background).not.toBe(unlit.background);
+  });
 });
 
 describe('DeviceBridgePanel: the device rows', () => {
@@ -407,9 +474,9 @@ describe('DeviceBridgePanel: the device rows', () => {
         all.panel.node.querySelectorAll<HTMLElement>('[data-device]'),
         node => node.dataset.device!
       );
-    const empty = one(all.panel.node, '.jp-DeviceBridgePanel-empty');
-    const count = (): string | null =>
-      text(one(all.panel.node, '[data-section="devices"]'), 'count');
+    const section = one(all.panel.node, '[data-section="devices"]');
+    const empty = one(section, '.jp-DeviceBridgePanel-empty');
+    const count = (): string | null => text(section, 'count');
 
     expect(rows()).toEqual([]);
     expect(empty.hidden).toBe(false);
@@ -513,6 +580,374 @@ describe('DeviceBridgePanel: the device rows', () => {
     expect(row(all, UNO_NAME)).toBe(serialRow);
     expect(one<HTMLDetailsElement>(serialRow, 'details')).toBe(editor);
     expect(editor.open).toBe(true);
+  });
+});
+
+describe('DeviceBridgePanel: the activity lamps of a device row', () => {
+  /** How long one event keeps a lamp lit, as docs/design.md says. */
+  const LIT_MS = 80;
+  /** How often the worker looks at its byte counters, as docs/design.md says. */
+  const LOOK_MS = 50;
+  /** A serial port that another tab holds, with counters above zero in its first table. */
+  const BUSY: ISerialRecord = { ...HELD, rx: 500, tx: 300 };
+
+  const lamp = (root: ParentNode, name: 'tx' | 'rx'): HTMLElement =>
+    one(root, `[data-lamp="${name}"]`);
+
+  /** Whether the lamps TX and RX of a row are lit, in this order. */
+  const lit = (root: ParentNode): boolean[] => [
+    lamp(root, 'tx').hasAttribute('data-lit'),
+    lamp(root, 'rx').hasAttribute('data-lit')
+  ];
+
+  /** A lab whose server lists the port `BUSY` in the first table it sends. */
+  const busyLab = (): Promise<ILab> =>
+    lab({
+      prepare: server => {
+        server.table.serial.push({ ...BUSY });
+      }
+    });
+
+  /**
+   * A lab with one port that this tab holds. The port does not echo, so the two
+   * directions move bytes apart. The worker looks at its counters 50 ms after the
+   * port opened, and then every 50 ms.
+   */
+  async function ownLab(): Promise<ILab & { port: SimSerialPort }> {
+    const port = new SimSerialPort(UNO);
+    port.echo = false;
+    return { ...(await lab({ ports: [port] })), port };
+  }
+
+  /** Set counters of the first serial record and send the device table. */
+  async function count(
+    all: ILab,
+    counters: { rx?: number; tx?: number }
+  ): Promise<void> {
+    Object.assign(all.server.table.serial[0], counters);
+    all.server.push();
+    await tick();
+  }
+
+  /** One USB operation on the probe, as the server sends it for a program. */
+  function probe(all: ILab, op: 'open' | 'out' | 'in'): void {
+    if (op === 'open') {
+      all.server.command({ type: 'usb', name: PROBE_NAME, op });
+    } else if (op === 'out') {
+      all.server.command({
+        type: 'usb',
+        name: PROBE_NAME,
+        op: 'transfer-out',
+        args: { endpointNumber: BULK_ENDPOINT, data: toBase64([1, 2, 3]) }
+      });
+    } else {
+      all.server.command({
+        type: 'usb',
+        name: PROBE_NAME,
+        op: 'transfer-in',
+        args: { endpointNumber: BULK_ENDPOINT, length: 64 }
+      });
+    }
+  }
+
+  it('ACC-PANEL-138 a serial row and a USB row each have the lamps TX and RX with their labels and titles, and the first table of a row lights nothing', async () => {
+    const all = await lab({
+      devices: [new SimUsbDevice()],
+      prepare: server => {
+        server.table.serial.push({ ...BUSY });
+      }
+    });
+
+    for (const name of [UNO_NAME, PROBE_NAME]) {
+      const deviceRow = row(all, name);
+      const lamps = deviceRow.querySelectorAll<HTMLElement>('[data-lamp]');
+
+      expect(Array.from(lamps, node => node.dataset.lamp)).toEqual([
+        'tx',
+        'rx'
+      ]);
+      expect(lamp(deviceRow, 'tx').textContent).toBe('TX');
+      expect(lamp(deviceRow, 'tx').title).toBe('bytes to the device');
+      expect(lamp(deviceRow, 'rx').textContent).toBe('RX');
+      expect(lamp(deviceRow, 'rx').title).toBe('bytes from the device');
+      expect(lit(deviceRow)).toEqual([false, false]);
+    }
+    // The first table of the serial row carried counters above zero.
+    expect(text(row(all, UNO_NAME), 'rx')).toBe('500');
+    expect(text(row(all, UNO_NAME), 'tx')).toBe('300');
+  });
+
+  it('ACC-PANEL-138 bytes of a port this tab holds light the lamp of their direction at the next look of the worker, for 80 ms', async () => {
+    const all = await ownLab();
+    const serialRow = row(all, UNO_NAME);
+
+    all.port.receive([1, 2, 3]);
+    await tick(LOOK_MS - 1);
+    expect(lit(serialRow)).toEqual([false, false]);
+    await tick(1);
+    expect(lit(serialRow)).toEqual([false, true]);
+
+    await tick(LIT_MS - 1);
+    expect(lit(serialRow)).toEqual([false, true]);
+    await tick(1);
+    expect(lit(serialRow)).toEqual([false, false]);
+
+    // Bytes that a tool writes: the server sends them, and the worker writes them.
+    all.server.sendData(1, [9, 9]);
+    await tick(LOOK_MS);
+    expect(all.port.written).toEqual([9, 9]);
+    expect(lit(serialRow)).toEqual([true, false]);
+    await tick(LIT_MS);
+    expect(lit(serialRow)).toEqual([false, false]);
+
+    // Bytes in both directions in one period light both lamps.
+    all.port.receive([4]);
+    all.server.sendData(1, [8]);
+    await tick(LOOK_MS);
+    expect(lit(serialRow)).toEqual([true, true]);
+    await tick(LIT_MS);
+    expect(lit(serialRow)).toEqual([false, false]);
+  });
+
+  it('ACC-PANEL-138 the lamps of a USB row this tab holds follow the transfers of the device', async () => {
+    const all = await lab({ devices: [new SimUsbDevice()] });
+    const usbRow = row(all, PROBE_NAME);
+
+    // The descriptors that the worker reads at the open are no traffic of a program.
+    probe(all, 'open');
+    await tick(LOOK_MS);
+    expect(lit(usbRow)).toEqual([false, false]);
+
+    probe(all, 'out');
+    await tick(LOOK_MS);
+    expect(lit(usbRow)).toEqual([true, false]);
+    await tick(LIT_MS);
+    expect(lit(usbRow)).toEqual([false, false]);
+
+    probe(all, 'in');
+    await tick(LOOK_MS);
+    expect(lit(usbRow)).toEqual([false, true]);
+  });
+
+  it('ACC-PANEL-138 an activity message lights the lamps of the row of the device it names, and of no other row', async () => {
+    const port = new SimSerialPort(UNO);
+    const all = await lab({ ports: [port], devices: [new SimUsbDevice()] });
+    probe(all, 'open');
+    await tick(LOOK_MS);
+
+    port.receive([1]);
+    await tick(LOOK_MS);
+    expect(lit(row(all, UNO_NAME))).toEqual([false, true]);
+    expect(lit(row(all, PROBE_NAME))).toEqual([false, false]);
+    await tick(LIT_MS);
+
+    probe(all, 'out');
+    await tick(LOOK_MS);
+    expect(lit(row(all, UNO_NAME))).toEqual([false, false]);
+    expect(lit(row(all, PROBE_NAME))).toEqual([true, false]);
+  });
+
+  it('ACC-PANEL-138 bursts 200 ms apart give single flashes: the lamp is lit for 80 ms after each burst and off until the next', async () => {
+    const all = await ownLab();
+    const serialRow = row(all, UNO_NAME);
+
+    for (let burst = 0; burst < 5; burst++) {
+      all.port.receive([burst, burst]);
+      await tick(LOOK_MS);
+      expect(lit(serialRow)).toEqual([false, true]);
+      await tick(LIT_MS - 1);
+      expect(lit(serialRow)).toEqual([false, true]);
+      await tick(1);
+      expect(lit(serialRow)).toEqual([false, false]);
+      await tick(200 - LOOK_MS - LIT_MS);
+      expect(lit(serialRow)).toEqual([false, false]);
+    }
+  });
+
+  it('ACC-PANEL-138 bytes in every 50 ms period give a steady light: the lamp stays lit until 80 ms after the last period with bytes', async () => {
+    const all = await ownLab();
+    const serialRow = row(all, UNO_NAME);
+
+    all.port.receive([0]);
+    await tick(LOOK_MS);
+    // One second of traffic, read every 25 ms.
+    for (let period = 1; period <= 20; period++) {
+      expect(lit(serialRow)).toEqual([false, true]);
+      all.port.receive([period]);
+      await tick(LOOK_MS / 2);
+      expect(lit(serialRow)).toEqual([false, true]);
+      await tick(LOOK_MS / 2);
+    }
+
+    await tick(LIT_MS - 1);
+    expect(lit(serialRow)).toEqual([false, true]);
+    await tick(1);
+    expect(lit(serialRow)).toEqual([false, false]);
+  });
+
+  it('ACC-PANEL-138 a table update with a larger counter lights nothing for a device this tab holds', async () => {
+    const all = await ownLab();
+    const serialRow = row(all, UNO_NAME);
+
+    all.port.receive([1, 2, 3]);
+    all.server.sendData(1, [9, 9]);
+    await tick(LOOK_MS + LIT_MS);
+    // The flash for these bytes is over, and the table still has the old counters.
+    expect(lit(serialRow)).toEqual([false, false]);
+    expect(text(serialRow, 'rx')).toBe('0');
+    expect(text(serialRow, 'tx')).toBe('0');
+
+    // The worker sends the counters once a second, and the server sends the table.
+    await tick(1000 - LOOK_MS - LIT_MS);
+    expect(text(serialRow, 'rx')).toBe('3');
+    expect(text(serialRow, 'tx')).toBe('2');
+    expect(lit(serialRow)).toEqual([false, false]);
+  });
+
+  it('ACC-PANEL-138 for a device another tab holds a larger rx counter lights the RX lamp for 80 ms and a larger tx counter the TX lamp, and the counter fields keep their digits', async () => {
+    const all = await busyLab();
+    const serialRow = row(all, UNO_NAME);
+
+    await count(all, { rx: 501 });
+    expect(lit(serialRow)).toEqual([false, true]);
+    expect(text(serialRow, 'rx')).toBe('501');
+    expect(text(serialRow, 'tx')).toBe('300');
+
+    await tick(LIT_MS - 1);
+    expect(lit(serialRow)).toEqual([false, true]);
+    await tick(1);
+    expect(lit(serialRow)).toEqual([false, false]);
+
+    await count(all, { tx: 364 });
+    expect(lit(serialRow)).toEqual([true, false]);
+    expect(text(serialRow, 'tx')).toBe('364');
+
+    await tick(LIT_MS - 1);
+    expect(lit(serialRow)).toEqual([true, false]);
+    await tick(1);
+    expect(lit(serialRow)).toEqual([false, false]);
+
+    // One table with both counters larger lights both lamps.
+    await count(all, { rx: 502, tx: 365 });
+    expect(lit(serialRow)).toEqual([true, true]);
+    await tick(LIT_MS);
+    expect(lit(serialRow)).toEqual([false, false]);
+  });
+
+  it('ACC-PANEL-138 for a device another tab holds an equal counter and a smaller counter light nothing, and the next counter above the one the row showed lights the lamp', async () => {
+    const all = await busyLab();
+    const serialRow = row(all, UNO_NAME);
+
+    // The same table again, as after a change of another device.
+    await count(all, {});
+    expect(lit(serialRow)).toEqual([false, false]);
+
+    // Smaller counters: the port was attached again and counts from zero.
+    await count(all, { rx: 400, tx: 0 });
+    expect(lit(serialRow)).toEqual([false, false]);
+    expect(text(serialRow, 'rx')).toBe('400');
+    expect(text(serialRow, 'tx')).toBe('0');
+
+    await count(all, { rx: 401 });
+    expect(lit(serialRow)).toEqual([false, true]);
+  });
+
+  it('ACC-PANEL-138 a second event that arrives while the lamp is lit keeps it lit for 80 ms from that event', async () => {
+    const all = await busyLab();
+    const serialRow = row(all, UNO_NAME);
+
+    await count(all, { rx: 501 });
+    await tick(50);
+    await count(all, { rx: 502 });
+
+    // 129 ms after the first update and 79 ms after the second.
+    await tick(LIT_MS - 1);
+    expect(lit(serialRow)).toEqual([false, true]);
+    await tick(1);
+    expect(lit(serialRow)).toEqual([false, false]);
+  });
+
+  it('ACC-PANEL-138 the timer of a lit lamp ends with its row: a row that left the table has no pending timer and is not touched 80 ms later', async () => {
+    const all = await busyLab();
+    const pending = jest.getTimerCount();
+    await count(all, { rx: 501 });
+    const rx = lamp(row(all, UNO_NAME), 'rx');
+
+    expect(rx.hasAttribute('data-lit')).toBe(true);
+    expect(jest.getTimerCount()).toBe(pending + 1);
+
+    // The other tab forgets the port: the server lists it no more.
+    all.server.table.serial.length = 0;
+    all.server.push();
+    await tick();
+
+    expect(rx.isConnected).toBe(false);
+    expect(jest.getTimerCount()).toBe(pending);
+    // A timer that still ran would take the attribute from the removed lamp.
+    await tick(LIT_MS);
+    expect(rx.hasAttribute('data-lit')).toBe(true);
+  });
+
+  it('ACC-PANEL-138 a row that left the table takes no activity message any more: later bytes of its device do not light its removed lamp', async () => {
+    const all = await ownLab();
+    let messages = 0;
+    all.model.activity.connect(() => messages++);
+    all.port.receive([1]);
+    await tick(LOOK_MS);
+    const rx = lamp(row(all, UNO_NAME), 'rx');
+    expect(rx.hasAttribute('data-lit')).toBe(true);
+    expect(messages).toBe(1);
+
+    // The WebSocket closes: the table is empty, and the port stays open in the worker.
+    all.server.accepting = false;
+    all.server.drop();
+    expect(rx.isConnected).toBe(false);
+    expect(all.port.isOpen).toBe(true);
+    await tick(LIT_MS);
+    rx.removeAttribute('data-lit');
+
+    all.port.receive([2]);
+    await tick(LOOK_MS);
+    expect(messages).toBe(2);
+    expect(rx.hasAttribute('data-lit')).toBe(false);
+  });
+
+  it('ACC-PANEL-138 the timers of the lit lamps end with the panel: a disposed panel has no pending timer, and its lamps are not touched 80 ms later and not lit by later activity', async () => {
+    const all = await lab({
+      devices: [new SimUsbDevice()],
+      prepare: server => {
+        server.table.serial.push({ ...BUSY });
+      }
+    });
+    let messages = 0;
+    all.model.activity.connect(() => messages++);
+    probe(all, 'open');
+    await tick();
+    const pending = jest.getTimerCount();
+    const serialRow = row(all, UNO_NAME);
+    const usbRow = row(all, PROBE_NAME);
+
+    // The probe of this tab is lit by the worker, the port of the other tab by its counters.
+    probe(all, 'out');
+    await tick(LOOK_MS);
+    await count(all, { rx: 501, tx: 301 });
+    expect(lit(serialRow)).toEqual([true, true]);
+    expect(lit(usbRow)).toEqual([true, false]);
+    expect(jest.getTimerCount()).toBe(pending + 3);
+
+    all.panel.dispose();
+
+    expect(serialRow.isConnected).toBe(false);
+    expect(jest.getTimerCount()).toBe(pending);
+    await tick(LIT_MS);
+    expect(lit(serialRow)).toEqual([true, true]);
+    expect(lit(usbRow)).toEqual([true, false]);
+
+    lamp(usbRow, 'tx').removeAttribute('data-lit');
+    probe(all, 'out');
+    await tick(LOOK_MS);
+    expect(messages).toBe(2);
+    expect(lit(usbRow)).toEqual([false, false]);
   });
 });
 
@@ -990,6 +1425,312 @@ describe('DeviceBridgePanel: buttons that go to the plugin', () => {
 
     expect(all.handlers.grantRequest.mock.calls).toEqual([['request-1']]);
     expect(all.usb.dialogs).toEqual([]);
+  });
+});
+
+describe('DeviceBridgePanel: the runs section', () => {
+  /** Make the server list these runs and no other, and tell the tab. */
+  async function run(all: ILab, ...runs: IRunRecord[]): Promise<void> {
+    all.server.running.splice(0, all.server.running.length, ...runs);
+    all.server.pushRuns();
+    await tick();
+  }
+
+  const runsSection = (all: ILab): HTMLElement =>
+    one(all.panel.node, '[data-section="runs"]');
+
+  const runRow = (all: ILab, pid: number): HTMLElement =>
+    one(all.panel.node, `[data-run="${pid}"]`);
+
+  /** The process ids of the run rows, in the order of the panel. */
+  const runRows = (all: ILab): Array<string | undefined> =>
+    Array.from(
+      all.panel.node.querySelectorAll<HTMLElement>('[data-run]'),
+      node => node.dataset.run
+    );
+
+  it('ACC-PANEL-131 the runs section has its title, the count of the runs and one row per run with program, process id, command line and device', async () => {
+    const all = await lab();
+    const section = runsSection(all);
+
+    expect(one(section, '.jp-DeviceBridgePanel-sectionTitle').textContent).toBe(
+      'Device shell and tools'
+    );
+
+    await run(all, SHELL_RUN, UPLOAD_RUN);
+
+    expect(text(section, 'count')).toBe('(2)');
+    expect(runRows(all)).toEqual(['4242', '4250']);
+    expect(section.querySelectorAll('[data-run]')).toHaveLength(2);
+
+    const shell = runRow(all, 4242);
+    expect(text(shell, 'program')).toBe('bash');
+    expect(text(shell, 'pid')).toBe('pid 4242');
+    expect(text(shell, 'command')).toBe('/bin/bash');
+    expect(text(shell, 'device')).toBe('no device');
+
+    const upload = runRow(all, 4250);
+    expect(text(upload, 'program')).toBe('avrdude');
+    expect(text(upload, 'pid')).toBe('pid 4250');
+    expect(text(upload, 'command')).toBe(UPLOAD_RUN.command);
+    expect(text(upload, 'device')).toBe(UNO_NAME);
+  });
+
+  it('ACC-PANEL-131 the device of a run row is the device the run names, else the serial port that the process of the run holds, else no device', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+    const unnamed = { ...UPLOAD_RUN, device: null };
+    await run(all, SHELL_RUN, unnamed);
+    const upload = runRow(all, 4250);
+
+    expect(text(upload, 'device')).toBe('no device');
+
+    // The tool opens the virtual device. The server sends the device table for that,
+    // and no list of the runs.
+    all.server.table.serial[0].holder = { pid: 4250, name: 'avrdude' };
+    all.server.push();
+    await tick();
+
+    expect(text(upload, 'device')).toBe(UNO_NAME);
+    expect(text(runRow(all, 4242), 'device')).toBe('no device');
+
+    // The device a run names comes before the port its process holds.
+    await run(all, SHELL_RUN, { ...UPLOAD_RUN, device: 'tty-0403-6001' });
+    expect(text(upload, 'device')).toBe('tty-0403-6001');
+
+    // The tool closes the virtual device.
+    await run(all, SHELL_RUN, unnamed);
+    expect(text(upload, 'device')).toBe(UNO_NAME);
+    all.server.table.serial[0].holder = null;
+    all.server.push();
+    await tick();
+
+    expect(text(upload, 'device')).toBe('no device');
+  });
+
+  it('ACC-PANEL-131 with no run the section shows its empty text and the count 0, also before the page got a list of the runs', async () => {
+    const all = newLab({
+      prepare: server => {
+        server.running.push(SHELL_RUN);
+      }
+    });
+    const section = runsSection(all);
+    const empty = field(section, 'empty');
+
+    // The worker has sent the server nothing yet, so the page has no message of the server.
+    expect(all.server.received).toEqual([]);
+    expect(all.model.tabId).toBeNull();
+    expect(section.hidden).toBe(false);
+    expect(empty.hidden).toBe(false);
+    expect(empty.textContent).toBe(
+      'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
+    );
+    expect(text(section, 'count')).toBe('(0)');
+    expect(runRows(all)).toEqual([]);
+
+    // The server answers: it lists one run.
+    await tick();
+
+    expect(empty.hidden).toBe(true);
+    expect(text(section, 'count')).toBe('(1)');
+    expect(runRows(all)).toEqual(['4242']);
+
+    await run(all);
+
+    expect(empty.hidden).toBe(false);
+    expect(text(section, 'count')).toBe('(0)');
+    expect(runRows(all)).toEqual([]);
+  });
+
+  it('ACC-PANEL-131 while the WebSocket is closed the section shows no run and no Info button, and the run has its row again when the server lists it', async () => {
+    const all = await lab();
+    await run(all, SHELL_RUN);
+    const section = runsSection(all);
+    expect(runRows(all)).toEqual(['4242']);
+
+    all.server.accepting = false;
+    all.server.drop();
+
+    expect(runRows(all)).toEqual([]);
+    expect(text(section, 'count')).toBe('(0)');
+    expect(field(section, 'empty').hidden).toBe(false);
+    expect(action(section, 'run-info').hidden).toBe(true);
+
+    // The worker connects again after 0.5 s, and the server lists its runs.
+    all.server.accepting = true;
+    await tick(500);
+
+    expect(runRows(all)).toEqual(['4242']);
+    expect(field(section, 'empty').hidden).toBe(true);
+    expect(action(section, 'run-info').hidden).toBe(false);
+  });
+
+  it('ACC-PANEL-131 a run that ended leaves the section, a run that lives keeps its row, and a row shows the newest record of its process id', async () => {
+    const all = await lab();
+    await run(all, SHELL_RUN, UPLOAD_RUN);
+    const shell = runRow(all, 4242);
+
+    await run(all, SHELL_RUN);
+
+    expect(runRows(all)).toEqual(['4242']);
+    expect(runRow(all, 4242) === shell).toBe(true);
+
+    // A second registration of a process id replaces the record.
+    await run(all, { ...SHELL_RUN, program: 'zsh', command: '/bin/zsh -l' });
+
+    expect(runRow(all, 4242) === shell).toBe(true);
+    expect(text(shell, 'program')).toBe('zsh');
+    expect(text(shell, 'command')).toBe('/bin/zsh -l');
+  });
+
+  it('ACC-PANEL-140 the runs section is titled Device shell and tools, its Start button has the title Open a device shell, and its empty text names a device shell; the buttons keep the labels Start and Info', async () => {
+    const all = await lab();
+    const section = runsSection(all);
+
+    expect(one(section, '.jp-DeviceBridgePanel-sectionTitle').textContent).toBe(
+      'Device shell and tools'
+    );
+    expect(action(section, 'start-run').title).toBe('Open a device shell');
+    expect(action(section, 'start-run').textContent).toBe('Start');
+    expect(action(section, 'run-info').textContent).toBe('Info');
+    expect(field(section, 'empty').textContent).toBe(
+      'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
+    );
+  });
+
+  it('ACC-PANEL-132 the Start button of the runs section calls the start handler of the plugin once per click, with a run and without one', async () => {
+    const all = await lab();
+    const start = action(runsSection(all), 'start-run');
+
+    expect(start.textContent).toBe('Start');
+    expect(start.hidden).toBe(false);
+    start.click();
+    expect(all.handlers.startRun).toHaveBeenCalledTimes(1);
+
+    await run(all, SHELL_RUN);
+    expect(start.hidden).toBe(false);
+    start.click();
+
+    expect(all.handlers.startRun).toHaveBeenCalledTimes(2);
+    expect(all.handlers.showRunInfo).not.toHaveBeenCalled();
+    expect(all.stops).toEqual([]);
+  });
+
+  it('ACC-PANEL-133 Stop asks for a second click, then sends DELETE runs/<pid>, and the row stays until the server lists the run no more', async () => {
+    const all = await lab();
+    await run(all, SHELL_RUN, UPLOAD_RUN);
+    const stop = action(runRow(all, 4250), 'stop-run');
+
+    expect(stop.textContent).toBe('Stop');
+    expect(stop.classList.contains('jp-mod-confirm')).toBe(false);
+
+    stop.click();
+    await tick();
+    expect(stop.textContent).toBe('Confirm stop');
+    expect(stop.classList.contains('jp-mod-confirm')).toBe(true);
+    expect(all.stops).toEqual([]);
+
+    // The second click of a double click comes too early and does nothing.
+    stop.click();
+    await tick(ARM_DELAY_MS - 1);
+    expect(all.stops).toEqual([]);
+    expect(stop.textContent).toBe('Confirm stop');
+
+    await tick(1);
+    stop.click();
+    await tick();
+    expect(all.stops).toEqual([
+      'DELETE /jupyterlab-device-bridge-extension/runs/4250'
+    ]);
+    expect(stop.textContent).toBe('Stop');
+    expect(emit).not.toHaveBeenCalled();
+    // The server answered 204 after it sent the signal: the process still ends.
+    expect(runRows(all)).toEqual(['4242', '4250']);
+
+    // The server saw the process gone.
+    await run(all, SHELL_RUN);
+    expect(runRows(all)).toEqual(['4242']);
+    expect(all.stops).toHaveLength(1);
+  });
+
+  it('ACC-PANEL-133 an armed Stop stays armed while the server sends the device table and the runs again, and goes back to Stop when the focus leaves it', async () => {
+    const port = new SimSerialPort(UNO);
+    const all = await lab({ ports: [port] });
+    await run(all, UPLOAD_RUN);
+    const stop = action(runRow(all, 4250), 'stop-run');
+
+    stop.focus();
+    stop.click();
+    // The byte counters of the port change during an upload: the table comes again.
+    port.receive([1, 2, 3]);
+    await tick(1000);
+    all.server.pushRuns();
+    await tick();
+
+    expect(text(row(all, UNO_NAME), 'rx')).toBe('3');
+    expect(action(runRow(all, 4250), 'stop-run') === stop).toBe(true);
+    expect(stop.textContent).toBe('Confirm stop');
+
+    stop.blur();
+    expect(stop.textContent).toBe('Stop');
+    stop.click();
+    await tick();
+    expect(stop.textContent).toBe('Confirm stop');
+    expect(all.stops).toEqual([]);
+
+    await tick(ARM_DELAY_MS);
+    stop.click();
+    await tick();
+    expect(all.stops).toEqual([
+      'DELETE /jupyterlab-device-bridge-extension/runs/4250'
+    ]);
+  });
+
+  it('ACC-PANEL-133 a stop that the server refuses raises a notification that stays, with the process id first and the reason of the server last', async () => {
+    const all = await lab();
+    await run(all, UPLOAD_RUN);
+    const refusal = {
+      error: { code: 'unknown-run', message: 'No run has the pid 4250' }
+    };
+    all.stopAnswer = () =>
+      new Response(JSON.stringify(refusal), { status: 404 });
+    const stop = action(runRow(all, 4250), 'stop-run');
+
+    stop.click();
+    await tick(ARM_DELAY_MS);
+    stop.click();
+    await tick();
+
+    expect(all.stops).toHaveLength(1);
+    expect(emit.mock.calls).toEqual([
+      [
+        'The program with pid 4250 was not stopped: No run has the pid 4250',
+        'error',
+        { autoClose: false }
+      ]
+    ]);
+    expect(runRows(all)).toEqual(['4250']);
+  });
+
+  it('ACC-PANEL-134 the Info button is hidden while no run exists, also before the page got a list of the runs; with a run it is shown and calls the info handler of the plugin', async () => {
+    const all = newLab();
+    const info = action(runsSection(all), 'run-info');
+
+    expect(info.textContent).toBe('Info');
+    expect(all.server.received).toEqual([]);
+    expect(info.hidden).toBe(true);
+
+    await tick();
+    expect(all.model.tabId).toBe('tab-1');
+    expect(info.hidden).toBe(true);
+
+    await run(all, SHELL_RUN);
+    expect(info.hidden).toBe(false);
+    info.click();
+    expect(all.handlers.showRunInfo).toHaveBeenCalledTimes(1);
+    expect(all.handlers.startRun).not.toHaveBeenCalled();
+
+    await run(all);
+    expect(info.hidden).toBe(true);
   });
 });
 

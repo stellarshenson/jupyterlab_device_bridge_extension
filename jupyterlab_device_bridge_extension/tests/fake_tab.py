@@ -32,7 +32,7 @@ What a test reads:
   binary frame is `{"type": "data", "name": ..., "data": bytes}`
 - `got(kind)`: the events of one type, for example `got("serial-configure")`
 - `written(name)`: every byte written to a serial port, from data frames and `serial-write`
-- `welcome`, `devices`, `requests`: the last message of that type
+- `welcome`, `devices`, `requests`, `runs`: the last message of that type
 - `settings[name]`, `signals[name]`: what a serial port is open with and its control lines
 - `usb_calls`: `(op, args)` of every USB operation; `usb_opened`; `loopback`
 
@@ -122,6 +122,7 @@ class FakeTab:
         self.welcome: dict | None = None
         self.devices: dict | None = None
         self.requests: dict | None = None
+        self.runs: dict | None = None
         self.settings: dict[str, dict] = {}
         self.signals: dict[str, dict] = {}
         self.usb_calls: list[tuple[str, dict]] = []
@@ -136,7 +137,7 @@ class FakeTab:
 
     @classmethod
     async def connect(cls, url: str, headers: dict, tab_id: str = "tab-1") -> "FakeTab":
-        """Open the bridge's WebSocket, say hello and wait for the welcome.
+        """Open the bridge's WebSocket, say hello and wait for the welcome and the three lists after it.
 
         Args:
             url: `ws://127.0.0.1:<port><base_url>jupyterlab-device-bridge-extension/ws`.
@@ -147,7 +148,7 @@ class FakeTab:
         tab = cls(await tornado.websocket.websocket_connect(request), tab_id)
         tab._reader = asyncio.ensure_future(tab._read())
         await tab.send({"type": "hello", "tabId": tab_id, "serial": True, "usb": True})
-        await tab.until(lambda: tab.welcome and tab.devices and tab.requests)
+        await tab.until(lambda: tab.welcome and tab.devices and tab.requests and tab.runs)
         return tab
 
     # ------------------------------------------------------------- what the tab does
@@ -250,7 +251,7 @@ class FakeTab:
             message = json.loads(frame)
             self.events.append(message)
             kind = message["type"]
-            if kind in ("welcome", "devices", "requests"):
+            if kind in ("welcome", "devices", "requests", "runs"):
                 setattr(self, kind, message)
             elif kind == "claimed":
                 await self._on_claimed(message)

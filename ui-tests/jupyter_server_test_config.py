@@ -26,6 +26,16 @@ c.ServerApp.port = port
 # sweep-scratch.js removes the same path.
 c.DeviceBridge.device_dir = f"/tmp/jupyterlab-device-galata-{port}"
 
+# The shell command of the lab's terminals is pinned. A device shell is that command with
+# the preload shim, and the suite must run the same shell on every machine: a machine
+# can set a start script of its own for its terminals. The specs read it with GET status.
+c.ServerApp.terminado_settings = {"shell_command": ["/bin/bash"]}
+
+# The server of a real lab can run without the variable SHELL, and its terminals then
+# have none (DEF-PANEL-15). The shell that starts the suite has the variable, so it is
+# removed from the environment of the test server and with it from every terminal.
+os.environ.pop("SHELL", None)
+
 # The GalaxaHub message-of-the-day extension, where installed, opens its own tab at lab
 # start. Galata waits for the Launcher tab to be active, so every test would time out in
 # page.goto(). Ignored where the extension is not installed.

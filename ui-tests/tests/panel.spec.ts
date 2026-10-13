@@ -1,49 +1,72 @@
 import { expect, IJupyterLabPageFixture, test } from '@jupyterlab/galata';
 import type { Locator, Page } from '@playwright/test';
+import * as fs from 'fs';
+import { basename, join } from 'path';
 
 import {
   action,
   addSerial,
   addUsb,
   api,
+  closeTerminals,
+  DEVICE_DIR,
+  endProcesses,
   field,
   forget,
   getSetting,
+  IChild,
   ISimCall,
   ISimSerial,
+  lampEvents,
   openLab,
   openSecondTab,
   PANEL,
   PANEL_SHOWN,
   PANEL_TAB,
+  recordLamps,
   ROUND_TRIP,
   row,
   runCli,
+  runPids,
+  runRow,
+  runsSection,
   serialRecord,
   setSetting,
   simArgs,
   simDialogs,
   simSend,
   simSerial,
+  simStream,
   simulate,
   simUsb,
   simWritten,
+  startCli,
   startTool,
   STATUS_ITEM,
   terminalText,
   toast,
+  toolCommand,
   toolReport,
-  usbRecord
+  usbRecord,
+  whileRunning
 } from './helpers';
 
 /**
  * Functional tests of the Devices panel, the status bar item, the commands, the
  * Devices menu and the option that shows the panel: the real lab, worker and server,
- * with simulated devices in the browser (device-sim.js). Ids in the titles are the
- * criteria of docs/acc-crit-device-bridge.md.
+ * with simulated devices in the browser (device-sim.js). The tests of the runs start
+ * the real `jupyterlab-device run` as a child process and the real device shell in a
+ * terminal of the lab. Ids in the titles are the criteria of
+ * docs/acc-crit-device-bridge.md and the defects of docs/defects-device-bridge.md.
  */
 
-test.use({ autoGoto: false });
+// The lab starts a device shell and the serial terminal through the basic terminal
+// extension: the server makes the terminal, and the lab opens it by its name. Galata
+// answers the list of the terminals itself, from the terminals a page made, and the lab
+// would not find that terminal in it. So the terminals API is the real one here, and
+// each test ends the terminals of the server itself.
+test.use({ autoGoto: false, terminals: null });
+test.afterEach(closeTerminals);
 
 const MENU = '#jp-mainmenu-devices';
 const VIEW_MENU = '#jp-mainmenu-view';
@@ -51,8 +74,19 @@ const COMMANDS = {
   connectSerial: ['device-bridge:connect-serial', 'Connect Serial Port'],
   connectUsb: ['device-bridge:connect-usb', 'Connect USB Device'],
   openTerminal: ['device-bridge:open-terminal', 'Serial Terminal'],
+  startRun: ['device-bridge:start-run', 'Device Shell'],
   showPanel: ['device-bridge:show-panel', 'Show Devices Panel']
 };
+/** How long a test waits for the lamps to show a stream of the port, which takes 1.2 s at most. */
+const LAMP_WAIT = 5000;
+/**
+ * How long one flash of a lamp can take, in ms. A lamp is lit for 80 ms from each
+ * event, and a timer of the page fires late under load.
+ */
+const FLASH_MIN = 60;
+const FLASH_MAX = 250;
+/** A terminal of the lab starts the command line, which starts a shell or a terminal program. */
+const TERMINAL_START = 45000;
 /** The class the lab gives a menu item whose command is toggled: the item shows a check mark. */
 const TOGGLED = /(^|\s)lm-mod-toggled(\s|$)/;
 
@@ -103,6 +137,13 @@ async function viewItemMarked(page: Page): Promise<boolean> {
   await expect(page.locator(VIEW_MENU)).toHaveCount(0);
   return marked;
 }
+
+/** Each change of a lamp of the row of a device so far: the lamp and whether it is lit after it. */
+const lampChanges = async (
+  page: Page,
+  device: string
+): Promise<Array<[string, boolean]>> =>
+  (await lampEvents(page, device)).map(event => [event.lamp, event.lit]);
 
 /** Run a command as the user does: search its label in the command palette and click it. */
 async function runFromPalette(
@@ -296,6 +337,200 @@ test.describe('Devices panel', () => {
     await expect(field(portRow, 'tx')).toHaveText('4');
   });
 
+  test('ACC-PANEL-138 bursts of bytes from the port 400 ms apart flash the RX lamp once each, bytes to the port flash the TX lamp, and a larger counter in the device table lights no lamp of a port this tab holds', async ({
+    page
+  }) => {
+    // The port does not send back what it gets: each direction has traffic of its own.
+    const port = simSerial({ echo: false });
+    await recordLamps(page);
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    const lamp = (name: string): Locator =>
+      portRow.locator(`[data-lamp="${name}"]`);
+    const changes = (): Promise<Array<[string, boolean]>> =>
+      lampChanges(page, port.name);
+
+    await expect(lamp('tx')).toHaveText('TX');
+    await expect(lamp('tx')).toHaveAttribute('title', 'bytes to the device');
+    await expect(lamp('rx')).toHaveText('RX');
+    await expect(lamp('rx')).toHaveAttribute('title', 'bytes from the device');
+    // The row is new: no lamp was lit, and none is.
+    expect(await changes()).toEqual([]);
+    await expect(portRow.locator('[data-lit]')).toHaveCount(0);
+
+    // 3 bursts of 3 bytes from the port: the RX lamp flashes 3 times, the TX lamp stays off.
+    await simStream(page, port.id, [1, 2, 3], 3, 400);
+    const flashes: Array<[string, boolean]> = [
+      ['rx', true],
+      ['rx', false],
+      ['rx', true],
+      ['rx', false],
+      ['rx', true],
+      ['rx', false]
+    ];
+    await expect.poll(changes, { timeout: LAMP_WAIT }).toEqual(flashes);
+    // The server gets the byte counters once a second. The device table that carries
+    // the larger counter lights nothing.
+    await expect(field(portRow, 'rx')).toHaveText('9', { timeout: ROUND_TRIP });
+    expect(await changes()).toEqual(flashes);
+
+    // 4 bytes to the port through the server: the TX lamp flashes once.
+    const written = await api('POST', `serial/${port.name}/write`, {
+      data: Buffer.from('ping').toString('base64')
+    });
+    expect(written.status).toBe(200);
+    flashes.push(['tx', true], ['tx', false]);
+    await expect.poll(changes, { timeout: LAMP_WAIT }).toEqual(flashes);
+    await expect(field(portRow, 'tx')).toHaveText('4', { timeout: ROUND_TRIP });
+    expect(await changes()).toEqual(flashes);
+
+    const events = await lampEvents(page, port.name);
+    for (let index = 0; index < events.length; index += 2) {
+      const [on, off] = [events[index], events[index + 1]];
+      expect(off.at - on.at).toBeGreaterThan(FLASH_MIN);
+      expect(off.at - on.at).toBeLessThan(FLASH_MAX);
+      // The circle of a lit lamp has another colour than the circle of a lamp that is off.
+      expect(on.colour).not.toBe(off.colour);
+    }
+    // The RX lamp was off between its flashes: about 320 ms each time.
+    for (const next of [2, 4]) {
+      expect(events[next].at - events[next - 1].at).toBeGreaterThan(100);
+    }
+    await expect(portRow.locator('[data-lit]')).toHaveCount(0);
+  });
+
+  test('ACC-PANEL-138 a steady stream of bytes from the port keeps the RX lamp lit without a break until the stream ends', async ({
+    page
+  }) => {
+    const port = simSerial({ echo: false });
+    await recordLamps(page);
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    const steady: Array<[string, boolean]> = [
+      ['rx', true],
+      ['rx', false]
+    ];
+
+    // One byte every 20 ms for 1.2 s: each 50 ms period of the worker has bytes.
+    await simStream(page, port.id, [0x55], 60, 20);
+
+    await expect
+      .poll(() => lampChanges(page, port.name), { timeout: LAMP_WAIT })
+      .toEqual(steady);
+    // Lit from the first period with bytes until 80 ms after the last one.
+    const [on, off] = await lampEvents(page, port.name);
+    expect(off.at - on.at).toBeGreaterThan(1000);
+    expect(off.at - on.at).toBeLessThan(2500);
+    // The device table with the 60 bytes counted comes within a second, and it lights nothing.
+    await expect(field(portRow, 'rx')).toHaveText('60', {
+      timeout: ROUND_TRIP
+    });
+    expect(await lampChanges(page, port.name)).toEqual(steady);
+    await expect(portRow.locator('[data-lit]')).toHaveCount(0);
+  });
+
+  test('ACC-PANEL-138 the row of a port that another tab holds appears with no lit lamp, and a larger counter in the device table flashes its RX lamp', async ({
+    page,
+    baseURL
+  }) => {
+    const port = simSerial({ echo: false });
+    // In every page of the browser, so in the second tab too.
+    await recordLamps(page.context());
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    await simSend(page, port.id, [1, 2, 3]);
+    await expect
+      .poll(async () => (await serialRecord(port.name)).rx, {
+        timeout: ROUND_TRIP
+      })
+      .toBe(3);
+
+    // A second tab: the first device table it gets has this port with 3 bytes counted.
+    const second = await openSecondTab(page, baseURL, { serial: [port] });
+    const other = row(second, port.name);
+    await expect(other).toHaveAttribute('data-owner', 'other', {
+      timeout: ROUND_TRIP
+    });
+    await expect(field(other, 'rx')).toHaveText('3');
+    expect(await lampChanges(second, port.name)).toEqual([]);
+    await expect(other.locator('[data-lit]')).toHaveCount(0);
+
+    // The port sends 2 bytes more. The second tab moves no byte of this port: it
+    // learns of them from the device table, and that table flashes the lamp.
+    await simSend(page, port.id, [4, 5]);
+    await expect(field(other, 'rx')).toHaveText('5', { timeout: ROUND_TRIP });
+    await expect
+      .poll(() => lampChanges(second, port.name), { timeout: LAMP_WAIT })
+      .toEqual([
+        ['rx', true],
+        ['rx', false]
+      ]);
+    const [on, off] = await lampEvents(second, port.name);
+    expect(off.at - on.at).toBeGreaterThan(FLASH_MIN);
+    expect(off.at - on.at).toBeLessThan(FLASH_MAX);
+    await second.close();
+  });
+
+  test('DEF-PANEL-14 at the width the lab gives the left sidebar no section title of the panel is cut, and the devices section reads Serial and USB devices', async ({
+    page
+  }) => {
+    // A port and a device request of a program: each of the three sections is shown.
+    // The dialog of the request offers no device, which ends the request as denied.
+    const port = simSerial();
+    const reason = `read the titles beside ${port.name}`;
+    await openLab(page, {
+      serial: [port],
+      refuse: { usb: { name: 'NotFoundError', message: 'No device selected.' } }
+    });
+    await addSerial(page, port);
+    const request = startCli([
+      ...['request', 'usb', '--reason', reason, '--timeout', '40']
+    ]);
+    request.process.stdin!.end();
+    const requestRow = page
+      .locator(`${PANEL} [data-section="requests"] [data-request]`)
+      .filter({ hasText: reason });
+    await whileRunning(
+      request,
+      expect(requestRow).toBeVisible({ timeout: ROUND_TRIP })
+    );
+
+    const panel = page.locator(PANEL);
+    expect((await panel.boundingBox())!.width).toBe(250);
+    /** The title of each section that is shown: its text, and its width as needed and as given. */
+    const titles = await panel.locator('[data-section]').evaluateAll(sections =>
+      sections
+        .filter(section => (section as HTMLElement).offsetParent !== null)
+        .map(section => {
+          const title = section.querySelector<HTMLElement>(
+            '.jp-DeviceBridgePanel-sectionTitle'
+          )!;
+          return {
+            section: section.getAttribute('data-section'),
+            text: title.textContent,
+            needs: title.scrollWidth,
+            has: title.clientWidth
+          };
+        })
+    );
+    expect(titles.map(title => [title.section, title.text]).sort()).toEqual([
+      ['devices', 'Serial and USB devices'],
+      ['requests', 'Requests of programs'],
+      ['runs', 'Device shell and tools']
+    ]);
+    for (const title of titles) {
+      // A title that is cut needs more width than it has.
+      expect(title.has, title.text ?? '').toBeGreaterThan(0);
+      expect(title.needs, title.text ?? '').toBeLessThanOrEqual(title.has);
+    }
+
+    await action(requestRow, 'grant').click();
+    expect((await request.done).code).toBe(1);
+    await expect(requestRow).toHaveCount(0);
+  });
+
   test('ACC-PANEL-66 the status bar item is visible while a device is attached and absent when none is', async ({
     page
   }) => {
@@ -421,6 +656,469 @@ test.describe('Devices panel', () => {
   });
 });
 
+test.describe('Device shell and tools', () => {
+  test.use({ mockSettings: PANEL_SHOWN });
+
+  const EMPTY =
+    'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.';
+  /** The line of the banner of a device shell that was started while no device was attached. */
+  const NO_DEVICE = 'No device is attached.';
+  /**
+   * The lines of the banner about the upload tools. The banner names the known tools
+   * that the PATH of the test server holds, which is the PATH of the suite.
+   */
+  const TOOLS = ['avrdude', 'stm32flash', 'esptool'].filter(tool =>
+    (process.env.PATH ?? '').split(':').some(folder => {
+      try {
+        fs.accessSync(join(folder, tool), fs.constants.X_OK);
+        return fs.statSync(join(folder, tool)).isFile();
+      } catch {
+        return false;
+      }
+    })
+  );
+  const TOOL_LINES =
+    TOOLS.length > 0
+      ? [`For ${TOOLS.join(', ')}.`]
+      : [
+          'No avrdude, stm32flash or esptool on PATH.',
+          'Install one to make use of the device shell.'
+        ];
+
+  /** The processes the test started. Each is ended when the test ends, also when it failed. */
+  let started: number[];
+  test.beforeEach(() => {
+    started = [];
+  });
+  // The terminals are ended before this, and a shell in a terminal ends with it.
+  test.afterEach(() => endProcesses(started));
+
+  /** Start `jupyterlab-device run` as a child process of the test, as an agent starts a tool. */
+  function startRun(args: string[]): IChild & { pid: number } {
+    const child = startCli(['run', ...args]);
+    const pid = child.process.pid as number;
+    started.push(pid);
+    return { ...child, pid };
+  }
+
+  /** The row of a run of a child process, once the panel lists it. */
+  async function listed(page: Page, run: IChild & { pid: number }) {
+    const rowOfRun = runRow(page, run.pid);
+    await whileRunning(
+      run,
+      expect(rowOfRun).toBeVisible({ timeout: ROUND_TRIP })
+    );
+    return rowOfRun;
+  }
+
+  /**
+   * The colour that the terminal draws the banner in, read from the diamond that starts
+   * its second line, as 0xRRGGBB; null when the terminal has no such colour for it.
+   */
+  const bannerColour = (page: Page): Promise<number | null> =>
+    page.evaluate(() => {
+      for (const widget of (window as any).jupyterapp.shell.widgets('main')) {
+        const buffer = widget.content?._term?.buffer.active;
+        for (let index = 0; buffer && index < buffer.length; index++) {
+          const row = buffer.getLine(index);
+          const at = row.translateToString(true).indexOf('◆');
+          if (at >= 0) {
+            const cell = row.getCell(at);
+            return cell.isFgRGB() ? cell.getFgColor() : null;
+          }
+        }
+      }
+      return null;
+    });
+
+  /**
+   * The text of the banner in the lab terminal: its lines from the name line, which
+   * starts with the diamond, to the rule that ends the banner.
+   */
+  const bannerText = async (page: Page): Promise<string[]> => {
+    const lines = (await terminalText(page)).split('\n');
+    const first = lines.findIndex(line => line.startsWith('◆'));
+    const rule = lines.findIndex(
+      (line, index) => index > first && /^─+$/.test(line)
+    );
+    return first < 0 || rule < 0 ? [] : lines.slice(first, rule);
+  };
+
+  /**
+   * Start a device shell in a terminal of the lab and wait until the panel lists it.
+   *
+   * @param start What the user does: the click or the command that opens the terminal
+   * @param devices The lines of the banner for the attached devices
+   * @returns The process id of the run, which is the shell
+   */
+  async function startShell(
+    page: Page,
+    start: () => Promise<void>,
+    devices = [NO_DEVICE]
+  ): Promise<number> {
+    const rows = runsSection(page).locator('[data-run]');
+    // The server ends the run of an earlier test within a second after its process ended.
+    await expect.poll(runPids).toEqual([]);
+    await expect(rows).toHaveCount(0);
+    await expect(page.locator('.jp-Terminal')).toHaveCount(0);
+
+    await start();
+
+    await expect(page.locator('.jp-Terminal')).toHaveCount(1, {
+      timeout: TERMINAL_START
+    });
+    // The banner is whole when the terminal shows the rule that ends it.
+    await expect
+      .poll(async () => (await bannerText(page)).length, {
+        timeout: TERMINAL_START
+      })
+      .toBeGreaterThan(0);
+    // The first text of the terminal is the banner: the two rows of its wave, then its
+    // name line. The lab typed no command line: the terminal started the shell itself.
+    const lines = (await terminalText(page)).split('\n');
+    expect(lines[0] + lines[1]).toMatch(/^[─┐┌└┘ ]+$/);
+    expect(lines[2]).toMatch(/^◆ /);
+    expect(lines.join('\n')).not.toContain('jupyterlab-device shell');
+    // The banner is pale cyan (ACC-SHIM-136). It names a device shell (ACC-PANEL-140),
+    // the upload tools on PATH (ACC-SHIM-142), the attached devices and no other
+    // device (ACC-SHIM-139) and two commands (ACC-CLI-141). No line holds the word shim.
+    expect(await bannerColour(page)).toBe(0x9fe0ee);
+    const banner = await bannerText(page);
+    expect(banner).toEqual([
+      expect.stringMatching(/^◆ jupyterlab-device +device shell$/),
+      '',
+      ...TOOL_LINES,
+      ...devices,
+      '',
+      expect.stringMatching(/^jupyterlab-device list +all devices$/),
+      expect.stringMatching(/^jupyterlab-device --help +example commands$/)
+    ]);
+    expect(banner.join('\n')).not.toMatch(/shim/i);
+
+    // The shell registered itself as a run under its own name, not under the name of
+    // the shell command of the lab.
+    await expect(rows).toHaveCount(1, { timeout: ROUND_TRIP });
+    const pid = Number(await rows.getAttribute('data-run'));
+    started.push(pid);
+    const shellRow = runRow(page, pid);
+    await expect(field(shellRow, 'program')).toHaveText('jupyterlab-device');
+    await expect(field(shellRow, 'pid')).toHaveText(`pid ${pid}`);
+    await expect(field(shellRow, 'command')).toHaveText(
+      'jupyterlab-device shell'
+    );
+    await expect(field(shellRow, 'device')).toHaveText('no device');
+    return pid;
+  }
+
+  test('ACC-PANEL-131 a program started with jupyterlab-device run is listed with its program, process id and command line, and with the serial port it holds as its device', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const section = runsSection(page);
+    await expect(section).toContainText('Device shell and tools');
+    await expect(field(section, 'count')).toHaveText('(0)');
+    await expect(field(section, 'empty')).toBeVisible();
+    await expect(field(section, 'empty')).toHaveText(EMPTY);
+
+    // A tool that opens the virtual device and holds it until a line arrives on stdin.
+    const { path: devicePath } = await serialRecord(port.name);
+    const command = toolCommand(devicePath, ['--hold']);
+    const run = startRun(['--', ...command]);
+
+    const rowOfRun = await listed(page, run);
+    await expect(field(rowOfRun, 'program')).toHaveText(basename(command[0]));
+    await expect(field(rowOfRun, 'pid')).toHaveText(`pid ${run.pid}`);
+    // The server cuts a command line after 200 characters.
+    await expect(field(rowOfRun, 'command')).toHaveText(
+      command.join(' ').slice(0, 200)
+    );
+    // The run named no device: its device is the port that its process holds.
+    await expect
+      .poll(async () => (await serialRecord(port.name)).holder?.pid, {
+        timeout: ROUND_TRIP
+      })
+      .toBe(run.pid);
+    await expect(field(rowOfRun, 'device')).toHaveText(port.name, {
+      timeout: ROUND_TRIP
+    });
+    await expect(field(section, 'count')).toHaveText('(1)');
+    await expect(field(section, 'empty')).toBeHidden();
+
+    // The tool ends: its row leaves the panel.
+    run.process.stdin!.write('\n');
+    expect((await run.done).code).toBe(0);
+    await expect(rowOfRun).toHaveCount(0, { timeout: ROUND_TRIP });
+    await expect(field(section, 'count')).toHaveText('(0)');
+    await expect(field(section, 'empty')).toBeVisible();
+  });
+
+  test('ACC-PANEL-131 every run is listed: a run with --device shows that device, and a run without it whose process holds no port shows no device', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+
+    // `cat` runs until its standard input ends, and it opens no device.
+    const plain = startRun(['--', 'cat']);
+    const named = startRun(['--device', port.name, '--', 'cat', '-u']);
+
+    const plainRow = await listed(page, plain);
+    const namedRow = await listed(page, named);
+    await expect(field(runsSection(page), 'count')).toHaveText('(2)');
+    await expect(field(plainRow, 'program')).toHaveText('cat');
+    await expect(field(plainRow, 'command')).toHaveText('cat');
+    await expect(field(plainRow, 'device')).toHaveText('no device');
+    await expect(field(namedRow, 'program')).toHaveText('cat');
+    await expect(field(namedRow, 'command')).toHaveText('cat -u');
+    await expect(field(namedRow, 'device')).toHaveText(port.name);
+    expect((await serialRecord(port.name)).holder).toBeNull();
+  });
+
+  test('ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, with no command line typed; the panel lists the shell as the run jupyterlab-device shell; a tool started in the shell passes its DTR and RTS calls to the port; exit closes the tab, and the run leaves the panel', async ({
+    page
+  }) => {
+    const port = simSerial();
+    const device = simUsb();
+    await openLab(page, { serial: [port], usb: [device] });
+    await addSerial(page, port);
+    await addUsb(page, device);
+    const { path: devicePath } = await serialRecord(port.name);
+    const start = action(runsSection(page), 'start-run');
+    await expect(start).toHaveText('Start');
+
+    // The banner lists what is attached: the port with its path, then the USB device.
+    const pid = await startShell(page, () => start.click(), [
+      `(1) ${devicePath} (COM)`,
+      `(2) ${device.name} (USB)`
+    ]);
+
+    // The user types the command line of a tool into that terminal.
+    const tool = toolCommand(devicePath, [
+      ...['--signals', 'dtr=1', 'rts=1'],
+      ...['--write', '00', '--read', '1']
+    ]);
+    await page.locator('.jp-Terminal').click();
+    await page.keyboard.type(tool.join(' '));
+    await page.keyboard.press('Enter');
+
+    // The tool has the shim: its two calls reach the port, and neither is refused.
+    await expect
+      .poll(() => simArgs(page, port.id, 'setSignals'), {
+        timeout: ROUND_TRIP
+      })
+      .toEqual([
+        [{ dataTerminalReady: true, requestToSend: false }],
+        [{ dataTerminalReady: true, requestToSend: true }]
+      ]);
+    await expect
+      .poll(() => terminalText(page), { timeout: ROUND_TRIP })
+      .toContain('{"signals": ["ok", "ok"], "read": "00"}');
+    // The tool is another process than the shell, so the run of the shell has no device.
+    await expect(field(runRow(page, pid), 'device')).toHaveText('no device');
+
+    // The user leaves the shell: the tab of the terminal closes, the shell has ended
+    // and its run leaves the panel.
+    await page.keyboard.type('exit');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.jp-Terminal')).toHaveCount(0, {
+      timeout: ROUND_TRIP
+    });
+    await expect(runRow(page, pid)).toHaveCount(0, { timeout: ROUND_TRIP });
+    await expect.poll(() => fs.existsSync(`/proc/${pid}`)).toBe(false);
+  });
+
+  test('DEF-PANEL-15 with no variable SHELL in the environment of the server and of its terminals, Start gives a running shell with the banner', async ({
+    page
+  }) => {
+    // The shell command of the lab's terminals is the one that the config of the test
+    // server pins, whatever the machine sets for its own lab.
+    expect((await api('GET', 'status')).body.shell).toEqual(['/bin/bash']);
+    await openLab(page, {});
+
+    const pid = await startShell(page, () =>
+      action(runsSection(page), 'start-run').click()
+    );
+
+    // The process of the run is that shell command, started with the preload shim and
+    // without the variable: the server has none, so its terminals have none.
+    const words = (file: string): string[] =>
+      fs
+        .readFileSync(`/proc/${pid}/${file}`, 'utf8')
+        .split('\0')
+        .filter(Boolean);
+    expect(words('cmdline')).toEqual(['/bin/bash']);
+    const variables = words('environ').map(entry => entry.split('=')[0]);
+    expect(variables).toContain('LD_PRELOAD');
+    expect(variables).not.toContain('SHELL');
+    // The shell runs: it answers a command.
+    await page.locator('.jp-Terminal').click();
+    await page.keyboard.type('echo answer-$((6*7))');
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(() => terminalText(page), { timeout: ROUND_TRIP })
+      .toMatch(/^answer-42$/m);
+  });
+
+  test('ACC-PANEL-147 the command Device Shell of the command palette opens a terminal tab with the banner of a device shell and no command line typed, and the panel lists the shell as the run jupyterlab-device shell', async ({
+    page
+  }) => {
+    await openLab(page, {});
+
+    await startShell(page, () => runFromPalette(page, COMMANDS.startRun));
+  });
+
+  test('ACC-PANEL-133 the second click on Stop ends the program of a run and its row leaves the panel, and the first click ends nothing', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const run = startRun(['--', 'cat']);
+    const rowOfRun = await listed(page, run);
+    const stop = action(rowOfRun, 'stop-run');
+    await expect(stop).toHaveText('Stop');
+
+    await stop.click();
+    await expect(stop).toHaveText('Confirm stop');
+    // The second click counts 500 ms after the first. Until then nothing is stopped.
+    await page.waitForTimeout(600);
+    expect(await runPids()).toContain(run.pid);
+    expect(run.process.exitCode).toBeNull();
+    expect(run.process.signalCode).toBeNull();
+    await stop.click();
+
+    // The server sent SIGTERM, which ends `cat`.
+    await expect
+      .poll(() => run.process.signalCode, { timeout: ROUND_TRIP })
+      .toBe('SIGTERM');
+    await expect(rowOfRun).toHaveCount(0, { timeout: ROUND_TRIP });
+    await expect(field(runsSection(page), 'count')).toHaveText('(0)');
+  });
+
+  test('ACC-PANEL-133 Stop ends the device shell that Start started in a terminal of the lab, and its row leaves the panel', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const pid = await startShell(page, () =>
+      action(runsSection(page), 'start-run').click()
+    );
+    expect(fs.existsSync(`/proc/${pid}`)).toBe(true);
+    const stop = action(runRow(page, pid), 'stop-run');
+
+    await stop.click();
+    await expect(stop).toHaveText('Confirm stop');
+    await page.waitForTimeout(600);
+    await stop.click();
+
+    // An interactive shell ignores SIGTERM, and the server ends it by force 3 s later.
+    await expect(runRow(page, pid)).toHaveCount(0, { timeout: ROUND_TRIP });
+    await expect.poll(() => fs.existsSync(`/proc/${pid}`)).toBe(false);
+    await expect(field(runsSection(page), 'count')).toHaveText('(0)');
+  });
+
+  test('ACC-PANEL-134 the Info button is hidden while no run exists; with a run its dialog lists the attached devices, the serial port with its path, and shows the three example lines with that path', async ({
+    page
+  }) => {
+    const port = simSerial();
+    const device = simUsb();
+    await openLab(page, { serial: [port], usb: [device] });
+    await addSerial(page, port);
+    await addUsb(page, device);
+    const section = runsSection(page);
+    const info = action(section, 'run-info');
+    // The button is in the section, as Start is, and it is not shown.
+    await expect(action(section, 'start-run')).toBeVisible();
+    await expect(info).toHaveCount(1);
+    await expect(info).toBeHidden();
+
+    const run = startRun(['--', 'cat']);
+    await whileRunning(run, expect(info).toBeVisible({ timeout: ROUND_TRIP }));
+    await expect(info).toHaveText('Info');
+    await info.click();
+
+    const dialog = page.locator('.jp-Dialog');
+    await expect(dialog.locator('.jp-Dialog-header')).toHaveText(
+      'How to connect a tool'
+    );
+    const body = dialog.locator('.jp-DeviceBridgeInfo');
+    const { path: devicePath } = await serialRecord(port.name);
+    expect(devicePath).toBe(`${DEVICE_DIR}/${port.name}`);
+    await expect(body.locator('[data-info-device]')).toHaveCount(2);
+    const serialLine = body.locator(`[data-info-device="${port.name}"]`);
+    await expect(field(serialLine, 'name')).toHaveText(port.name);
+    await expect(field(serialLine, 'path')).toHaveText(devicePath);
+    // A USB device has no path: a program reaches it through the bridge.
+    const usbLine = body.locator(`[data-info-device="${device.name}"]`);
+    await expect(field(usbLine, 'name')).toHaveText(device.name);
+    await expect(field(usbLine, 'path')).toHaveCount(0);
+    const example = (tool: string): Locator =>
+      body.locator(`[data-example="${tool}"]`);
+    await expect(example('avrdude')).toHaveText(
+      `avrdude -c arduino -p atmega328p -b 115200 -P ${devicePath} -U flash:w:firmware.hex:i`
+    );
+    await expect(example('stm32flash')).toHaveText(
+      `stm32flash -b 115200 -w firmware.bin -v -g 0x0 ${devicePath}`
+    );
+    await expect(example('esptool')).toHaveText(
+      `esptool --port ${devicePath} write-flash 0x0 firmware.bin`
+    );
+    await expect(field(body, 'note')).toHaveText(
+      'Type a line in a device shell. The button Start of the section Device shell and tools opens one. No line was run against a board.'
+    );
+
+    await dialog.getByRole('button', { name: 'Close' }).click();
+    await expect(dialog).toHaveCount(0);
+
+    // The run ends: no run exists, and the button is hidden again.
+    run.process.stdin!.end();
+    expect((await run.done).code).toBe(0);
+    await expect(info).toBeHidden({ timeout: ROUND_TRIP });
+  });
+
+  test.describe('from the Devices menu', () => {
+    // The menu bar moves the entries that do not fit into one overflow entry.
+    test.use({ viewport: { width: 1920, height: 1080 } });
+
+    test('ACC-PANEL-140 the Devices menu has the entry Device Shell, which opens a lab terminal whose banner names a device shell, and no text of the menu, of the panel and of the banner holds the word shim', async ({
+      page
+    }) => {
+      await openLab(page, {});
+      await setShowMenu(page, true);
+      await menuBarEntry(page, 'Devices').click();
+      const labels = page.locator(`${MENU} .lm-Menu-itemLabel`);
+      await expect(labels).toHaveCount(5);
+      await expect(labels.nth(3)).toHaveText('Device Shell');
+      expect((await labels.allTextContents()).join('\n')).not.toMatch(/shim/i);
+      const section = runsSection(page);
+      await expect(section).toContainText('Device shell and tools');
+      await expect(action(section, 'start-run')).toHaveAttribute(
+        'title',
+        'Open a device shell'
+      );
+
+      // The helper reads the banner: its name line ends with `device shell`, and no
+      // line of it holds the word shim.
+      await startShell(page, () =>
+        page
+          .locator(`${MENU} .lm-Menu-item`)
+          .filter({ hasText: 'Device Shell' })
+          .click()
+      );
+
+      // The panel lists the shell now. None of its texts and tooltips holds the word.
+      const panel = page.locator(PANEL);
+      const tooltips = await panel
+        .locator('[title]')
+        .evaluateAll(nodes => nodes.map(node => node.getAttribute('title')));
+      expect(tooltips.length).toBeGreaterThan(0);
+      expect(`${await panel.innerText()}\n${tooltips.join('\n')}`).not.toMatch(
+        /shim/i
+      );
+    });
+  });
+});
+
 test.describe('Devices menu', () => {
   // The menu bar moves the entries that do not fit into one overflow entry.
   test.use({
@@ -455,6 +1153,7 @@ test.describe('Devices menu', () => {
       'Connect Serial Port',
       'Connect USB Device',
       'Serial Terminal',
+      'Device Shell',
       'Show Devices Panel'
     ]);
     await page
@@ -791,10 +1490,11 @@ test.describe('Show Devices Panel', () => {
       ['usb', 'granted']
     ]);
 
-    // Serial Terminal: a lab terminal opens and gets the command line for the port.
+    // Serial Terminal: a terminal of the lab runs the terminal program on the port.
     await runFromPalette(page, COMMANDS.openTerminal);
+    const { path: devicePath } = await serialRecord(port.name);
     await expect
-      .poll(() => terminalText(page), { timeout: ROUND_TRIP })
-      .toContain(`jupyterlab-device terminal ${port.name}`);
+      .poll(() => terminalText(page), { timeout: TERMINAL_START })
+      .toContain(`--- Miniterm on ${devicePath}`);
   });
 });
