@@ -22,7 +22,13 @@ jobs:
       - name: Check Release
         uses: jupyter-server/jupyter_releaser/.github/actions/check-release@v2
         with:
-
+          # publish-assets uploads the wheel to a test server (pypiserver) inside the
+          # runner. That server keeps at most 102400 bytes of one upload in memory and
+          # answers "400 Bad Request" (MultipartError: Memory limit reached) above it.
+          # The README is the long description of the wheel. With the wheel of 0.6.24
+          # the server took a description of up to 46516 characters; the README has
+          # 48875. The upload to PyPI itself has no such limit.
+          steps_to_skip: "publish-assets"
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Distributions
