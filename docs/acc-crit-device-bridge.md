@@ -136,6 +136,23 @@ Attach a port, its virtual serial device, bytes both ways, baud rate, tool open 
   - test-tags: UNIT
   - log: 2026-10-12T00:27:42Z @kj added
   - log: 2026-10-12T07:49:03Z @kj closed: verified
+- [x] `ACC-SERIAL-127` **Device directory from the config file only** - MEDIUM; the setting DeviceBridge.device_dir of the Jupyter config file is the only way to name the device directory; the variable JUPYTERLAB_DEVICE_DIR has no effect; an empty setting gives /run/devices when the server's user owns it or can make it, else /tmp/jupyterlab-device-<uid>, which the server logs
+  - evidence: make test on the change (logs/device-dir-make-test.log): 357 pytest tests pass, 7 of them for ACC-SERIAL-127 in test_manager.py and test_vserial.py; four temporary code changes (variable read again, /run always, /tmp always, owner not checked) each made at least one of them fail
+  - related: ACC-SEC-95
+  - test: pytest test_manager.py: the setting wins and the variable is ignored; test_vserial.py: /run/devices owned, missing under a writable parent, and not usable
+  - test-tags: UNIT
+  - mechanism: 2026-10-12T19:55:34Z @kj default_device_dir in vserial.py chooses the directory once at server start; the directory itself is still made at the first serial claim
+  - log: 2026-10-12T19:55:34Z @kj added
+  - log: 2026-10-12T20:00:29Z @kj closed
+  - log: 2026-10-12T20:00:38Z @kj reopened; evidence retired: make test on the change: 356 pytest tests pass, 7 of them for ACC-SERIAL-127 in test_manager.py and test_vserial.py; four temporary code changes (variable read again, /run always, /tmp always, owner not checked) each made at least one of them fail; reason: the evidence named 356 pytest tests; the run shows 357
+  - log: 2026-10-12T20:00:38Z @kj closed
+- [x] `ACC-SERIAL-152` **Devices left by an earlier run are removed** - HIGH; a server that starts removes from its device directory the virtual serial devices that an earlier server left there when it ended without its exit hook: every link to a pty slave and every shim socket; a directory that another live server holds is left as it is
+  - related: DEF-SERIAL-5, DEF-SERIAL-10 - the defects that this removal fixed
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-4.log), 439 pytest tests pass: the 6 tests test_acc_serial_152_* in test_manager.py pass: link and socket of a killed server are removed at start, other symlinks, files and a locked directory stay; they carried the id ACC-SEC-97 before
+  - test: pytest test_manager.py: a directory with the link and the socket of a killed server holds neither after a new manager; with the lock held by another process nothing is removed and the log says why
+  - test-tags: UNIT
+  - log: 2026-10-13T10:15:29Z @kj added
+  - log: 2026-10-13T10:18:07Z @kj closed
 
 ## Port profiles `PROF`
 
@@ -278,6 +295,60 @@ A tool's own DTR, RTS and parity calls passed to the bridge
   - test-tags: UNIT
   - log: 2026-10-12T00:27:43Z @kj added
   - log: 2026-10-12T07:49:05Z @kj closed: verified
+- [x] `ACC-SHIM-128` **Run reports itself to the server** - HIGH; jupyterlab-device run posts its process id, its command line and its --device to the server before it becomes the tool; when the server refuses or does not answer, the tool still starts
+  - evidence: make test on build 0.6.21 (logs/runs-make-test.log), 398 pytest tests pass: the 3 tests test_acc_shim_128_* in test_cli.py pass; the executor made each fail with a temporary change (no registration, the parent's process id posted, another timeout) and restored the code
+  - test: pytest test_cli.py: run against the test server registers the process id it then becomes; with the route refusing, the tool still starts
+  - test-tags: UNIT
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T20:49:51Z @kj closed
+- [x] `ACC-SHIM-129` **Server lists the live runs** - HIGH; GET runs and the WebSocket message runs hold every registered run whose process lives; a run leaves the list within 2 s after its process ends; a process id that is dead or belongs to another user is refused with 400
+  - evidence: make test on build 0.6.21 (logs/runs-make-test.log), 398 pytest tests pass: 18 cases of test_acc_shim_129_* in test_manager.py pass, 1 is skipped because this container has no process of another user; the owner check is tested with a patched uid; temporary changes made each fail
+  - test: pytest test_manager.py: register a child process, read the list and the message, end the child, read again; register a dead process id
+  - test-tags: UNIT
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T20:49:52Z @kj closed
+- [x] `ACC-SHIM-130` **Stop ends a run** - HIGH; DELETE runs/<pid> sends SIGTERM to the process of the run, and SIGKILL after 3 s when it still lives; an unknown process id answers 404; a process id that another process took since the run began is not signalled
+  - evidence: make test on build 0.6.21 (logs/runs-make-test.log), 398 pytest tests pass: the 6 tests test_acc_shim_130_* in test_manager.py pass, one with the real 3 s before SIGKILL; temporary changes (no SIGTERM, no SIGKILL, no start-time check, killpg) made each fail
+  - test: pytest test_manager.py: stop a child that ends on SIGTERM; stop a child that ignores SIGTERM; delete an unknown process id
+  - test-tags: UNIT
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T20:49:52Z @kj closed
+- [x] `ACC-SHIM-136` **Wrapped shell prints a banner** - MEDIUM; jupyterlab-device run prints a banner in pale cyan that names the shell with the shim, before it becomes the tool, when the tool is the user's shell ($SHELL) without arguments and standard output is a terminal; for any other tool or output it prints nothing
+  - overridden-by: ACC-SHIM-145
+  - evidence: make test on build 0.6.21 (logs/runs-make-test.log), 398 pytest tests pass: the 8 cases of test_acc_shim_136_* in test_cli.py pass on a real pty; 18 temporary changes (no flush, no colour, banner for every tool, no terminal check) made each fail; header line set to the 54 columns of the signal lines
+  - test: pytest test_cli.py: run with $SHELL on a pty prints the banner with its colour code; run with another tool on a pty, and with $SHELL on a pipe, print no banner
+  - test-tags: UNIT
+  - log: 2026-10-12T20:12:46Z @kj added
+  - log: 2026-10-12T20:49:52Z @kj closed
+- [x] `ACC-SHIM-139` **Banner names the tools and lists the devices** - MEDIUM; the banner of the wrapped shell has, under its name line, one line that names the tools it serves and one numbered line for each device that is attached without an error: the path of a serial device, the name of a USB device; with none it says so
+  - evidence: make test on build 0.6.23 (logs/runs-make-test-3.log), 417 pytest tests pass: the 8 cases of test_acc_shim_139_* in test_cli.py pass on a real pty; temporary changes (name for path, USB first, no kind, a detached device listed, the devices read for every run) made each fail
+  - related: ACC-SHIM-136 - the banner of that criterion; its text between the name line and the rule is replaced
+  - test: pytest test_cli.py on a pty: one attached serial port and one USB device give lines (1) and (2); a detached port and a port with an error are not listed; with no device the line says so
+  - test-tags: UNIT
+  - log: 2026-10-13T07:50:36Z @kj added
+  - log: 2026-10-13T08:22:04Z @kj closed
+  - log: 2026-10-13T08:22:11Z @kj reopened; evidence retired: make test on build 0.6.23 (logs/runs-make-test-3.log), 417 pytest tests pass: the 7 cases of test_acc_shim_139_* in test_cli.py pass on a real pty; temporary changes (name for path, USB first, no kind, a detached device listed, the devices read for every run) made each fail; reason: the evidence named 7 cases; the run shows 8
+  - log: 2026-10-13T08:22:11Z @kj closed
+- [x] `ACC-SHIM-142` **Banner says to install a tool when none is installed** - MEDIUM; the tool line of the banner names the known upload tools found on PATH (avrdude, stm32flash, esptool); with none found the banner says that none is on PATH and says to install one to make use of the device shell
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: the 6 cases of test_acc_shim_142_* pass on a real pty; 14 temporary changes (every known tool named, no install line, a file that is no program counted) made each fail
+  - related: ACC-SHIM-139 - the tool line of that banner; it now names only the tools that are installed
+  - test: pytest test_cli.py on a pty: a PATH with stand-in avrdude and esptool gives the line with these two names; a PATH with none gives the two lines that say to install one
+  - test-tags: UNIT
+  - log: 2026-10-13T08:26:15Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-SHIM-143` **Status reports the shell command of the lab terminals** - HIGH; GET status has shell, the list of words of the shell command of the lab's terminals: the shell_command of the server's terminal manager; [$SHELL], or [/bin/sh] without that variable, where the server has no terminals
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: the 4 cases of test_acc_shim_143_* in test_routes.py pass; temporary changes (no shell field, SHELL used with terminals, only the first word, always /bin/sh) made each fail
+  - test: pytest test_routes.py: a server whose terminado shell_command is a stand-in gives that list; with no terminal manager it gives SHELL, and /bin/sh without it
+  - test-tags: UNIT
+  - log: 2026-10-13T08:43:05Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-SHIM-145` **Banner belongs to the shell subcommand** - MEDIUM; jupyterlab-device shell prints the banner before it becomes the shell, when standard output is a terminal; jupyterlab-device run prints no banner for any tool, the user's shell included
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: the 5 cases of test_acc_shim_145_* pass; temporary changes (no banner, banner without the terminal check, banner of run for the tool that SHELL names) made each fail
+  - overrides: ACC-SHIM-136
+  - test: pytest test_cli.py: shell on a pty prints the banner, on a pipe none; run with the value of SHELL as its tool on a pty prints none
+  - test-tags: UNIT
+  - log: 2026-10-13T08:43:05Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
 
 ## Monitor `MON`
 
@@ -547,6 +618,74 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - test-tags: UNIT
   - log: 2026-10-12T15:18:24Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
+- [x] `ACC-PANEL-131` **Runs section lists every run** - HIGH; the Devices panel has a section that lists each run with program, process id, command line and device: the --device of the run, else the serial device whose holder is the process of the run; a run started in any terminal is listed
+  - evidence: 8 Jest and 2 Galata tests pass on build 0.6.22 (logs/runs-make-test-2.log: Jest 220 pass; logs/runs-galata-5.log: 64 pass): a program started with jupyterlab-device run as an agent starts one is listed with program, process id, command line and the serial port it holds; started without run, the row never appeared
+  - test: jest panel.spec.ts: rows from a runs message; galata: a run started in a lab terminal appears in the panel
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T21:42:30Z @kj closed
+- [x] `ACC-PANEL-132` **Start opens a terminal with the shim** - HIGH; the Start button of the runs section and the command Terminal with Shim open a lab terminal and type the line that starts the terminal's shell under jupyterlab-device run; that shell is then listed as a run
+  - evidence: 6 Jest and 2 Galata tests pass on build 0.6.22 (logs/runs-make-test-2.log: Jest 220 pass; logs/runs-galata-5.log: 64 pass): Start and the command open a lab terminal, the shell is listed, the banner shows, a tool in that shell passed DTR and RTS to the simulated port; without LD_PRELOAD the test failed
+  - related: ACC-PANEL-69 - the Devices menu of that criterion gains the entry Terminal with Shim
+  - overridden-by: ACC-PANEL-147
+  - test: jest index.spec.ts: the command types the line; galata: Start, then the panel lists the run
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T21:42:36Z @kj closed
+- [x] `ACC-PANEL-133` **Stop button ends a run** - HIGH; each run has a two-step Stop button; the second click sends the stop to the server, and the row leaves the panel when the process has ended
+  - evidence: 5 Jest and 2 Galata tests pass on build 0.6.22 (logs/runs-make-test-2.log: Jest 220 pass; logs/runs-galata-5.log: 64 pass): the second click on Stop ended the program and its row left the panel, also for the shell that Start opened; with one click only both Galata tests failed
+  - test: jest panel.spec.ts: the first click arms, the second calls the stop; galata: Stop on a run started in a terminal, the row leaves the panel
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T21:42:30Z @kj closed
+- [x] `ACC-PANEL-134` **Info shows how to connect a tool** - MEDIUM; while a run exists the runs section has an Info button; its dialog lists each attached device with its path and shows the README's example command lines for avrdude, stm32flash and esptool with that path, marked as not run against a board
+  - evidence: 6 Jest and 1 Galata test pass on build 0.6.22 (logs/runs-make-test-2.log: Jest 220 pass; logs/runs-galata-5.log: 64 pass): Info is hidden without a run; its dialog lists the attached port with its path and the three example lines with that path; a Jest test compares the lines with README.md
+  - test: jest: the dialog holds each attached path, and every example line is a README line; galata: the dialog shows the path of the simulated port
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T21:42:30Z @kj closed
+- [x] `ACC-PANEL-137` **Device row has TX and RX lamps** - MEDIUM; each device row has two lamps labelled TX and RX; a lamp is lit for 600 ms after the tx or rx byte counter of the row grew in an update of the device table, and is off otherwise; the first table of a row lights nothing
+  - overridden-by: ACC-PANEL-138
+  - evidence: 9 Jest and 2 Galata tests pass on build 0.6.22 (logs/runs-make-test-2.log: Jest 220 pass; logs/runs-galata-5.log: 64 pass): bytes from and to the simulated port light the RX and the TX lamp for 600 ms, and a row that appears lights nothing; with no traffic the Galata test failed
+  - test: jest panel.spec.ts with fake timers: a larger counter lights the lamp, 600 ms later it is off, an equal counter lights nothing; galata: bytes from the simulated port light the RX lamp
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-12T20:13:24Z @kj added
+  - log: 2026-10-12T21:42:30Z @kj closed
+- [x] `ACC-PANEL-138` **Lamps follow the rate of the traffic** - MEDIUM; the TX and RX lamps follow the traffic of this tab's devices: a lamp is lit for 80 ms after each 50 ms period with bytes in its direction; sparse traffic gives single flashes and steady traffic a steady light; another tab's device lights a lamp when its counter grew
+  - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log): 24 Jest tests ACC-PANEL-138 and 3 Galata tests pass; measured: a flash lit 80 to 81 ms, off 319 to 320 ms between bursts, one lit period of 1273 to 1281 ms for a 1.2 s stream
+  - overrides: ACC-PANEL-137
+  - test: jest worker.spec.ts: an activity message only for a period with bytes; panel.spec.ts with fake timers: single flashes, a steady light, a device of another tab; galata: bursts 400 ms apart give separate flashes, a steady stream keeps the RX lamp lit
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-13T07:42:20Z @kj the worker posts an activity message to the page every 50 ms that names the devices that moved bytes; no round trip to the server
+  - log: 2026-10-13T07:42:20Z @kj added
+  - log: 2026-10-13T09:44:06Z @kj closed
+- [x] `ACC-PANEL-140` **Panel and banner say device shell** - MEDIUM; no text of the Devices panel, of the lab commands, of the Info dialog and of the banner holds the word shim; the section is titled Device shell and tools, the command is labelled Device Shell, and the name line of the banner ends with device shell
+  - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log), pytest 439 pass: 5 Jest tests, 1 pytest test and 1 Galata test ACC-PANEL-140 pass; with the old label, the old name line, or the word shim allowed, each failed
+  - related: ACC-PANEL-132 - the command of that criterion is now labelled Device Shell; ACC-SHIM-136 - the banner of that criterion now names a device shell
+  - test: jest panel.spec.ts and index.spec.ts: the texts, and no text with shim; pytest test_cli.py: the banner; galata: the Devices menu entry and the banner in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T07:58:48Z @kj added
+  - log: 2026-10-13T09:44:06Z @kj closed
+- [x] `ACC-PANEL-147` **Start opens the device shell through the basic terminal** - HIGH; Start and the command Device Shell call basic-terminal:launch with a list of words that runs jupyterlab-device shell; no line is typed into a terminal; the panel lists the shell as a run; the terminal's tab closes when the shell ends
+  - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log): 3 Jest and 2 Galata tests ACC-PANEL-147 pass: banner first with no typed line, run row jupyterlab-device shell, tool has the shim, exit closes the tab; red with terminal:create-new, without exit, with env -u LD_PRELOAD
+  - overrides: ACC-PANEL-132
+  - test: jest index.spec.ts: the command calls basic-terminal:launch with the words; galata: Start shows the banner and the run row, exit closes the tab
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T08:43:14Z @kj added
+  - log: 2026-10-13T09:44:06Z @kj closed
+- [x] `ACC-PANEL-149` **A launch that fails at once keeps its terminal** - MEDIUM; when the command line of such a terminal ends with a status other than 0 less than 5 s after its start, the terminal shows Press Enter to close this terminal. under the program's message, and closes after Enter
+  - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log): 4 Jest tests (3 run the script in bash) and 1 Galata test ACC-PANEL-149 pass: a held port keeps the terminal with 'is held by' and the prompt, Enter closes it; red without Enter and with limit 4 or 6
+  - test: galata: Serial Terminal on a port that another program holds shows 'is held by' and the prompt, Enter closes the tab; jest: the script in the words
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T08:43:14Z @kj added
+  - log: 2026-10-13T09:44:06Z @kj closed
+- [x] `ACC-PANEL-150` **Edge: lab without the basic terminal command** - MEDIUM; where the lab has no command basic-terminal:launch, Start and Serial Terminal open nothing and show a notification with the command line and the name jupyterlab_basic_terminal_extension
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), Jest 243 pass: the 1 test ACC-PANEL-150 in index.spec.ts passes; without the hasCommand check, and with a text without the extension name or the command line, it failed
+  - related: ACC-TERM-111 - the same notification where the server offers no terminals
+  - test: jest index.spec.ts: without the command, execute both commands, assert the notification text and that no terminal command ran
+  - test-tags: UNIT
+  - log: 2026-10-13T08:43:14Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
 
 ## Serial terminal `TERM`
 
@@ -614,6 +753,12 @@ A terminal in the lab on one attached port
   - test-tags: UNIT
   - log: 2026-10-12T00:50:42Z @kj added
   - log: 2026-10-12T07:49:08Z @kj closed: verified
+- [x] `ACC-TERM-148` **Serial terminal opens through the basic terminal** - HIGH; the command Serial Terminal and the Terminal button of a serial row call basic-terminal:launch with a list of words that runs jupyterlab-device terminal <name>; the terminal's tab closes when miniterm ends
+  - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log): 3 Jest tests and 1 Galata test ACC-TERM-148 pass: the port's output shows in the terminal, Ctrl+] closes the tab; red without Ctrl+], with a silent port, without the port name in the words
+  - test: jest index.spec.ts: the words; galata: the terminal shows the port's output, and Ctrl+] closes the tab
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-13T08:43:14Z @kj added
+  - log: 2026-10-13T09:44:06Z @kj closed
 
 ## Command line and agent documents `CLI`
 
@@ -705,6 +850,38 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - mechanism: 2026-10-12T19:00:09Z @kj a shared-data entry of pyproject.toml maps resources/envs into the folder of the installed skill
   - log: 2026-10-12T19:00:09Z @kj added
   - log: 2026-10-12T19:04:28Z @kj closed
+- [x] `ACC-CLI-135` **Help and skill say a run is shown and can be stopped** - MEDIUM; jupyterlab-device run --help and the agent skill state that the Devices panel of the lab lists the run and that the user can stop it there
+  - evidence: make test on build 0.6.21 (logs/runs-make-test.log), 398 pytest tests pass: the 2 tests test_acc_cli_135_* in test_cli.py and test_agent_skill.py pass; removing the sentence from run --help or the rule from the skill made each fail; the installed skill equals the repository copy
+  - test: pytest test_cli.py and test_agent_skill.py: both texts hold the statement
+  - test-tags: UNIT
+  - log: 2026-10-12T20:00:24Z @kj added
+  - log: 2026-10-12T20:49:52Z @kj closed
+- [x] `ACC-CLI-141` **Help shows examples for the upload tools that are installed** - MEDIUM; jupyterlab-device --help shows one example command line for each known upload tool found on PATH (avrdude, stm32flash, esptool), each a command line of the README, and says so when none is found; the banner of the device shell names jupyterlab-device list and jupyterlab-device --help
+  - evidence: make test on build 0.6.23 (logs/runs-make-test-3.log), 417 pytest tests pass: the 10 cases of test_acc_cli_141_* in test_cli.py pass, with stand-in tools on PATH; one compares each example with the bash blocks of README.md; temporary changes (every tool listed, no examples, prefix inside a device shell) made each fail
+  - test: pytest test_cli.py: a PATH with a stand-in avrdude gives the avrdude line only; a PATH with none gives the sentence; each example is a README line; the banner holds both command names
+  - test-tags: UNIT
+  - log: 2026-10-13T08:00:57Z @kj added
+  - log: 2026-10-13T08:22:04Z @kj closed
+  - log: 2026-10-13T08:22:11Z @kj reopened; evidence retired: make test on build 0.6.23 (logs/runs-make-test-3.log), 417 pytest tests pass: the 9 cases of test_acc_cli_141_* in test_cli.py pass, with stand-in tools on PATH; one compares each example with the bash blocks of README.md; temporary changes (every tool listed, no examples, prefix inside a device shell) made each fail; reason: the evidence named 9 cases; the run shows 10
+  - log: 2026-10-13T08:22:11Z @kj closed
+- [x] `ACC-CLI-144` **shell subcommand starts a device shell** - HIGH; jupyterlab-device shell becomes the shell command that GET status reports, with the shim loaded as run loads it; it registers itself as a run first; it takes no argument and does not read the variable SHELL
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: the 7 cases of test_acc_cli_144_* pass on a real pty with SHELL removed; temporary changes (starts what SHELL names, no registration, shim not loaded, shell accepts words) made each fail
+  - test: pytest test_cli.py on a pty: stand-in shell command on the server, SHELL unset; the stand-in starts with LD_PRELOAD and JUPYTERLAB_DEVICE_SHIM_DIR, and the run has its process id
+  - test-tags: UNIT
+  - log: 2026-10-13T08:43:05Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-CLI-146` **Help and skill name the shell subcommand** - MEDIUM; jupyterlab-device --help has a line for shell; shell --help says which shell it starts, that the panel lists it as a run, and when the banner prints; no help text and no skill rule holds run -- "$SHELL"
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: the 4 cases of test_acc_cli_146_* in test_cli.py and test_agent_skill.py pass; removing a statement from shell --help, or adding the old line to a help text or the skill, made each fail
+  - test: pytest test_cli.py and test_agent_skill.py: the help texts hold these statements; neither text holds the old line
+  - test-tags: UNIT
+  - log: 2026-10-13T08:43:05Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
+- [x] `ACC-CLI-151` **Wheel requires the basic terminal extension** - MEDIUM; pyproject.toml lists jupyterlab-basic-terminal-extension>=1.0.7,<2 among the dependencies of the project, so pip installs it with the wheel
+  - evidence: make test on build 0.6.24 (logs/launch-make-test-1.log), 439 pytest tests pass: test_acc_cli_151_the_wheel_requires_the_basic_terminal_extension passes; it failed against a dependency list without the requirement and with another range; pip show of build 0.6.24 lists the requirement
+  - test: pytest test_cli.py: the dependencies of pyproject.toml hold a requirement that starts with jupyterlab-basic-terminal-extension
+  - test-tags: UNIT
+  - log: 2026-10-13T08:43:14Z @kj added
+  - log: 2026-10-13T09:11:54Z @kj closed
 
 ## Grants, authentication and ownership `SEC`
 

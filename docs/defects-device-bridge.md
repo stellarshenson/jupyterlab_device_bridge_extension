@@ -90,6 +90,22 @@ What the user sees and clicks in the lab
   - root-cause: 2026-10-12T16:16:46Z @kj NotificationManager.notify sets autoClose 0 when the caller gives none, and the lab's toast plugin skips a notification with autoClose at or below 0; Jest replaces Notification.emit, so no test saw what the lab displays
   - log: 2026-10-12T16:16:46Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
+- [x] `DEF-PANEL-14` **Title of the devices section is cut** - MINOR; at the width the lab gives the left sidebar, 250 px, the title of the devices section of the panel, Serial ports and USB devices, ends with an ellipsis; src/panel.ts
+  - evidence: title is now Serial and USB devices, 22 characters; Galata on build 0.6.24 (logs/launch-galata-1.log, 70 pass): the test DEF-PANEL-14 finds no section title cut at 250 px; with the old 28-character title it failed, 215 px needed, 210 px there
+  - repro: open the Devices panel in a new lab: the header reads SERIAL PORTS AND USB DEV... (1)
+  - test-tags: FUNCTIONAL
+  - root-cause: 2026-10-13T08:27:29Z @kj the title has 28 characters, and the header style (uppercase, 1 px letter spacing) fits about 24 at 250 px
+  - log: 2026-10-13T08:27:29Z @kj added
+  - log: 2026-10-13T09:42:07Z @kj closed
+- [x] `DEF-PANEL-15` **Start fails where the terminal gives no SHELL** - MAJOR; Start types jupyterlab-device run -- "$SHELL"; where the server environment has no SHELL, fish expands it to an empty word and no shell starts; bash starts the shell but the CLI prints no banner
+  - evidence: Start runs jupyterlab-device shell, which takes the shell command from the server; Galata on build 0.6.24 (logs/launch-galata-1.log, 70 pass) with SHELL removed from the test server: the test DEF-PANEL-15 passes; seen once with launch-shell.sh: fish started, banner shown, LD_PRELOAD set
+  - test-tags: UNIT, FUNCTIONAL
+  - related: ACC-CLI-144, ACC-PANEL-147 - the shell subcommand and its launch replace the typed line
+  - repro: in a lab whose terminals run fish and whose server has no SHELL: press Start; or env -u SHELL fish -c with that line
+  - root-cause: 2026-10-13T08:43:05Z @kj the typed line reads the variable SHELL of the terminal shell; fish does not set it, bash does not export its own value; the test servers inherit SHELL=/bin/bash, so no test saw it
+  - log: 2026-10-13T08:43:05Z @kj added
+  - log: 2026-10-13T08:43:29Z @kj edited test-tags added "UNIT, FUNCTIONAL"
+  - log: 2026-10-13T09:42:07Z @kj closed
 
 ## Command line and agent documents `CLI`
 
@@ -116,4 +132,26 @@ The jupyterlab-device command, its help texts, the README and the agent skill
   - root-cause: 2026-10-12T12:33:29Z @kj the three sentences were written for the list suffix before the reopen of a port that is not open made them conditional
   - log: 2026-10-12T12:33:29Z @kj added
   - log: 2026-10-12T12:40:00Z @kj closed: fixed: list help, agent skill and README name the profile set as the retry and no longer say that no byte reaches the board
+- [x] `DEF-CLI-13` **run with an empty tool name ends with a traceback** - MINOR; jupyterlab-device run with an empty word as the tool ends with a ValueError traceback of os.execvpe and exit status 1; docs/design.md says a tool that cannot be started gives one message and exit status 127; cli.py cmd_run
+  - evidence: test_def_cli_13_run_with_an_empty_tool_name_says_so_and_exits_127 failed with status 1 before the fix and passes after it; cmd_run now catches ValueError beside OSError; make test on build 0.6.21 (logs/runs-make-test.log): 398 pytest tests pass, 1 skipped
+  - repro: jupyterlab-device run -- "" in a lab terminal: traceback, exit status 1
+  - test-tags: UNIT
+  - root-cause: 2026-10-12T20:45:46Z @kj cmd_run catches only OSError around os.execvpe, and an empty first word raises ValueError
+  - log: 2026-10-12T20:45:46Z @kj added
+  - log: 2026-10-12T20:49:02Z @kj closed
+
+## Continuous integration `CI`
+
+GitHub Actions workflows, and tests that fail only on a runner
+
+- [ ] `DEF-CI-16` **Stopped-server test times out on a runner** - MEDIUM; the pytest test of ACC-SERIAL-3 waits 30 s for its Jupyter server to end after SIGTERM; on a GitHub runner the server did not end in that time, once, and the Build workflow of commit ec53401 failed
+  - repro: put a program julia that sleeps 40 s on PATH and run the test: the server ends 40 s after SIGTERM
+  - test-tags: UNIT
+  - root-cause: 2026-10-13T10:12:16Z @kj the test server loaded every extension of the environment; jupyter_lsp looks for language servers in a thread at start, with julia and Rscript calls that have no timeout, and Python ends only after that thread
+  - log: 2026-10-13T10:12:16Z @kj added
+- [ ] `DEF-CI-17` **Release check fails at the trial upload** - MEDIUM; the Check Release workflow of commit ec53401 failed in the step publish-assets: the trial upload of the wheel to the pypiserver inside the runner was answered with 400 Bad Request
+  - repro: start pypiserver 2.3.2 on localhost and upload the wheel with twine: MultipartError: Memory limit reached
+  - test-tags: CI
+  - root-cause: 2026-10-13T10:12:16Z @kj pypiserver keeps at most 102400 bytes of one upload in memory; the README is the long description of the wheel, 48875 characters; with the wheel of 0.6.24 the largest description that passes has 46516
+  - log: 2026-10-13T10:12:16Z @kj added
 

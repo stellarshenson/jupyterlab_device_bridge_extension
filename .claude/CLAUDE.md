@@ -64,10 +64,12 @@ architecture changes.
   - `__init__.py` - the settings `DeviceBridge.device_dir` and `DeviceBridge.monitor_bytes`, one
     `DeviceManager` per server, handler registration, release of the devices when the server ends
   - `manager.py` - `DeviceManager`: tabs, claims and ownership, device names, commands to the tab
-    with `seq` and ack, device requests, the table broadcast; `SerialDevice` joins the profile, the
-    pty, the shim socket and the monitor buffer of one port
+    with `seq` and ack, device requests, the runs (programs started through `jupyterlab-device run`)
+    and their watch, the table broadcast; `SerialDevice` joins the profile, the pty, the shim socket
+    and the monitor buffer of one port
   - `vserial.py` - `VirtualSerial`: the pty, its symlink in the device directory, tool open and
-    close, the holder, the baud rate, the queue to the tool; Linux only
+    close, the holder, the baud rate, the queue to the tool; the choice of the default device
+    directory (`/run/devices`, else `/tmp/jupyterlab-device-<uid>`); Linux only
   - `monitor.py` - `MonitorBuffer`, the ring buffer of the bytes a port sent
   - `profiles.py` - the five built-in profiles, the actions, the check of a profile change
   - `usb.py` - the USB record and the plan of one USB operation
@@ -83,8 +85,9 @@ architecture changes.
   - `shim_build.py`, `shim/devshim.c` - the preload shim: the C source ships in the wheel and is
     compiled on first use into `~/.cache/jupyterlab-device-bridge/`
 - **Frontend** (TypeScript, `src/`)
-  - `index.ts` - the plugin: four commands, the palette, the Devices menu (setting `showMenu`), the
-    notifications of device requests, the command that opens the serial terminal
+  - `index.ts` - the plugin: five commands, the palette, the Devices menu (setting `showMenu`), the
+    notifications of device requests, the command that opens the serial terminal, the command that
+    opens a device shell (a lab terminal with the shim), the Info dialog of the runs
   - `model.ts` - `DeviceBridgeModel`: starts the worker, keeps what it reports, and is the only
     caller of the grant dialogs `requestPort` and `requestDevice`
   - `worker.ts` - `workerMain(scope)`, one self-contained function started from a Blob URL: the
@@ -93,7 +96,11 @@ architecture changes.
   - `panel.ts`, `status.ts`, `icons.ts` - the Devices panel, the status bar item, the icon
   - `request.ts` - the REST helper and the WebSocket URL
 - **Serial terminal** - no code of this extension: `jupyterlab-device terminal` becomes pyserial's
-  miniterm, and the lab command types that command line into a JupyterLab terminal
+  miniterm, and the lab command starts that command line in a lab terminal
+- **Terminal launch** - the serial terminal and the device shell (`jupyterlab-device shell`, the
+  shell command of the lab's terminals with the shim) start through the command
+  `basic-terminal:launch` of `jupyterlab_basic_terminal_extension`, a dependency of the wheel: one
+  program in a terminal, no typed line, the tab closes when the program ends
 - **Schema** (`schema/plugin.json`) - the settings `showPanel` (the Devices panel is in the left sidebar
   only while it is true; default false), `showMenu` and the five default serial settings of a new
   port; the item Show Devices Panel of the View menu
