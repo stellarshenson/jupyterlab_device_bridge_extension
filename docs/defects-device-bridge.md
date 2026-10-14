@@ -59,6 +59,12 @@ The byte path between a tool, the virtual serial device and the port in the brow
   - root-cause: 2026-10-12T16:23:01Z @kj validate_change takes every whole number above 0; vserial packs the speed into a 32-bit field; struct.error is none of the classes _claim and on_message catch, so the read loop of the socket ends
   - log: 2026-10-12T16:23:01Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
+- [ ] `DEF-SERIAL-20` **Closing the serial terminal leaves miniterm running** - MAJOR; closing the tab of the serial terminal only detaches the lab terminal; miniterm keeps running on the server and keeps the port open; closing the tab must stop miniterm
+  - repro: open the serial terminal of a port, close its tab, list the lab terminals: the miniterm terminal still runs
+  - test-tags: FUNCTIONAL
+  - root-cause: 2026-10-14T17:39:56Z @kj likely cause: basic-terminal:launch opens the terminal through terminal:open and does not shut the session down when the widget closes; the lab setting shutdownOnClose defaults to false
+  - log: 2026-10-14T17:39:56Z @kj added
+  - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: seen on hardware: miniterm pid 3919 still held tty-1a86-7523 after its terminal was gone; the agent stopped it with SIGTERM to free the port
 
 ## Preload shim `SHIM`
 
@@ -122,6 +128,14 @@ What the user sees and clicks in the lab
   - root-cause: 2026-10-13T13:40:09Z @kj jupyterlab_basic_terminal_extension 1.0.7 src/request.ts:47 throws ResponseError(response, data.message || data); its server bodies hold error and no message, so the body object becomes the message and the text is lost before this plugin gets the rejection
   - log: 2026-10-13T13:40:09Z @kj added
   - log: 2026-10-13T15:02:55Z @kj closed
+- [ ] `DEF-PANEL-21` **Confirm stop text is black on red** - MEDIUM; the armed button (Confirm stop, Confirm forget) shows black text on the red fill, hard to read
+  - repro: in the dark theme click Stop of a run row once and read the button label
+  - test-tags: FUNCTIONAL
+  - root-cause: 2026-10-14T18:09:31Z @kj style/base.css .jp-mod-warn.jp-mod-confirm sets color --jp-ui-inverse-font-color1, which is black at 80 percent opacity in the dark theme; --jp-ui-inverse-font-color0 is opaque in both themes (#000 dark, #fff light)
+  - root-cause: 2026-10-14T17:39:56Z @kj likely cause: style/base.css .jp-mod-warn.jp-mod-confirm sets color --jp-ui-inverse-font-color1, which is dark in the dark theme, on background --jp-error-color1
+  - log: 2026-10-14T17:39:56Z @kj added
+  - log: 2026-10-14T18:07:38Z @kj Star Colonel keeps the two-click confirm of Stop and Forget, it is destructive; fix only the label colour: strong contrast on the red fill, same font weight
+  - log: 2026-10-14T18:09:18Z @kj Star Colonel: the label of the armed button is drawn at 100 percent opacity, no transparent text colour
 
 ## Command line and agent documents `CLI`
 

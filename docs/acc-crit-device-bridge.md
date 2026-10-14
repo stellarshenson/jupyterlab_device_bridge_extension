@@ -365,6 +365,45 @@ A tool's own DTR, RTS and parity calls passed to the bridge
   - test-tags: UNIT
   - log: 2026-10-13T12:48:12Z @kj added
   - log: 2026-10-13T13:22:17Z @kj closed
+- [ ] `ACC-SHIM-176` **Device shell finds environments with upload tools** - HIGH; before the device shell starts it looks up the conda environments (conda env list) and the virtual environment .venv in its start directory; an environment is offered when its bin directory holds avrdude, stm32flash or esptool
+  - test: pytest: fake conda list with one env holding bin/esptool and one without, tmp .venv with bin/avrdude; assert the two with tools are found, each with its tools
+  - test-tags: UNIT
+  - mechanism: 2026-10-14T18:21:09Z @kj the tool names come from UPLOAD_TOOLS in cli.py, the same list the banner uses
+  - log: 2026-10-14T18:21:09Z @kj added
+- [ ] `ACC-SHIM-177` **Textual selector of the environment** - HIGH; when one or more environments are found, a Textual list shows each with its name, project or global, and its tools; the first entry keeps the current environment; Enter starts the shell in the chosen one, Esc keeps the current one; brand themes dark and light
+  - related: ACC-TERM-171 - same brand themes as the serial terminal
+  - test: pytest run_test: two found environments give three entries; Down, Enter returns the first found; Esc returns the current; galata: Start shows the list in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-14T18:21:09Z @kj added
+- [ ] `ACC-SHIM-178` **Shell runs in the chosen environment** - HIGH; the shell starts with the chosen environment's bin first on PATH and the variables its activation sets (CONDA_PREFIX and conda env vars, or VIRTUAL_ENV); the banner names the environment and its tool line lists that environment's tools
+  - related: ACC-SHIM-136 - the banner gains the environment line
+  - test: pytest: choose a fake env with bin/esptool and env var RUSTUP_HOME, assert the shell environment has its bin first, CONDA_PREFIX, RUSTUP_HOME, and the banner names it
+  - test-tags: UNIT
+  - log: 2026-10-14T18:21:09Z @kj added
+- [ ] `ACC-SHIM-179` **Edge: no selector without environments or terminal** - MEDIUM; with no environment found, or standard input not a terminal, no selector shows and the shell starts at once in the current environment; jupyterlab-device run never shows the selector
+  - test: pytest: no env with tools, shell starts without the app; stdin a pipe, no app; run -- true shows no app
+  - test-tags: UNIT
+  - log: 2026-10-14T18:21:09Z @kj added
+- [ ] `ACC-SHIM-180` **Tools installed with no environment** - HIGH; the entry of the current environment lists the upload tools on PATH, including those of the pipx and uv tool directories; with no other environment found the shell starts at once with them; a setup with no virtual environment at all works as today
+  - related: ACC-SHIM-176
+  - test: pytest: no conda, no .venv, esptool on PATH; assert no selector and the banner lists esptool
+  - test-tags: UNIT
+  - log: 2026-10-14T18:22:35Z @kj added
+- [ ] `ACC-SHIM-181` **Edge: lookup commands missing or failing** - HIGH; conda, virtualenv, pipx and uv are each optional; a missing command, a non-zero exit, unreadable output or a run over 5 s skips only that source; finding .venv needs no command; the shell always starts and prints no traceback
+  - related: ACC-SHIM-176
+  - test: pytest: PATH without conda, pipx, uv; a fake conda that exits 1, one that prints no JSON, one that sleeps 10 s; assert the shell starts each time
+  - test-tags: UNIT
+  - log: 2026-10-14T18:22:35Z @kj added
+- [ ] `ACC-SHIM-182` **PlatformIO is a known upload tool** - HIGH; pio joins avrdude, stm32flash and esptool in the known upload tools, with the line pio run -t upload --upload-port <path>; the banner tool line, the environment lookup and Info list it
+  - related: ACC-SHIM-176 - the lookup then finds firmware-avr, which holds pio
+  - test: pytest: fake bin/pio on PATH, assert the banner lists pio and the environment lookup offers its environment
+  - test-tags: UNIT
+  - mechanism: 2026-10-14T19:09:05Z @kj one more entry in UPLOAD_TOOLS of cli.py, marked as needing the shim
+  - log: 2026-10-14T19:09:05Z @kj added
+- [ ] `ACC-SHIM-183` **PlatformIO upload under run** - HIGH; jupyterlab-device run -- pio run -t upload --upload-port <path> passes the DTR and RTS calls of the upload program that pio starts (esptool, avrdude) to the port; the shim reaches child processes
+  - test: pytest: fake pio that starts a child which sets DTR then RTS on the path; assert the fake tab got both
+  - test-tags: UNIT
+  - log: 2026-10-14T19:09:05Z @kj added
 
 ## Monitor `MON`
 
@@ -739,6 +778,23 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - test-tags: UNIT
   - log: 2026-10-13T12:48:12Z @kj added
   - log: 2026-10-13T13:22:17Z @kj closed
+- [ ] `ACC-PANEL-163` **TX lamp blue, RX lamp yellow** - MEDIUM; a lit TX lamp is blue and a lit RX lamp is yellow; a lamp that is off keeps its outlined circle; both colours are JupyterLab CSS variables, so ACC-PANEL-73 holds
+  - test: jest: style/base.css gives the lit tx lamp --jp-brand-color1 and the lit rx lamp --md-yellow-600; galata: computed background of each lit lamp
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-14T17:58:13Z @kj two rules on [data-lamp=tx][data-lit] and [data-lamp=rx][data-lit] replace the one rule that lights both lamps with --jp-brand-color1
+  - log: 2026-10-14T17:58:13Z @kj added
+- [ ] `ACC-PANEL-164` **Settings button opens the serial settings** - HIGH; a serial row has a button Settings; it opens a lab dialog with profile, baud rate, data bits, parity, stop bits and action on open, filled with the port's values; Save sends them, Cancel changes nothing; the folded Profile settings section of the row is removed
+  - related: ACC-PROF-23
+  - test: galata: click Settings of a simulated port, set baud rate 9600, Save, assert the row reads 9600 and the port reopened at 9600; Cancel leaves 115200
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-14T18:03:48Z @kj the editor controls of the row move into a Dialog from @jupyterlab/apputils; Save sends the changed fields through the profile request the row sends today
+  - log: 2026-10-14T18:03:48Z @kj added
+- [ ] `ACC-PANEL-175` **Panel texts are short** - MEDIUM; visible panel texts are a few words: No device attached; No device shell opened; sections Serial and USB, Device shells, Requests; RX n, TX n bytes; Opened: yes; Round trip: n ms; banner: Web Serial and WebUSB need HTTPS or localhost, in Chrome or Edge; errors: Profile not changed: reason, Not stopped: reason; tooltips keep the full explanation
+  - related: ACC-PANEL-140 - replaces only its section title Device shell and tools; the no-shim rule holds
+  - related: ACC-PANEL-164 - the Settings dialog removes the text Profile settings
+  - test: jest panel.spec.ts: each listed text equals the new wording; galata: empty panel reads No device attached and No device shell opened
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-14T18:10:49Z @kj added; reason: lists every replaced text so the build has no guess
 
 ## Serial terminal `TERM`
 
@@ -783,6 +839,7 @@ A terminal in the lab on one attached port
   - log: 2026-10-12T00:50:41Z @kj edited test "jest index.spec.ts: execute the command with no devices, assert the notification and no widget" -> "jest index.spec.ts: execute the command with no devices, assert the notification and that no lab terminal was opened"
   - log: 2026-10-12T07:49:07Z @kj closed: verified
 - [x] `ACC-TERM-108` **Ready terminal program** - HIGH; the serial terminal is pyserial's miniterm, a dependency of the wheel; the extension has no terminal emulator of its own
+  - overridden-by: ACC-TERM-165
   - evidence: verify round 1: pytest test_cli.py::test_acc_term_108_terminal_becomes_pyserial_miniterm passed in make test; red under 'terminal starts another program than miniterm' (pytest)
   - test: pytest test_cli.py: terminal with exec replaced, assert the argv is python -m serial.tools.miniterm with the device path and baud; assert serial.tools.miniterm imports
   - test-tags: UNIT
@@ -812,6 +869,55 @@ A terminal in the lab on one attached port
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-13T08:43:14Z @kj added
   - log: 2026-10-13T09:44:06Z @kj closed
+- [ ] `ACC-TERM-165` **Own Textual serial terminal** - HIGH; jupyterlab-device terminal starts the extension's own full-screen Textual terminal in place of miniterm; it opens the device path with pyserial as every tool does; textual is a dependency of the wheel; the lab command Serial Terminal and the row button start it
+  - overrides: ACC-TERM-108
+  - test: pytest: run the app headless on a pty pair, assert it holds the path; galata: Terminal of a simulated port shows the app header in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-14T18:05:57Z @kj a Textual app in the package; pyserial reads and writes the pty; settings and control lines go through DeviceBridgeClient
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-166` **Traffic view shows both directions** - HIGH; a scrolling view lists the bytes from the port (RX, yellow) and to the port (TX, blue), each line with time and direction; a key switches text and hex display; a key pauses scrolling, a key clears the view
+  - related: ACC-PANEL-163 - same colours as the panel lamps
+  - test: pytest run_test: bytes from the pty show as an RX line in amber, a sent line as TX in cyan; hex mode shows 41 42 43 for ABC
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-167` **Status line of the terminal** - HIGH; the header shows the device name and path, baud rate, data bits, parity and stop bits, DTR and RTS state, RX and TX byte counts and the app version; each value updates when it changes
+  - test: pytest run_test: change baud to 9600 and toggle DTR, assert the header reads 9600 and DTR off
+  - test-tags: UNIT
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-168` **Serial settings changed in the terminal** - HIGH; a settings screen of the terminal changes baud rate, data bits, parity and stop bits while it runs; the port uses the new values without a restart of the terminal; the device record shows them
+  - related: ACC-TERM-76 - the baud selector rejected on 2026-10-12 while the terminal was miniterm
+  - test: pytest: set 9600 8E1 in the settings screen, assert the fake tab got the port reopened at 9600 8E1 and the record lists them
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-14T18:05:57Z @kj added; reason: names the four fields and three effects
+- [ ] `ACC-TERM-169` **Control lines from the terminal** - HIGH; keys of the terminal set DTR and RTS on and off, send a break, and run the actions pulse-dtr, pulse-rts, esp-bootloader and touch-1200; the footer lists the keys
+  - test: pytest run_test: press the DTR key, assert the fake tab got dtr false; press the reset key, assert the pulse-dtr sequence
+  - test-tags: UNIT
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-170` **Send a line from the terminal** - HIGH; an input field sends the typed line on Enter with the chosen line ending (none, LF, CR, CRLF); a hex mode sends bytes written as hex digits; refused hex input is named in the status line and sends nothing
+  - test: pytest run_test: type abc, Enter with CRLF, assert the pty read abc\r\n; hex 41 4G is refused, nothing sent
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-171` **Terminal follows the brand themes** - MEDIUM; the terminal ships the themes stellars-tech-dark and stellars-tech-light, picked from the terminal background at start; every colour comes from the theme; RX amber, TX cyan, errors rose
+  - test: pytest run_test with TEXTUAL_THEME set to each theme: export_screenshot holds the theme colours of RX and TX lines
+  - test-tags: UNIT
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-172` **Quit releases the port** - HIGH; Ctrl+Q or Esc quits the terminal and closes the device path; the row then shows no holder
+  - related: DEF-SERIAL-20 - closing the tab must also end the terminal
+  - test: pytest: start the app, quit, assert the record of the device has no holder
+  - test-tags: UNIT
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-173` **Edge: device removed while the terminal runs** - MEDIUM; when the port is detached or removed the terminal stays open, shows removed in rose in the status line and stops sending; it prints no traceback
+  - test: pytest run_test: detach the fake tab's port, assert status reads removed and no exception
+  - test-tags: UNIT
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-174` **Terminal help and agent skill** - MEDIUM; jupyterlab-device terminal --help names the keys and says the command is for a person; the agent skill tells an agent to use monitor and write instead of terminal
+  - test: pytest test_cli.py: terminal --help lists the keys; test_readme: skill names monitor and write for agents
+  - test-tags: UNIT
+  - log: 2026-10-14T18:05:57Z @kj added
+- [ ] `ACC-TERM-185` **pio device monitor on the virtual device** - MEDIUM; pio device monitor --port <path> --baud <rate> shows the port's output and sends typed bytes, as any serial tool on the path
+  - test: pytest: pio device monitor on a pty pair with the fake tab, port output shows, typed abc reaches the port
+  - test-tags: UNIT
+  - log: 2026-10-14T19:09:06Z @kj added
 
 ## Command line and agent documents `CLI`
 
@@ -957,6 +1063,16 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-13T14:50:05Z @kj added
   - log: 2026-10-13T15:02:55Z @kj closed
+- [ ] `ACC-CLI-184` **PlatformIO in help, README and agent skill** - HIGH; --help, the help command, README and the agent skill show the pio upload line under run and pio device monitor; they say pio cannot find the virtual device itself, so --upload-port, --port, or upload_port and monitor_port in platformio.ini name its path
+  - test: pytest: help run holds a pio example; test_readme: README and SKILL.md name --upload-port and upload_port
+  - test-tags: UNIT
+  - log: 2026-10-14T19:09:05Z @kj added
+- [ ] `ACC-CLI-187` **Installer copies match the originals** - MEDIUM; the four files of resources/envs equal their originals in ~/.local/lab-utils/envs, now with firmware-avr.py installing PlatformIO 6.2.0 and atmelavr 5.3.0; the README line of firmware-avr names PlatformIO with the Arduino AVR core; the folder's README.md of lab-utils is not copied
+  - related: ACC-CLI-126 - the wheel ships these copies beside the skill
+  - related: ACC-SHIM-178 - the selector must carry PLATFORMIO_CORE_DIR, a conda env var of firmware-avr
+  - test: pytest test_agent_skill.py: each copy byte-equal to its original when ~/.local/lab-utils/envs exists, skipped otherwise; README names PlatformIO for firmware-avr
+  - test-tags: UNIT
+  - log: 2026-10-14T19:11:07Z @kj added
 
 ## Grants, authentication and ownership `SEC`
 
@@ -1029,10 +1145,13 @@ Behaviour that needs a real board, tested by the user, tag MANUAL
   - test: connect each board, run both forms, assert the flash verifies
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
-- [ ] `ACC-BOARD-103` **Board output in the monitor** - HIGH; the serial output of a running board is read with monitor read and in the serial terminal
+  - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: ESP32 half done: esptool 5.5.0 write-flash 0x0 under jupyterlab-device run, shim reset, 4194304 bytes, Hash of data verified, program runs; open: ESP8266 and the esp-upload profile form with --before no-reset
+- [x] `ACC-BOARD-103` **Board output in the monitor** - HIGH; the serial output of a running board is read with monitor read and in the serial terminal
+  - evidence: session 2cdf8020 2026-10-14, ESP32-D0WD-V3 on CH340 1a86:7523, device 0.6.29: monitor read showed the board's boot log and 'esp-helloworld ready - send hi', hi written got hello world!; the Star Colonel used the serial terminal on it
   - test: board prints a counter, assert the lines in both
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
+  - log: 2026-10-14T18:26:03Z @kj closed
 - [ ] `ACC-BOARD-104` **CMSIS-DAP v2 probe with pyOCD** - MEDIUM; pyOCD lists and uses a CMSIS-DAP v2 probe through the pyusb backend
   - test: attach the probe over USB, run pyOCD list through the backend, assert the probe is listed
   - test-tags: MANUAL
@@ -1045,8 +1164,14 @@ Behaviour that needs a real board, tested by the user, tag MANUAL
   - test: click each in desktop Chrome and Edge, assert the dialog opens
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
+  - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: a CH340 port was granted and attached from the Star Colonel's browser; open: each entry point in desktop Chrome and in Edge
 - [ ] `ACC-BOARD-107` **Board that changes identity** - LOW; a board that enters bootloader mode as another device is attached after its own grant
   - test: touch a Leonardo at 1200 baud, grant the bootloader port, assert the upload runs
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
+- [ ] `ACC-BOARD-186` **PlatformIO upload to an ESP32** - HIGH; pio run -t upload under run uploads a PlatformIO project to an ESP32 through the bridge and the board runs it
+  - related: ACC-BOARD-102
+  - test: connect an ESP32, run the pio upload line under run with --upload-port, assert the flash verifies and the program prints
+  - test-tags: MANUAL
+  - log: 2026-10-14T19:09:06Z @kj added
 
