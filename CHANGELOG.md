@@ -2,6 +2,14 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.3] - 2026-10-16
+
+The version number moves from 0.6.30 to 1.0.3. The code, the settings and the dependencies are those of 0.6.30. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Changed
+
+- Version 1.0.3 in place of 0.6.30, with no other change
+
 ## [0.6.30] - 2026-10-16
 
 The serial terminal is now a full-screen app of this extension, a device shell can start in the environment that holds an upload tool, and PlatformIO joins the upload tools. The extension is tested against simulated devices in the browser; no test used a physical board.

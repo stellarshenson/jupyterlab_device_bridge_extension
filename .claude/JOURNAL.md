@@ -72,3 +72,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 23. **Task - Release 0.6.30** (v0.6.30): released the Textual serial terminal, the environment selector and PlatformIO support to npm and PyPI<br>
     **Result**: First release since 0.6.29; carries commits `d5e79cf` to `eec2f59`. Content: `jupyterlab-device terminal`, the Textual app for serial traffic with the board actions on function keys; the environment selector of the device shell, which puts the chosen conda environment or `.venv` first on PATH so firmware tools such as `pio` run; `pio` among the upload tools; the panel's Settings dialog, TX and RX lamp colours, short texts with full tooltips. The wheel requires `jupyterlab-basic-terminal-extension>=1.0.9`, because 1.0.9 is the first release that ends the program when its tab closes and so frees the port. Before release: review rounds 4 and 5 SHIP (architect, bug-hunter, ux-designer), CI Build and Check Release green on `eec2f59`, 10 open criteria all `MANUAL`, 0 open defects.
+
+24. **Task [Short] - Release 1.0.3** (v1.0.3): version moved from 0.6.30 to the 1.0 line<br>
+    **Result**: On the user's request `package.json` went from 0.6.30 to 1.0.2; `make publish` raised it to 1.0.3. Code, settings and dependencies are those of 0.6.30.
