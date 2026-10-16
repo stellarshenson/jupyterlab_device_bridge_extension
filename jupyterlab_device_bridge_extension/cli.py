@@ -813,7 +813,8 @@ exit status:
   130  stopped with Ctrl+C
   `run` exits with the status of the tool it started, and with 127 when the tool
   cannot be started; `shell` does the same with the shell; `terminal` exits 0
-  after Ctrl+Q or Esc, and 1 when the device is held or its path cannot be opened
+  after Ctrl+Q or Esc, 1 when the device is held or its path cannot be opened,
+  and 2 without a terminal
 
 Results go to stdout and messages to stderr.
 

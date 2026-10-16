@@ -201,7 +201,8 @@ GitHub Actions workflows, and tests that fail only on a runner
   - root-cause: 2026-10-13T10:12:16Z @kj pypiserver keeps at most 102400 bytes of one upload in memory; the README is the long description of the wheel, 48875 characters; with the wheel of 0.6.24 the largest description that passes has 46516
   - log: 2026-10-13T10:12:16Z @kj added
   - log: 2026-10-13T10:30:23Z @kj closed
-- [ ] `DEF-CI-23` **Three pytest tests fail on the GitHub runner** - MEDIUM; the Build workflow of commit d5e79cf failed: test_acc_shim_176 and test_acc_shim_181 raised KeyError CONDA_EXE, test_acc_term_166 saw the hex line of the first RX message without its 0a
+- [x] `DEF-CI-23` **Three pytest tests fail on the GitHub runner** - MEDIUM; the Build workflow of commit d5e79cf failed: test_acc_shim_176 and test_acc_shim_181 raised KeyError CONDA_EXE, test_acc_term_166 saw the hex line of the first RX message without its 0a
+  - evidence: GitHub Actions of commit 2b44f38: Build 38899679456 success (build with pytest, test_isolated, Integration tests, Check Links), Check Release 38899679435 success; local: test_acc_term_166 fails at an 80-column screen with the old view helper and passes with the new one
   - test-tags: CI
   - repro: run the environment tests with CONDA_EXE unset; split the RX message of test_acc_term_166 across two reads more than 50 ms apart
   - root-cause: 2026-10-16T12:19:09Z @kj the hex line of test_acc_term_166 is 81 columns; on the runner the RichLog wrapped it at its min_width of 78, the 0a went to a continuation line, and the view helper of the tests skipped every line without a time stamp; reproduced at an 80-column screen. The environment tests deleted CONDA_EXE, which the runner never sets
@@ -209,4 +210,5 @@ GitHub Actions workflows, and tests that fail only on a runner
   - log: 2026-10-16T12:08:43Z @kj added
   - log: 2026-10-16T12:08:52Z @kj edited test-tags added "CI"
   - log: 2026-10-16T12:19:09Z @kj root-cause overridden; reason: the first record named a split read as the cause; the second CI run and a local 80-column run showed the wrapped line
+  - log: 2026-10-16T12:33:42Z @kj closed
 
