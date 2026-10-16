@@ -4,11 +4,11 @@
  *
  * The tests read and click the panel through the hooks listed at the top of
  * `src/panel.ts`, as the functional tests do in a browser. The lab packages that Jest
- * cannot load are replaced: the notifications by a recorder, the icon of the panel by
- * its SVG text. The plus icon and its menu are those of the lab.
+ * cannot load are replaced: the notifications and the dialogs by recorders, the icon of
+ * the panel by its SVG text. The plus icon and its menu are those of the lab.
  */
 
-import { Notification } from '@jupyterlab/apputils';
+import { Notification, showDialog } from '@jupyterlab/apputils';
 import { ServerConnection } from '@jupyterlab/services';
 import { MenuSvg } from '@jupyterlab/ui-components';
 
@@ -38,7 +38,21 @@ import {
 } from './sim';
 
 jest.mock('@jupyterlab/apputils', () => ({
-  Notification: { emit: jest.fn() }
+  // A button of a dialog is its options, with the label and the accept flag the lab gives it.
+  Dialog: {
+    cancelButton: (options: object = {}) => ({
+      label: 'Cancel',
+      accept: false,
+      ...options
+    }),
+    okButton: (options: object = {}) => ({
+      label: 'OK',
+      accept: true,
+      ...options
+    })
+  },
+  Notification: { emit: jest.fn() },
+  showDialog: jest.fn()
 }));
 jest.mock('@jupyterlab/ui-components', () => ({
   LabIcon: class {
@@ -153,6 +167,49 @@ const emit = Notification.emit as jest.Mock;
 
 /** Let every promise settle and advance the fake time by `ms`. */
 const tick = (ms = 0): Promise<void> => jest.advanceTimersByTimeAsync(ms);
+
+/** A dialog of the lab that the panel opened and that is still open. */
+interface IOpenDialog {
+  title: string;
+  body: Widget & { getValue?(): unknown };
+  buttons: Array<{ label: string; accept: boolean }>;
+  /** Close the dialog with the button of this label, as the lab does, and let the panel act. */
+  close(label: string): Promise<void>;
+}
+
+/** Every dialog the panel opened in this test, in order. */
+const dialogs: IOpenDialog[] = [];
+
+/**
+ * The stand-in of `showDialog`: it puts the body into the document and resolves when a
+ * test closes the dialog. As the lab does, it reads the value of the body only for a
+ * button that accepts.
+ */
+function recordDialogs(): void {
+  dialogs.length = 0;
+  (showDialog as jest.Mock).mockReset();
+  (showDialog as jest.Mock).mockImplementation(
+    (options: Omit<IOpenDialog, 'close'>) =>
+      new Promise(resolve => {
+        Widget.attach(options.body, document.body);
+        dialogs.push({
+          ...options,
+          async close(label: string): Promise<void> {
+            const button = options.buttons.find(
+              shown => shown.label === label
+            )!;
+            const value =
+              button.accept && options.body.getValue
+                ? options.body.getValue()
+                : null;
+            Widget.detach(options.body);
+            resolve({ button, value, isChecked: null });
+            await tick();
+          }
+        });
+      })
+  );
+}
 
 function setInterface(name: 'serial' | 'usb', value?: object): void {
   delete (navigator as unknown as Record<string, unknown>)[name];
@@ -319,11 +376,20 @@ function pressEscape(all: ILab): void {
   );
 }
 
-/** Set a field of the profile editor as the user does: the value, then the change event. */
+/** Set a field of the Settings dialog as the user does: the value, then the change event. */
 function choose(root: ParentNode, name: keyof IProfileChange, value: string) {
   const node = control(root, name);
   node.value = value;
   node.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/** Click Settings in the row of a serial port and return the dialog it opened. */
+async function openSettings(all: ILab, name: string): Promise<IOpenDialog> {
+  const opened = dialogs.length;
+  action(row(all, name), 'settings').click();
+  await tick();
+  expect(dialogs).toHaveLength(opened + 1);
+  return dialogs[opened];
 }
 
 /**
@@ -352,6 +418,7 @@ function serveProfiles(all: ILab): void {
 beforeEach(() => {
   jest.useFakeTimers();
   emit.mockReset();
+  recordDialogs();
 });
 
 afterEach(() => {
@@ -396,7 +463,8 @@ describe('the stylesheet', () => {
     expect(declarations.length).toBeGreaterThan(100);
     for (const [, value] of declarations) {
       expect(value).not.toMatch(literal);
-      expect(value).not.toMatch(named);
+      // The name of a variable can hold a colour name, as --md-yellow-600 does.
+      expect(value.replace(/var\(--[\w-]+/g, 'var(')).not.toMatch(named);
     }
   });
 
@@ -409,38 +477,72 @@ describe('the stylesheet', () => {
 
     expect(colours.length).toBeGreaterThan(40);
     for (const [, value] of colours) {
-      expect(value).toMatch(/var\(--jp-|^none$/);
+      // --jp- are the variables of the themes, --md- the material colours of the lab.
+      expect(value).toMatch(/var\(--(jp|md)-|^none$/);
     }
     expect(css).toContain('.jp-DeviceBridgePanel ');
     expect(css).toContain('.jp-DeviceBridgeStatus ');
   });
 
-  it('ACC-PANEL-138 the stylesheet draws a lamp that is not lit as a circle with a border and a background, and a lit lamp with another background, each a JupyterLab variable', () => {
-    /** The declarations of the one rule with exactly this selector. */
-    const rule = (selector: string): Record<string, string> => {
-      const found = css.split('}').filter(
-        // What stands before the brace is the selector of the rule.
-        text => text.split('{')[0].trim() === selector
-      );
-      expect(found).toHaveLength(1);
-      const values: Record<string, string> = {};
-      for (const part of found[0].split('{')[1].split(';')) {
-        const [property, ...value] = part.split(':');
-        if (value.length > 0) {
-          values[property.trim()] = value.join(':').trim();
-        }
+  /** The declarations of the one rule with exactly this selector. */
+  const rule = (selector: string): Record<string, string> => {
+    const found = css.split('}').filter(
+      // What stands before the brace is the selector of the rule.
+      text => text.split('{')[0].trim() === selector
+    );
+    expect(found).toHaveLength(1);
+    const values: Record<string, string> = {};
+    for (const part of found[0].split('{')[1].split(';')) {
+      const [property, ...value] = part.split(':');
+      if (value.length > 0) {
+        values[property.trim()] = value.join(':').trim();
       }
-      return values;
-    };
-    const unlit = rule('.jp-DeviceBridgePanel-lamp::before');
-    const lit = rule('.jp-DeviceBridgePanel-lamp[data-lit]::before');
+    }
+    return values;
+  };
+  const UNLIT_LAMP = '.jp-DeviceBridgePanel-lamp::before';
+  const LIT_TX = ".jp-DeviceBridgePanel-lamp[data-lamp='tx'][data-lit]::before";
+  const LIT_RX = ".jp-DeviceBridgePanel-lamp[data-lamp='rx'][data-lit]::before";
+
+  it('ACC-PANEL-138 the stylesheet draws a lamp that is not lit as a circle with a border and a background, and a lit lamp with another background, each a JupyterLab variable', () => {
+    const unlit = rule(UNLIT_LAMP);
 
     expect(unlit['border-radius']).toBe('50%');
     expect(unlit.width).toBe(unlit.height);
     expect(unlit.border).toMatch(/^1px solid var\(--jp-[\w-]+\)$/);
     expect(unlit.background).toMatch(/^var\(--jp-[\w-]+\)$/);
-    expect(lit.background).toMatch(/^var\(--jp-[\w-]+\)$/);
-    expect(lit.background).not.toBe(unlit.background);
+    for (const selector of [LIT_TX, LIT_RX]) {
+      const lit = rule(selector);
+      expect(lit.background).toMatch(/^var\(--(jp|md)-[\w-]+\)$/);
+      expect(lit.background).not.toBe(unlit.background);
+    }
+  });
+
+  it('ACC-PANEL-163 a lit TX lamp is --jp-brand-color1 and a lit RX lamp is --md-yellow-600, fill and border; a lamp that is off keeps its outlined circle; no rule lights both lamps', () => {
+    expect(rule(LIT_TX)).toEqual({
+      'border-color': 'var(--jp-brand-color1)',
+      background: 'var(--jp-brand-color1)'
+    });
+    expect(rule(LIT_RX)).toEqual({
+      'border-color': 'var(--md-yellow-600)',
+      background: 'var(--md-yellow-600)'
+    });
+    expect(rule(UNLIT_LAMP)).toMatchObject({
+      border: '1px solid var(--jp-border-color1)',
+      background: 'var(--jp-layout-color3)'
+    });
+    expect(css).not.toContain('.jp-DeviceBridgePanel-lamp[data-lit]');
+  });
+
+  it('DEF-PANEL-21 the label of an armed button (Confirm stop, Confirm forget) is --jp-ui-inverse-font-color0, which is opaque in both themes, on the red fill, with no opacity and no font weight of its own', () => {
+    const armed = rule(
+      '.jp-DeviceBridgePanel-button.jp-mod-warn.jp-mod-confirm'
+    );
+
+    expect(armed).toEqual({
+      background: 'var(--jp-error-color1)',
+      color: 'var(--jp-ui-inverse-font-color0)'
+    });
   });
 });
 
@@ -479,6 +581,7 @@ describe('DeviceBridgePanel: the device rows', () => {
     expect(usbRow.querySelector('[data-field="baud"]')).toBeNull();
     expect(usbRow.querySelector('[data-action="terminal"]')).toBeNull();
     expect(usbRow.querySelector('[data-profile-field]')).toBeNull();
+    expect(usbRow.querySelector('[data-action="settings"]')).toBeNull();
 
     // A tool opens the virtual device at 57600 baud, and a program opens the probe.
     Object.assign(all.server.table.serial[0], {
@@ -547,7 +650,7 @@ describe('DeviceBridgePanel: the device rows', () => {
 
     expect(rows()).toEqual([]);
     expect(empty.hidden).toBe(false);
-    expect(empty.textContent).toMatch(/^No device yet\./);
+    expect(empty.textContent).toBe('No device attached');
     expect(count()).toBe('(0)');
 
     all.serial.dialog = port;
@@ -633,20 +736,21 @@ describe('DeviceBridgePanel: the device rows', () => {
     expect(text(serialRow, 'error')).toBe('');
   });
 
-  it('ACC-PROF-23 an update of the device table keeps the row element, so an open profile editor stays open', async () => {
+  it('ACC-PANEL-164 an update of the device table keeps the row element and leaves the fields of an open Settings dialog as the user set them', async () => {
     const port = new SimSerialPort(UNO);
     const all = await lab({ ports: [port] });
     const serialRow = row(all, UNO_NAME);
-    const editor = one<HTMLDetailsElement>(serialRow, 'details');
-    editor.open = true;
+    const settings = await openSettings(all, UNO_NAME);
+    const baud = control(settings.body.node, 'baudRate');
+    baud.value = '96';
 
     port.receive([1]);
     await tick(1000);
 
     expect(text(serialRow, 'rx')).toBe('1');
     expect(row(all, UNO_NAME)).toBe(serialRow);
-    expect(one<HTMLDetailsElement>(serialRow, 'details')).toBe(editor);
-    expect(editor.open).toBe(true);
+    expect(baud.value).toBe('96');
+    await settings.close('Cancel');
   });
 });
 
@@ -1190,7 +1294,7 @@ describe('DeviceBridgePanel: attach, detach, forget', () => {
   });
 });
 
-describe('DeviceBridgePanel: the profile editor of a serial row', () => {
+describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
   /** A lab with one attached port, two profiles and a server that takes profile changes. */
   async function labWithProfiles(): Promise<ILab> {
     const all = await lab({
@@ -1203,21 +1307,68 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
     return all;
   }
 
-  it('ACC-PROF-23 the editor shows the profile of the port with its settings and the action on open', async () => {
+  /** The values of the six fields of a dialog, in the order of the dialog. */
+  const values = (dialog: IOpenDialog): string[] =>
+    Array.from(
+      dialog.body.node.querySelectorAll<HTMLSelectElement>(
+        '[data-profile-field]'
+      ),
+      node => `${node.dataset.profileField}=${node.value}`
+    );
+
+  it('ACC-PANEL-164 a serial row has the button Settings and no folded editor; Settings opens a dialog of the lab with the six fields filled with the values of the port, and the buttons Cancel and Save', async () => {
     const all = await labWithProfiles();
     const serialRow = row(all, UNO_NAME);
+    const settings = action(serialRow, 'settings');
+
+    expect(settings.textContent).toBe('Settings');
+    expect(settings.hidden).toBe(false);
+    expect(serialRow.querySelector('details')).toBeNull();
+    expect(serialRow.querySelector('[data-profile-field]')).toBeNull();
+    expect(serialRow.textContent).not.toContain('Profile settings');
+    expect(showDialog).not.toHaveBeenCalled();
+
+    const dialog = await openSettings(all, UNO_NAME);
+
+    expect(dialog.title).toBe(`Serial settings of ${UNO_NAME}`);
+    expect(dialog.buttons.map(shown => [shown.label, shown.accept])).toEqual([
+      ['Cancel', false],
+      ['Save', true]
+    ]);
+    expect(values(dialog)).toEqual([
+      'profile=monitor',
+      'baudRate=115200',
+      'dataBits=8',
+      'parity=none',
+      'stopBits=1',
+      'onOpen=none'
+    ]);
+    // Each field has its label.
+    expect(
+      Array.from(
+        dialog.body.node.querySelectorAll('.jp-DeviceBridgePanel-fieldLabel'),
+        label => label.textContent
+      )
+    ).toEqual([
+      'Profile',
+      'Baud rate',
+      'Data bits',
+      'Parity',
+      'Stop bits',
+      'When a program opens the port'
+    ]);
+    await dialog.close('Cancel');
+  });
+
+  it('ACC-PROF-23 the dialog offers each profile of the server and the choices of each field', async () => {
+    const all = await labWithProfiles();
+    const dialog = await openSettings(all, UNO_NAME);
     const options = (name: keyof IProfileChange): string[] =>
       Array.from(
-        (control(serialRow, name) as HTMLSelectElement).options,
+        (control(dialog.body.node, name) as HTMLSelectElement).options,
         option => option.value
       );
 
-    expect(control(serialRow, 'profile').value).toBe('monitor');
-    expect(control(serialRow, 'baudRate').value).toBe('115200');
-    expect(control(serialRow, 'dataBits').value).toBe('8');
-    expect(control(serialRow, 'parity').value).toBe('none');
-    expect(control(serialRow, 'stopBits').value).toBe('1');
-    expect(control(serialRow, 'onOpen').value).toBe('none');
     expect(options('profile')).toEqual(['monitor', 'stm32-bootloader']);
     expect(options('dataBits')).toEqual(['7', '8']);
     expect(options('parity')).toEqual(['none', 'even', 'odd']);
@@ -1229,11 +1380,12 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
       'esp-bootloader',
       'touch-1200'
     ]);
+    await dialog.close('Cancel');
   });
 
-  it('ACC-PROF-123 each choice of a default setting in the settings schema has the value and the label that the profile editor shows for it', async () => {
+  it('ACC-PROF-123 each choice of a default setting in the settings schema has the value and the label that the Settings dialog shows for it', async () => {
     const all = await labWithProfiles();
-    const serialRow = row(all, UNO_NAME);
+    const dialog = await openSettings(all, UNO_NAME);
     // The schema file is the one the Settings Editor of the lab reads.
     const { properties } = jest.requireActual('../../schema/plugin.json') as {
       properties: Record<
@@ -1247,10 +1399,10 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
         String(choice.const),
         choice.title
       ]);
-    /** The value and the label of every option of a select of the editor. */
+    /** The value and the label of every option of a select of the dialog. */
     const offered = (name: keyof IProfileChange): string[][] =>
       Array.from(
-        (control(serialRow, name) as HTMLSelectElement).options,
+        (control(dialog.body.node, name) as HTMLSelectElement).options,
         option => [option.value, option.textContent ?? '']
       );
 
@@ -1261,75 +1413,126 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
     // The titles are words for a person, not the raw values.
     expect(choices('defaultOnOpen')).toContainEqual(['pulse-dtr', 'Pulse DTR']);
     expect(choices('defaultParity')).toContainEqual(['none', 'None']);
+    await dialog.close('Cancel');
   });
 
   it('ACC-PROF-23 the baud rate field is a text field with the input mode numeric', async () => {
     const all = await labWithProfiles();
+    const dialog = await openSettings(all, UNO_NAME);
 
-    const baud = control(row(all, UNO_NAME), 'baudRate');
+    const baud = control(dialog.body.node, 'baudRate');
 
     // DEF-PANEL-6: the arrow keys and the mouse wheel change a number field by 1.
     expect(baud.type).toBe('text');
     expect(baud.getAttribute('inputmode')).toBe('numeric');
+    await dialog.close('Cancel');
   });
 
-  it('ACC-PROF-23 choosing the profile stm32-bootloader sends it to the server, and the row and the editor show even parity', async () => {
+  it('ACC-PANEL-164 Save sends the changed fields in one profile request, numbers as numbers, and the row shows the new baud rate', async () => {
     const all = await labWithProfiles();
     const serialRow = row(all, UNO_NAME);
+    const dialog = await openSettings(all, UNO_NAME);
 
-    choose(serialRow, 'profile', 'stm32-bootloader');
-    await tick();
+    choose(dialog.body.node, 'baudRate', '9600');
+    choose(dialog.body.node, 'parity', 'even');
+    expect(all.changes).toEqual([]);
+    await dialog.close('Save');
 
     const [request] = all.fetch.mock.calls[0] as [Request];
     expect(request.method).toBe('PUT');
     expect(request.url.split('?')[0]).toBe(
       `http://lab.test/jupyterlab-device-bridge-extension/serial/${UNO_NAME}/profile`
     );
-    expect(all.changes).toEqual([{ profile: 'stm32-bootloader' }]);
-    expect(text(serialRow, 'profile')).toBe('stm32-bootloader');
-    expect(control(serialRow, 'parity').value).toBe('even');
+    expect(all.changes).toEqual([{ baudRate: 9600, parity: 'even' }]);
+    expect(text(serialRow, 'baud')).toBe('9600');
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('ACC-PROF-23 parity, data bits, stop bits, baud rate and the action on open are each sent as one field, numbers as numbers', async () => {
+  it('ACC-PROF-23 data bits, stop bits and the action on open are sent with Save, numbers as numbers, and the next dialog shows the overrides', async () => {
     const all = await labWithProfiles();
-    const serialRow = row(all, UNO_NAME);
+    const dialog = await openSettings(all, UNO_NAME);
 
-    choose(serialRow, 'parity', 'odd');
-    choose(serialRow, 'dataBits', '7');
-    choose(serialRow, 'stopBits', '2');
-    choose(serialRow, 'baudRate', '9600');
-    choose(serialRow, 'onOpen', 'esp-bootloader');
-    await tick();
+    choose(dialog.body.node, 'dataBits', '7');
+    choose(dialog.body.node, 'stopBits', '2');
+    choose(dialog.body.node, 'onOpen', 'esp-bootloader');
+    await dialog.close('Save');
 
     expect(all.changes).toEqual([
-      { parity: 'odd' },
-      { dataBits: 7 },
-      { stopBits: 2 },
-      { baudRate: 9600 },
-      { onOpen: 'esp-bootloader' }
+      { dataBits: 7, stopBits: 2, onOpen: 'esp-bootloader' }
     ]);
     expect(all.server.table.serial[0].overrides).toEqual({
-      parity: 'odd',
       dataBits: 7,
       stopBits: 2,
-      baudRate: 9600,
       onOpen: 'esp-bootloader'
     });
-    expect(control(serialRow, 'onOpen').value).toBe('esp-bootloader');
-    expect(text(serialRow, 'baud')).toBe('9600');
-
-    // A profile id replaces the single fields: the editor shows the profile again.
-    choose(serialRow, 'profile', 'stm32-bootloader');
-    await tick();
-    expect(control(serialRow, 'parity').value).toBe('even');
-    expect(control(serialRow, 'dataBits').value).toBe('8');
-    expect(control(serialRow, 'stopBits').value).toBe('1');
-    expect(control(serialRow, 'baudRate').value).toBe('115200');
-    expect(control(serialRow, 'onOpen').value).toBe('none');
+    expect(values(await openSettings(all, UNO_NAME))).toEqual([
+      'profile=monitor',
+      'baudRate=115200',
+      'dataBits=7',
+      'parity=none',
+      'stopBits=2',
+      'onOpen=esp-bootloader'
+    ]);
   });
 
-  it('ACC-PROF-23 the editor shows the baud rate and the action on open of the profile with its overrides, not the baud rate a tool set on the port', async () => {
+  it('ACC-PANEL-164 Cancel sends nothing and the row keeps 115200, also after the fields were changed', async () => {
+    const all = await labWithProfiles();
+    const dialog = await openSettings(all, UNO_NAME);
+
+    choose(dialog.body.node, 'baudRate', '9600');
+    choose(dialog.body.node, 'profile', 'stm32-bootloader');
+    await dialog.close('Cancel');
+
+    expect(all.changes).toEqual([]);
+    expect(all.fetch).not.toHaveBeenCalled();
+    expect(text(row(all, UNO_NAME), 'baud')).toBe('115200');
+    expect(text(row(all, UNO_NAME), 'profile')).toBe('monitor');
+  });
+
+  it('ACC-PANEL-164 Save with no field changed sends nothing', async () => {
+    const all = await labWithProfiles();
+    const dialog = await openSettings(all, UNO_NAME);
+
+    // A field changed and set back is no change.
+    choose(dialog.body.node, 'parity', 'odd');
+    choose(dialog.body.node, 'parity', 'none');
+    await dialog.close('Save');
+
+    expect(all.fetch).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('ACC-PROF-23 a profile chosen in the dialog fills the fields with its values, and Save sends the profile with the fields that differ from it; the row shows the profile', async () => {
+    const all = await labWithProfiles();
+    const serialRow = row(all, UNO_NAME);
+    all.server.table.serial[0].overrides = { onOpen: 'pulse-dtr' };
+    all.server.push();
+    await tick();
+    const dialog = await openSettings(all, UNO_NAME);
+    expect(control(dialog.body.node, 'onOpen').value).toBe('pulse-dtr');
+
+    choose(dialog.body.node, 'profile', 'stm32-bootloader');
+
+    // A profile id removes the overrides: the fields show the profile alone.
+    expect(values(dialog)).toEqual([
+      'profile=stm32-bootloader',
+      'baudRate=115200',
+      'dataBits=8',
+      'parity=even',
+      'stopBits=1',
+      'onOpen=none'
+    ]);
+    choose(dialog.body.node, 'baudRate', '57600');
+    await dialog.close('Save');
+
+    expect(all.changes).toEqual([
+      { profile: 'stm32-bootloader', baudRate: 57600 }
+    ]);
+    expect(text(serialRow, 'profile')).toBe('stm32-bootloader');
+    expect(text(serialRow, 'baud')).toBe('57600');
+  });
+
+  it('ACC-PROF-23 the dialog shows the baud rate and the action on open of the profile with its overrides, not the baud rate a tool set on the port', async () => {
     const all = await labWithProfiles();
     const serialRow = row(all, UNO_NAME);
     Object.assign(all.server.table.serial[0], {
@@ -1343,20 +1546,18 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
     await tick();
 
     expect(text(serialRow, 'baud')).toBe('57600');
-    expect(control(serialRow, 'profile').value).toBe('stm32-bootloader');
-    expect(control(serialRow, 'baudRate').value).toBe('115200');
-    expect(control(serialRow, 'parity').value).toBe('even');
-    expect(control(serialRow, 'onOpen').value).toBe('pulse-dtr');
-
-    all.server.table.serial[0].overrides = {};
-    all.server.push();
-    await tick();
-    expect(control(serialRow, 'onOpen').value).toBe('none');
+    expect(values(await openSettings(all, UNO_NAME))).toEqual([
+      'profile=stm32-bootloader',
+      'baudRate=115200',
+      'dataBits=8',
+      'parity=even',
+      'stopBits=1',
+      'onOpen=pulse-dtr'
+    ]);
   });
 
-  it('ACC-PROF-23 a change the server refuses raises a notification with the message of the server and the field shows the profile again', async () => {
+  it('ACC-PANEL-164 ACC-PANEL-175 a change the server refuses raises the notification Profile not changed with the message of the server, and the row keeps its values', async () => {
     const all = await labWithProfiles();
-    const serialRow = row(all, UNO_NAME);
     const refusal = {
       error: {
         code: 400,
@@ -1364,41 +1565,20 @@ describe('DeviceBridgePanel: the profile editor of a serial row', () => {
       }
     };
     all.answer = () => new Response(JSON.stringify(refusal), { status: 400 });
-    const baud = control(serialRow, 'baudRate');
+    const dialog = await openSettings(all, UNO_NAME);
 
-    // The field keeps the focus, as after the Enter key.
-    baud.focus();
-    choose(serialRow, 'baudRate', '');
-    await tick();
+    choose(dialog.body.node, 'baudRate', '');
+    await dialog.close('Save');
 
     expect(all.changes).toEqual([{ baudRate: 0 }]);
-    expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit).toHaveBeenCalledWith(
-      `The profile of ${UNO_NAME} was not changed: baudRate: 0 is not a whole number from 1 to 4294967295`,
-      'error',
-      { autoClose: false }
-    );
-    expect(baud.value).toBe('115200');
-  });
-
-  it('ACC-PROF-23 an update of the device table does not replace a baud rate the user is typing', async () => {
-    const port = new SimSerialPort(UNO);
-    const all = await lab({ ports: [port] });
-    const serialRow = row(all, UNO_NAME);
-    const baud = control(serialRow, 'baudRate');
-
-    baud.focus();
-    baud.value = '96';
-    port.receive([1]);
-    await tick(1000);
-    expect(text(serialRow, 'rx')).toBe('1');
-    expect(baud.value).toBe('96');
-
-    // After the user left the field without a change, the next update shows the profile.
-    baud.blur();
-    port.receive([2]);
-    await tick(1000);
-    expect(baud.value).toBe('115200');
+    expect(emit.mock.calls).toEqual([
+      [
+        'Profile not changed: baudRate: 0 is not a whole number from 1 to 4294967295',
+        'error',
+        { autoClose: false }
+      ]
+    ]);
+    expect(text(row(all, UNO_NAME), 'baud')).toBe('115200');
   });
 });
 
@@ -1425,12 +1605,12 @@ describe('DeviceBridgePanel: the plus icon of the header', () => {
     ]) {
       expect(all.panel.node.querySelector(gone)).toBeNull();
     }
-    // The text of the empty list names the icon and no button.
+    // The tooltip of the empty list names the icon and no button.
     expect(
       one(
         all.panel.node,
         '[data-section="devices"] .jp-DeviceBridgePanel-empty'
-      ).textContent
+      ).title
     ).toBe(
       'No device yet. Add a serial port or a USB device of this computer with the plus icon above.'
     );
@@ -1635,7 +1815,7 @@ describe('DeviceBridgePanel: the runs section', () => {
     const section = runsSection(all);
 
     expect(one(section, '.jp-DeviceBridgePanel-sectionTitle').textContent).toBe(
-      'Device shell and tools'
+      'Device shells'
     );
 
     await run(all, SHELL_RUN, UPLOAD_RUN);
@@ -1702,9 +1882,7 @@ describe('DeviceBridgePanel: the runs section', () => {
     expect(all.model.tabId).toBeNull();
     expect(section.hidden).toBe(false);
     expect(empty.hidden).toBe(false);
-    expect(empty.textContent).toBe(
-      'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
-    );
+    expect(empty.textContent).toBe('No device shell opened');
     expect(text(section, 'count')).toBe('(0)');
     expect(runRows(all)).toEqual([]);
 
@@ -1763,17 +1941,18 @@ describe('DeviceBridgePanel: the runs section', () => {
     expect(text(shell, 'command')).toBe('/bin/zsh -l');
   });
 
-  it('ACC-PANEL-140 the runs section is titled Device shell and tools, its Start button has the title Open a device shell, and its empty text names a device shell; the buttons keep the labels Start and Info', async () => {
+  it('ACC-PANEL-140 the runs section is titled Device shells, its Start button has the title Open a device shell, and its empty text names a device shell; the buttons keep the labels Start and Info', async () => {
     const all = await lab();
     const section = runsSection(all);
 
     expect(one(section, '.jp-DeviceBridgePanel-sectionTitle').textContent).toBe(
-      'Device shell and tools'
+      'Device shells'
     );
     expect(action(section, 'start-run').title).toBe('Open a device shell');
     expect(action(section, 'start-run').textContent).toBe('Start');
     expect(action(section, 'run-info').textContent).toBe('Info');
-    expect(field(section, 'empty').textContent).toBe(
+    expect(field(section, 'empty').textContent).toBe('No device shell opened');
+    expect(field(section, 'empty').title).toBe(
       'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
     );
   });
@@ -1866,7 +2045,7 @@ describe('DeviceBridgePanel: the runs section', () => {
     ]);
   });
 
-  it('ACC-PANEL-133 a stop that the server refuses raises a notification that stays, with the process id first and the reason of the server last', async () => {
+  it('ACC-PANEL-133 ACC-PANEL-175 a stop that the server refuses raises the notification Not stopped that stays, with the reason of the server last', async () => {
     const all = await lab();
     await run(all, UPLOAD_RUN);
     const refusal = {
@@ -1883,11 +2062,7 @@ describe('DeviceBridgePanel: the runs section', () => {
 
     expect(all.stops).toHaveLength(1);
     expect(emit.mock.calls).toEqual([
-      [
-        'The program with pid 4250 was not stopped: No run has the pid 4250',
-        'error',
-        { autoClose: false }
-      ]
+      ['Not stopped: No run has the pid 4250', 'error', { autoClose: false }]
     ]);
     expect(runRows(all)).toEqual(['4250']);
   });
@@ -1923,10 +2098,13 @@ describe('DeviceBridgePanel: round trip and absent interfaces', () => {
       }
     });
     const roundTrip = field(all.panel.node, 'round-trip');
+    const footer = one(all.panel.node, '.jp-DeviceBridgePanel-footer');
 
     expect(roundTrip.textContent).toBe('not connected');
+    expect(footer.textContent).toBe('Round trip: not connected');
     await tick(12);
     expect(roundTrip.textContent).toBe('12.0 ms');
+    expect(footer.textContent).toBe('Round trip: 12.0 ms');
 
     all.server.accepting = false;
     all.server.drop();
@@ -1939,6 +2117,9 @@ describe('DeviceBridgePanel: round trip and absent interfaces', () => {
 
     expect(absent.hidden).toBe(false);
     expect(absent.textContent).toBe(
+      'Web Serial and WebUSB need HTTPS or localhost, in Chrome or Edge'
+    );
+    expect(absent.title).toBe(
       'The browser gives this page no access to serial ports and USB devices. Open the lab over HTTPS or at localhost, in Chrome or Edge.'
     );
     expect(plus(all).disabled).toBe(true);
@@ -1959,16 +2140,19 @@ describe('DeviceBridgePanel: round trip and absent interfaces', () => {
   });
 
   it.each([
-    ['serial', 'USB devices'],
-    ['usb', 'serial ports']
+    ['serial', 'WebUSB', 'USB devices'],
+    ['usb', 'Web Serial', 'serial ports']
   ] as const)(
-    'ACC-PANEL-154 a browser with only the %s interface gets the message for the absent %s, and the plus icon is enabled and opens its menu',
-    async (only, missing) => {
+    'ACC-PANEL-154 ACC-PANEL-175 a browser with only the %s interface gets the message that %s needs HTTPS or localhost, with the full text in its tooltip, and the plus icon is enabled and opens its menu',
+    async (only, name, missing) => {
       const all = await lab({ interfaces: [only] });
       const absent = field(all.panel.node, 'absent');
 
       expect(absent.hidden).toBe(false);
       expect(absent.textContent).toBe(
+        `${name} needs HTTPS or localhost, in Chrome or Edge`
+      );
+      expect(absent.title).toBe(
         `The browser gives this page no access to ${missing}. Open the lab over HTTPS or at localhost, in Chrome or Edge.`
       );
       expect(plus(all).disabled).toBe(false);
@@ -1978,4 +2162,84 @@ describe('DeviceBridgePanel: round trip and absent interfaces', () => {
       all.addMenu.close();
     }
   );
+});
+
+describe('DeviceBridgePanel: the short texts', () => {
+  /** The text of a line of a row: the element that holds this field. */
+  const lineOf = (root: ParentNode, name: string): HTMLElement =>
+    field(root, name).parentElement!;
+
+  it('ACC-PANEL-175 the panel shows short texts, and each tooltip keeps the full text', async () => {
+    const all = await lab({
+      prepare: server => {
+        server.pongDelay = 12;
+      }
+    });
+    const section = (name: string): HTMLElement =>
+      one(all.panel.node, `[data-section="${name}"]`);
+    const title = (name: string): HTMLElement =>
+      one(section(name), '.jp-DeviceBridgePanel-sectionTitle');
+    const emptyDevices = one(section('devices'), '.jp-DeviceBridgePanel-empty');
+    const footer = one(all.panel.node, '.jp-DeviceBridgePanel-footer');
+
+    expect(
+      one(all.panel.node, '.jp-DeviceBridgePanel-headerTitle').textContent
+    ).toBe('Devices');
+    expect(
+      ['devices', 'runs', 'requests'].map(name => [
+        title(name).textContent,
+        title(name).title
+      ])
+    ).toEqual([
+      ['Serial and USB', 'Serial ports and USB devices of this computer'],
+      [
+        'Device shells',
+        'Device shells and tools started with jupyterlab-device run'
+      ],
+      ['Requests', 'Requests of programs in the container for a device']
+    ]);
+    expect([emptyDevices.textContent, emptyDevices.title]).toEqual([
+      'No device attached',
+      'No device yet. Add a serial port or a USB device of this computer with the plus icon above.'
+    ]);
+    const emptyRuns = field(section('runs'), 'empty');
+    expect([emptyRuns.textContent, emptyRuns.title]).toEqual([
+      'No device shell opened',
+      'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
+    ]);
+    expect([footer.textContent, footer.title]).toEqual([
+      'Round trip: not connected',
+      'Round trip of a message from the browser to the server and back'
+    ]);
+    await tick(12);
+    expect(footer.textContent).toBe('Round trip: 12.0 ms');
+
+    // A port and a USB device, with traffic on the port.
+    const port = new SimSerialPort(UNO);
+    all.serial.dialog = port;
+    await all.model.connectSerial();
+    all.usb.dialog = new SimUsbDevice();
+    await all.model.connectUsb();
+    await tick();
+    port.receive([1, 2, 3]);
+    await tick(1000);
+
+    const traffic = lineOf(row(all, UNO_NAME), 'rx');
+    expect([traffic.textContent, traffic.title]).toEqual([
+      'RX 3, TX 0 bytes',
+      'Bytes from the device (RX) and to the device (TX)'
+    ]);
+    expect(lineOf(row(all, PROBE_NAME), 'rx').textContent).toBe(
+      'RX 0, TX 0 bytes'
+    );
+    const opened = lineOf(row(all, PROBE_NAME), 'opened');
+    expect([opened.textContent, opened.title]).toEqual([
+      'Opened: no',
+      'Whether a program in the container has the device open'
+    ]);
+    all.server.table.usb[0].opened = true;
+    all.server.push();
+    await tick();
+    expect(opened.textContent).toBe('Opened: yes');
+  });
 });

@@ -1,11 +1,12 @@
 #!/usr/bin/env -S PYTHONDONTWRITEBYTECODE=1 uv run --quiet --script
-## Rust firmware toolchain for AVR (Arduino, ATtiny) - nightly compiler, avr-gcc, avrdude
+## Firmware toolchain for AVR (Arduino, ATtiny) - nightly Rust, avr-gcc, avrdude, PlatformIO with the Arduino AVR core
 # /// script
 # requires-python = ">=3.12"
 # dependencies = ["rich>=13"]
 # ///
 """Install the conda environment firmware-avr: nightly Rust with its source, the AVR GNU toolchain
-that links the firmware, and avrdude for upload through a serial bootloader or a programmer."""
+that links the firmware, avrdude for upload through a serial bootloader or a programmer, and for
+Arduino C/C++ sketches PlatformIO with the atmelavr platform and the Arduino AVR core."""
 
 import shutil
 
@@ -14,6 +15,8 @@ from firmware_env import Stage, install
 NIGHTLY = "nightly-2026-10-06"  # AVR builds need nightly Rust; this date is tested with atmega328p
 AVR_GCC = "7.3.0-atmel3.6.1-arduino7"  # with avr-binutils and avr-libc, as the Arduino IDE installs it
 AVRDUDE = "8.0-arduino.1"
+PLATFORMIO = "6.2.0"
+ATMELAVR = "5.3.0"  # PlatformIO platform; a project pins the same version in platformio.ini
 
 
 def conda_packages(env):
@@ -39,25 +42,35 @@ def avrdude(env):
     env.link(env.prefix / "avrdude/bin")
 
 
+def platformio(env):
+    """PlatformIO keeps the platform, its toolchain and the Arduino core in <prefix>/platformio."""
+    env.platformio(PLATFORMIO, f"atmelavr@{ATMELAVR}", "nanoatmega328", "tool-avrdude")
+
+
 install(
     name="firmware-avr",
-    summary="Rust firmware toolchain for AVR",
+    summary="Firmware toolchain for AVR",
+    variables={"PLATFORMIO_CORE_DIR": "{prefix}/platformio"},
     stages=[
         Stage("C compiler, pyserial", "conda-forge", conda_packages),
         Stage(f"Rust {NIGHTLY} with rust-src", "static.rust-lang.org", rust),
         Stage(f"avr-gcc {AVR_GCC}", "downloads.arduino.cc", avr_gcc),
         Stage(f"avrdude {AVRDUDE}", "downloads.arduino.cc", avrdude),
+        Stage(f"PlatformIO {PLATFORMIO}, atmelavr {ATMELAVR}", "registry.platformio.org", platformio),
     ],
     tools=[
         ("cargo", ["cargo", "--version"]),
         ("rustc", ["rustc", "--version"]),
         ("avr-gcc", ["avr-gcc", "--version"]),
         ("avrdude", ["avrdude", "-v"]),
+        ("pio", ["pio", "--version"]),
+        ("PlatformIO platform", f"atmelavr {ATMELAVR} with framework-arduino-avr"),
         ("target", "avr-none"),
     ],
     usage=[
         "conda activate firmware-avr",
         'RUSTFLAGS="-C target-cpu=atmega328p" cargo build --release -Z build-std=core --target avr-none',
         "avrdude -c arduino -p atmega328p -P <serial device> -U flash:w:<firmware>.elf",
+        "pio run --target upload --upload-port <serial device>    (in a PlatformIO project)",
     ],
 )

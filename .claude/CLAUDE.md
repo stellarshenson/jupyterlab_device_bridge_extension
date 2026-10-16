@@ -84,6 +84,13 @@ architecture changes.
   - `pyusb_backend.py` - `get_backend()` and `install()`; the only module that imports pyusb
   - `shim_build.py`, `shim/devshim.c` - the preload shim: the C source ships in the wheel and is
     compiled on first use into `~/.cache/jupyterlab-device-bridge/`
+  - `terminal_app.py` - `SerialTerminal`, the full-screen Textual app of `jupyterlab-device
+    terminal`, with its settings screen `SettingsScreen`
+  - `tui_theme.py` - the dark and light themes of the Textual apps, chosen from the terminal's
+    background
+  - `environments.py` - the environments a device shell can start in: the `.venv` of the start
+    folder and the conda environments that hold an upload tool
+  - `env_picker.py` - `EnvironmentPicker`, the Textual selector of that environment
 - **Frontend** (TypeScript, `src/`)
   - `index.ts` - the plugin: five commands, the palette, the Devices menu (setting `showMenu`), the
     notifications of device requests, the command that opens the serial terminal, the command that
@@ -95,12 +102,14 @@ architecture changes.
   - `protocol.ts` - the types of the messages and the records; no code
   - `panel.ts`, `status.ts`, `icons.ts` - the Devices panel, the status bar item, the icon
   - `request.ts` - the REST helper and the WebSocket URL
-- **Serial terminal** - no code of this extension: `jupyterlab-device terminal` becomes pyserial's
-  miniterm, and the lab command starts that command line in a lab terminal
+- **Serial terminal** - the extension's own Textual app `terminal_app.py`: `jupyterlab-device
+  terminal` runs it in the CLI process on the device path, and the lab command starts that command
+  line in a lab terminal
 - **Terminal launch** - the serial terminal and the device shell (`jupyterlab-device shell`, the
   shell command of the lab's terminals with the shim) start through the command
   `basic-terminal:launch` of `jupyterlab_basic_terminal_extension`, a dependency of the wheel: one
-  program in a terminal, no typed line, the tab closes when the program ends
+  program in a terminal, no typed line, the tab closes when the program ends; the call passes
+  `shutdownOnClose: true`, so closing the tab ends the program (terminal extension 1.0.9 or later)
 - **Schema** (`schema/plugin.json`) - the settings `showPanel` (the Devices panel is in the left sidebar
   only while it is true; default false), `showMenu` and the five default serial settings of a new
   port; the item Show Devices Panel of the View menu
@@ -108,7 +117,7 @@ architecture changes.
   `fake_tab.py` plays the browser tab, `test_readme.py` holds the README to the brief); Jest in
   `src/__tests__/` (`sim.ts` simulates `navigator.serial`, `navigator.usb` and the WebSocket);
   Playwright/Galata in `ui-tests/` (`tests/device-sim.js` simulates both interfaces in the page and
-  in the worker; the lab, the server, the CLI and miniterm are real)
+  in the worker; the lab, the server, the CLI and the terminal app are real)
 - **Agent skill** (`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`) - tells an agent
   to read `jupyterlab-device --help` first; the wheel installs it under `share/jupyter/agents/skills/`
 - **Resources** (`resources/envs/`) - copies of the three firmware environment installers and of

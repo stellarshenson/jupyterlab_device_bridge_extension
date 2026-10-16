@@ -12,6 +12,7 @@ import {
   addUsb,
   api,
   closeTerminals,
+  expectAppHeader,
   DEVICE_DIR,
   endProcesses,
   field,
@@ -35,6 +36,7 @@ import {
   runRow,
   runsSection,
   serialRecord,
+  SERVER,
   setSetting,
   simArgs,
   simDialogs,
@@ -165,6 +167,31 @@ async function runFromPalette(
     .click();
 }
 
+/** The open Settings dialog of a serial row; the lab shows one dialog at a time. */
+const settingsDialog = (page: Page): Locator => page.locator('.jp-Dialog');
+
+/** A field of the open Settings dialog. */
+const settingsField = (page: Page, name: string): Locator =>
+  settingsDialog(page).locator(`[data-profile-field="${name}"]`);
+
+/** Click Settings in the row of a serial port and wait for its dialog. */
+async function openSettings(page: Page, portRow: Locator): Promise<void> {
+  await action(portRow, 'settings').click();
+  await expect(settingsDialog(page)).toBeVisible();
+}
+
+/**
+ * Close the Settings dialog with its button Save, or Cancel. The close icon of the
+ * dialog has the title Cancel too, so the button is found by its class and label.
+ */
+async function saveSettings(page: Page, button = 'Save'): Promise<void> {
+  await settingsDialog(page)
+    .locator('.jp-Dialog-button')
+    .filter({ hasText: button })
+    .click();
+  await expect(settingsDialog(page)).toHaveCount(0);
+}
+
 test.describe('Devices panel', () => {
   test.use({ mockSettings: PANEL_SHOWN });
 
@@ -179,21 +206,20 @@ test.describe('Devices panel', () => {
     );
   });
 
-  test('ACC-PROF-23 parity, data bits, stop bits and the action on open of a serial port are set in the panel', async ({
+  test('ACC-PROF-23 parity, data bits, stop bits and the action on open of a serial port are set in the Settings dialog of its row', async ({
     page
   }) => {
     const port = simSerial();
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
     const portRow = row(page, port.name);
-    const control = (name: string): Locator =>
-      portRow.locator(`[data-profile-field="${name}"]`);
     /** The settings the simulated port was opened with the last time. */
     const openedWith = async (): Promise<unknown> =>
       (await simArgs(page, port.id, 'open')).at(-1)?.[0];
-    await portRow.locator('summary').click();
 
-    await control('profile').selectOption('stm32-bootloader');
+    await openSettings(page, portRow);
+    await settingsField(page, 'profile').selectOption('stm32-bootloader');
+    await saveSettings(page);
 
     await expect(field(portRow, 'profile')).toHaveText('stm32-bootloader', {
       timeout: ROUND_TRIP
@@ -206,11 +232,13 @@ test.describe('Devices panel', () => {
       .poll(openedWith, { timeout: ROUND_TRIP })
       .toMatchObject({ dataBits: 8, parity: 'even', stopBits: 1 });
 
-    // Each single field of the editor.
-    await control('parity').selectOption('odd');
-    await control('dataBits').selectOption('7');
-    await control('stopBits').selectOption('2');
-    await control('onOpen').selectOption('pulse-rts');
+    // Each single field of the dialog.
+    await openSettings(page, portRow);
+    await settingsField(page, 'parity').selectOption('odd');
+    await settingsField(page, 'dataBits').selectOption('7');
+    await settingsField(page, 'stopBits').selectOption('2');
+    await settingsField(page, 'onOpen').selectOption('pulse-rts');
+    await saveSettings(page);
 
     await expect
       .poll(async () => (await serialRecord(port.name)).overrides, {
@@ -235,24 +263,22 @@ test.describe('Devices panel', () => {
       .toEqual([[{ requestToSend: false }], [{ requestToSend: true }]]);
   });
 
-  test('ACC-PROF-23 an arrow key in the baud rate field of the panel changes no baud rate', async ({
+  test('ACC-PROF-23 an arrow key in the baud rate field of the Settings dialog changes no baud rate', async ({
     page
   }) => {
     const port = simSerial();
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
-    const portRow = row(page, port.name);
-    const control = (name: string): Locator =>
-      portRow.locator(`[data-profile-field="${name}"]`);
-    await portRow.locator('summary').click();
+    await openSettings(page, row(page, port.name));
 
-    // DEF-PANEL-6: a number field takes the key as a step of 1, and the panel sends it.
-    await control('baudRate').focus();
+    // DEF-PANEL-6: a number field takes the key as a step of 1.
+    await settingsField(page, 'baudRate').focus();
     await page.keyboard.press('ArrowUp');
 
-    await expect(control('baudRate')).toHaveValue('115200');
-    // A change of the baud rate would reach the server before this change of the parity.
-    await control('parity').selectOption('even');
+    await expect(settingsField(page, 'baudRate')).toHaveValue('115200');
+    // A changed baud rate would be sent with this change of the parity.
+    await settingsField(page, 'parity').selectOption('even');
+    await saveSettings(page);
     await expect
       .poll(async () => (await serialRecord(port.name)).overrides, {
         timeout: ROUND_TRIP
@@ -477,7 +503,7 @@ test.describe('Devices panel', () => {
     await second.close();
   });
 
-  test('DEF-PANEL-14 at the width the lab gives the left sidebar no section title of the panel is cut, and the devices section reads Serial and USB devices', async ({
+  test('DEF-PANEL-14 ACC-PANEL-175 at the width the lab gives the left sidebar no section title of the panel is cut, and the sections read Serial and USB, Requests and Device shells', async ({
     page
   }) => {
     // A port and a device request of a program: each of the three sections is shown.
@@ -520,9 +546,9 @@ test.describe('Devices panel', () => {
         })
     );
     expect(titles.map(title => [title.section, title.text]).sort()).toEqual([
-      ['devices', 'Serial and USB devices'],
-      ['requests', 'Requests of programs'],
-      ['runs', 'Device shell and tools']
+      ['devices', 'Serial and USB'],
+      ['requests', 'Requests'],
+      ['runs', 'Device shells']
     ]);
     for (const title of titles) {
       // A title that is cut needs more width than it has.
@@ -533,6 +559,194 @@ test.describe('Devices panel', () => {
     await action(requestRow, 'grant').click();
     expect((await request.done).code).toBe(1);
     await expect(requestRow).toHaveCount(0);
+  });
+
+  test('ACC-PANEL-163 a lit TX lamp has the colour of --jp-brand-color1 and a lit RX lamp the colour of --md-yellow-600, and a lamp that goes off has the colour of an unlit lamp again', async ({
+    page
+  }) => {
+    // The port does not send back what it gets: each direction has traffic of its own.
+    const port = simSerial({ echo: false });
+    await recordLamps(page);
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    /** The colour of a variable of the lab in this theme, read from an element that has it as its background. */
+    const colourOf = (variable: string): Promise<string> =>
+      page.evaluate(name => {
+        const probe = document.createElement('div');
+        probe.style.background = `var(${name})`;
+        document.body.append(probe);
+        const colour = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return colour;
+      }, variable);
+    const blue = await colourOf('--jp-brand-color1');
+    const yellow = await colourOf('--md-yellow-600');
+    const unlit = await portRow
+      .locator('[data-lamp="rx"]')
+      .evaluate(node => getComputedStyle(node, '::before').backgroundColor);
+    // Three different colours: the lab defines both variables.
+    expect(new Set([blue, yellow, unlit, 'rgba(0, 0, 0, 0)']).size).toBe(4);
+
+    await simSend(page, port.id, [1, 2, 3]);
+    await expect
+      .poll(() => lampChanges(page, port.name), { timeout: LAMP_WAIT })
+      .toEqual([
+        ['rx', true],
+        ['rx', false]
+      ]);
+    const written = await api('POST', `serial/${port.name}/write`, {
+      data: Buffer.from('ping').toString('base64')
+    });
+    expect(written.status).toBe(200);
+    await expect
+      .poll(() => lampChanges(page, port.name), { timeout: LAMP_WAIT })
+      .toEqual([
+        ['rx', true],
+        ['rx', false],
+        ['tx', true],
+        ['tx', false]
+      ]);
+
+    const colours = (await lampEvents(page, port.name)).map(event => [
+      event.lamp,
+      event.lit,
+      event.colour
+    ]);
+    expect(colours).toEqual([
+      ['rx', true, yellow],
+      ['rx', false, unlit],
+      ['tx', true, blue],
+      ['tx', false, unlit]
+    ]);
+  });
+
+  test('ACC-PANEL-164 Settings of a serial row opens a lab dialog with the values of the port; Cancel after a change leaves 115200; baud rate 9600 and Save reopen the simulated port at 9600 and the row reads 9600', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    const opens = async (): Promise<unknown[]> =>
+      (await simArgs(page, port.id, 'open')).map(args => args[0]);
+    await expect(portRow.locator('details')).toHaveCount(0);
+    await expect(field(portRow, 'baud')).toHaveText('115200');
+    expect(await opens()).toHaveLength(1);
+
+    await openSettings(page, portRow);
+    const shown = await Promise.all(
+      ['profile', 'baudRate', 'dataBits', 'parity', 'stopBits', 'onOpen'].map(
+        name => settingsField(page, name).inputValue()
+      )
+    );
+    expect(shown).toEqual(['monitor', '115200', '8', 'none', '1', 'none']);
+    await settingsField(page, 'baudRate').fill('9600');
+    await saveSettings(page, 'Cancel');
+
+    expect((await serialRecord(port.name)).overrides).toEqual({});
+    await expect(field(portRow, 'baud')).toHaveText('115200');
+    expect(await opens()).toHaveLength(1);
+
+    await openSettings(page, portRow);
+    await expect(settingsField(page, 'baudRate')).toHaveValue('115200');
+    await settingsField(page, 'baudRate').fill('9600');
+    await saveSettings(page);
+
+    await expect(field(portRow, 'baud')).toHaveText('9600', {
+      timeout: ROUND_TRIP
+    });
+    await expect
+      .poll(opens, { timeout: ROUND_TRIP })
+      .toEqual([
+        expect.objectContaining({ baudRate: 115200 }),
+        expect.objectContaining({ baudRate: 9600 })
+      ]);
+    expect((await serialRecord(port.name)).overrides).toEqual({
+      baudRate: 9600
+    });
+  });
+
+  test('ACC-PANEL-175 an empty panel reads No device attached and No device shell opened, the sections Serial and USB and Device shells, and the footer Round trip; each tooltip has the full text', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const panel = page.locator(PANEL);
+    const emptyDevices = panel.locator(
+      '[data-section="devices"] .jp-DeviceBridgePanel-empty'
+    );
+    const emptyRuns = field(runsSection(page), 'empty');
+    const title = (name: string): Locator =>
+      panel.locator(
+        `[data-section="${name}"] .jp-DeviceBridgePanel-sectionTitle`
+      );
+
+    // The server keeps the detached records of the earlier tests. Forget works on every
+    // detached device, so the test empties the table through the panel first.
+    const rows = panel.locator('[data-device]');
+    while ((await rows.count()) > 0) {
+      const before = await rows.count();
+      await forget(rows.first());
+      await expect(rows).toHaveCount(before - 1, { timeout: ROUND_TRIP });
+    }
+
+    await expect(emptyDevices).toBeVisible();
+    await expect(emptyDevices).toHaveText('No device attached');
+    await expect(emptyDevices).toHaveAttribute(
+      'title',
+      'No device yet. Add a serial port or a USB device of this computer with the plus icon above.'
+    );
+    await expect(emptyRuns).toBeVisible();
+    await expect(emptyRuns).toHaveText('No device shell opened');
+    await expect(emptyRuns).toHaveAttribute(
+      'title',
+      'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
+    );
+    await expect(title('devices')).toHaveText('Serial and USB');
+    await expect(title('runs')).toHaveText('Device shells');
+    await expect(panel.locator('.jp-DeviceBridgePanel-footer')).toHaveText(
+      /^Round trip: \d+\.\d ms$/,
+      { timeout: ROUND_TRIP }
+    );
+  });
+
+  test('DEF-SERIAL-20 closing the tab of the serial terminal ends its lab terminal session, and the device has no holder', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    /** The names of the terminal sessions of the test server. */
+    const terminals = async (): Promise<string[]> =>
+      (await (await fetch(`${SERVER}/api/terminals`)).json()).map(
+        (terminal: { name: string }) => terminal.name
+      );
+    expect(await terminals()).toEqual([]);
+
+    await action(row(page, port.name), 'terminal').click();
+    await expect
+      .poll(async () => (await serialRecord(port.name)).holder, {
+        timeout: TERMINAL_START
+      })
+      .not.toBeNull();
+    expect(await terminals()).toHaveLength(1);
+
+    // The close icon of the tab of the terminal, as the user closes it.
+    const id = await page
+      .locator('.jp-MainAreaWidget:has(.jp-Terminal)')
+      .getAttribute('id');
+    expect(id).toBeTruthy();
+    await page
+      .locator(`.lm-TabBar-tab[data-id="${id}"] .lm-TabBar-tabCloseIcon`)
+      .click();
+    await expect(page.locator('.jp-Terminal')).toHaveCount(0);
+
+    await expect.poll(terminals, { timeout: ROUND_TRIP }).toEqual([]);
+    await expect
+      .poll(async () => (await serialRecord(port.name)).holder, {
+        timeout: ROUND_TRIP
+      })
+      .toBeNull();
   });
 
   test('ACC-PANEL-66 the status bar item is visible while a device is attached and absent when none is', async ({
@@ -639,8 +853,9 @@ test.describe('Devices panel', () => {
 
     const absent = field(panel, 'absent');
     await expect(absent).toBeVisible();
-    await expect(absent).toContainText('HTTPS');
-    await expect(absent).toContainText('localhost');
+    await expect(absent).toHaveText(
+      'Web Serial and WebUSB need HTTPS or localhost, in Chrome or Edge'
+    );
     const icon = addIcon(page);
     await expect(icon).toHaveCount(1);
     await expect(icon).toBeDisabled();
@@ -801,35 +1016,33 @@ test.describe('Devices panel', () => {
 
     await addSerial(page, port);
     const portRow = row(page, port.name);
-    const control = (name: string): Locator =>
-      portRow.locator(`[data-profile-field="${name}"]`);
-    await portRow.locator('summary').click();
-    await control('baudRate').fill('4294967296');
-    await control('baudRate').press('Enter');
+    await openSettings(page, portRow);
+    await settingsField(page, 'baudRate').fill('4294967296');
+    await saveSettings(page);
 
     // DEF-PANEL-11: the reason of the server is displayed, not only listed.
     await expect(
       toast(
         page,
-        `The profile of ${port.name} was not changed: baudRate: 4294967296 is not a whole number from 1 to 4294967295`
+        'Profile not changed: baudRate: 4294967296 is not a whole number from 1 to 4294967295'
       )
     ).toBeVisible();
-    await expect(control('baudRate')).toHaveValue('115200');
+    await expect(field(portRow, 'baud')).toHaveText('115200');
+    expect((await serialRecord(port.name)).overrides).toEqual({});
   });
 });
 
-test.describe('Device shell and tools', () => {
+test.describe('Device shells', () => {
   test.use({ mockSettings: PANEL_SHOWN });
 
-  const EMPTY =
-    'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.';
+  const EMPTY = 'No device shell opened';
   /** The line of the banner of a device shell that was started while no device was attached. */
   const NO_DEVICE = 'No device is attached.';
   /**
    * The lines of the banner about the upload tools. The banner names the known tools
    * that the PATH of the test server holds, which is the PATH of the suite.
    */
-  const TOOLS = ['avrdude', 'stm32flash', 'esptool'].filter(tool =>
+  const TOOLS = ['avrdude', 'stm32flash', 'esptool', 'pio'].filter(tool =>
     (process.env.PATH ?? '').split(':').some(folder => {
       try {
         fs.accessSync(join(folder, tool), fs.constants.X_OK);
@@ -843,7 +1056,7 @@ test.describe('Device shell and tools', () => {
     TOOLS.length > 0
       ? [`For ${TOOLS.join(', ')}.`]
       : [
-          'No avrdude, stm32flash or esptool on PATH.',
+          'No avrdude, stm32flash, esptool or pio on PATH.',
           'Install one to make use of the device shell.'
         ];
 
@@ -979,7 +1192,7 @@ test.describe('Device shell and tools', () => {
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
     const section = runsSection(page);
-    await expect(section).toContainText('Device shell and tools');
+    await expect(section).toContainText('Device shells');
     await expect(field(section, 'count')).toHaveText('(0)');
     await expect(field(section, 'empty')).toBeVisible();
     await expect(field(section, 'empty')).toHaveText(EMPTY);
@@ -1188,6 +1401,30 @@ test.describe('Device shell and tools', () => {
     await expect(field(runsSection(page), 'count')).toHaveText('(0)');
   });
 
+  test('DEF-PANEL-21 in the dark theme the label of an armed Stop is opaque black on the red fill', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const run = startRun(['--', 'cat']);
+    const stop = action(await listed(page, run), 'stop-run');
+    await page.theme.setDarkTheme();
+    try {
+      await stop.click();
+      await expect(stop).toHaveText('Confirm stop');
+      // The dark theme gives --jp-ui-inverse-font-color1 an alpha of 0.8; the label has none.
+      expect(await stop.evaluate(node => getComputedStyle(node).color)).toBe(
+        'rgb(0, 0, 0)'
+      );
+      await page.waitForTimeout(600);
+      await stop.click();
+      await expect
+        .poll(() => run.process.signalCode, { timeout: ROUND_TRIP })
+        .toBe('SIGHUP');
+    } finally {
+      await page.theme.setLightTheme();
+    }
+  });
+
   test('ACC-PANEL-133 Stop ends the device shell that Start started in a terminal of the lab, and its row leaves the panel', async ({
     page
   }) => {
@@ -1255,8 +1492,11 @@ test.describe('Device shell and tools', () => {
     await expect(example('esptool')).toHaveText(
       `esptool --port ${devicePath} write-flash 0x0 firmware.bin`
     );
+    await expect(example('pio')).toHaveText(
+      `pio run -t upload --upload-port ${devicePath}`
+    );
     await expect(field(body, 'note')).toHaveText(
-      'Type a line in a device shell. The button Start of the section Device shell and tools opens one. No line was run against a board.'
+      'Type a line in a device shell. The button Start of the section Device shells opens one. No line was run against a board.'
     );
 
     await dialog.getByRole('button', { name: 'Close' }).click();
@@ -1283,7 +1523,7 @@ test.describe('Device shell and tools', () => {
       await expect(labels.nth(3)).toHaveText('Device Shell');
       expect((await labels.allTextContents()).join('\n')).not.toMatch(/shim/i);
       const section = runsSection(page);
-      await expect(section).toContainText('Device shell and tools');
+      await expect(section).toContainText('Device shells');
       await expect(action(section, 'start-run')).toHaveAttribute(
         'title',
         'Open a device shell'
@@ -1685,8 +1925,6 @@ test.describe('Show Devices Panel', () => {
     // Serial Terminal: a terminal of the lab runs the terminal program on the port.
     await runFromPalette(page, COMMANDS.openTerminal);
     const { path: devicePath } = await serialRecord(port.name);
-    await expect
-      .poll(() => terminalText(page), { timeout: TERMINAL_START })
-      .toContain(`--- Miniterm on ${devicePath}`);
+    await expectAppHeader(page, port.name, devicePath, TERMINAL_START);
   });
 });

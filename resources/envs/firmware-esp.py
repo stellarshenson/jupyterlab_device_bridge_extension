@@ -1,12 +1,12 @@
 #!/usr/bin/env -S PYTHONDONTWRITEBYTECODE=1 uv run --quiet --script
-## Firmware toolchain for ESP32 (Rust) and ESP8266 (C/C++) - Espressif Rust, espflash, esptool, ESP8266 core
+## Firmware toolchain for ESP32 (Rust) and ESP8266 (C/C++) - Espressif Rust, espflash, esptool, PlatformIO with the ESP8266 core
 # /// script
 # requires-python = ">=3.12"
 # dependencies = ["rich>=13"]
 # ///
 """Install the conda environment firmware-esp: Rust for every ESP32 chip, espflash and esptool for
-upload over a serial port, and for the ESP8266, which Rust does not support, the C/C++ toolchain
-with its SDK as the Arduino core."""
+upload over a serial port, and for the ESP8266, which Rust does not support, PlatformIO with the
+C/C++ toolchain and the Arduino core with its SDK."""
 
 import shutil
 
@@ -18,9 +18,8 @@ RUST = "stable"  # builds for the RISC-V chips: ESP32-C2, C3, C5, C6, C61, H2, P
 ESP_RUST = "1.97.0.0"  # Espressif's build of Rust, for the Xtensa chips: ESP32, S2, S3
 ESPUP = "0.17.1"
 ESPFLASH = "4.6.0"
-ARDUINO_CLI = "1.5.1"
-ESP8266_CORE = "3.1.2"
-ESP8266_INDEX = "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
+PLATFORMIO = "6.2.0"
+ESP8266 = "4.2.1"  # PlatformIO platform with the Arduino ESP8266 core 3.1.2; a project pins the same version
 
 
 def conda_packages(env):
@@ -55,31 +54,22 @@ def espflash(env):
     (env.prefix / "bin/espflash").chmod(0o755)
 
 
-def esp8266_core(env):
-    """arduino-cli keeps the core, with xtensa-lx106-elf-gcc and the SDK, in <prefix>/arduino."""
-    (archive,) = env.fetch(f"https://downloads.arduino.cc/arduino-cli/arduino-cli_{ARDUINO_CLI}_Linux_64bit.tar.gz")
-    shutil.unpack_archive(archive, env.tmp / "arduino-cli", filter="data")
-    shutil.copy2(env.tmp / "arduino-cli/arduino-cli", env.prefix / "bin")
-    env.run("arduino-cli", "core", "update-index")
-    env.run("arduino-cli", "core", "install", f"esp8266:esp8266@{ESP8266_CORE}")
-    shutil.rmtree(env.prefix / "arduino/downloads")  # the installed core does not need its archives
+def esp8266(env):
+    """PlatformIO keeps the platform, xtensa-lx106-elf-gcc and the Arduino core with the SDK in
+    <prefix>/platformio; mklittlefs and mkspiffs build file system images."""
+    env.platformio(PLATFORMIO, f"espressif8266@{ESP8266}", "nodemcuv2", "tool-mklittlefs", "tool-mkspiffs")
 
 
 install(
     name="firmware-esp",
     summary="Firmware toolchain for ESP32 and ESP8266",
-    variables={
-        "ARDUINO_DIRECTORIES_DATA": "{prefix}/arduino/data",
-        "ARDUINO_DIRECTORIES_DOWNLOADS": "{prefix}/arduino/downloads",
-        "ARDUINO_DIRECTORIES_USER": "{prefix}/arduino/user",
-        "ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS": ESP8266_INDEX,
-    },
+    variables={"PLATFORMIO_CORE_DIR": "{prefix}/platformio"},
     stages=[
         Stage("C compiler, pyserial, esptool", "conda-forge", conda_packages),
         Stage(f"Rust {RUST}", "static.rust-lang.org", rust),
         Stage(f"Espressif Rust {ESP_RUST} for Xtensa", "github.com", espressif_rust),
         Stage(f"espflash {ESPFLASH}", "github.com", espflash),
-        Stage(f"ESP8266 core {ESP8266_CORE} with arduino-cli", "downloads.arduino.cc", esp8266_core),
+        Stage(f"PlatformIO {PLATFORMIO}, espressif8266 {ESP8266}", "registry.platformio.org", esp8266),
     ],
     tools=[
         ("cargo", ["cargo", "--version"]),
@@ -87,14 +77,14 @@ install(
         ("xtensa gcc", ["xtensa-esp32-elf-gcc", "--version"]),
         ("espflash", ["espflash", "--version"]),
         ("esptool", ["esptool", "version"]),
-        ("arduino-cli", ["arduino-cli", "version"]),
-        ("ESP8266 core", f"esp8266:esp8266 {ESP8266_CORE} with xtensa-lx106-elf-gcc and the SDK"),
+        ("pio", ["pio", "--version"]),
+        ("PlatformIO platform", f"espressif8266 {ESP8266} with the Arduino ESP8266 core 3.1.2"),
     ],
     usage=[
         "conda activate firmware-esp",
         "cargo build --release    (in an esp-hal project; its rust-toolchain.toml selects the compiler)",
         "espflash flash --monitor --port <serial device> <firmware>",
-        "arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 <sketch folder>",
+        "pio run --target upload --upload-port <serial device>    (in a PlatformIO project)",
         "esptool --port <serial device> write-flash 0x0 <firmware>.bin",
     ],
 )

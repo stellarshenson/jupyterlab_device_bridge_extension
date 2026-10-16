@@ -9,6 +9,8 @@ import argparse
 import ast
 import asyncio
 import base64
+import contextlib
+import fcntl
 import importlib
 import importlib.metadata
 import json
@@ -16,7 +18,9 @@ import os
 import pty
 import re
 import shlex
+import struct
 import sys
+import termios
 import time
 import tomllib
 from typing import NamedTuple
@@ -62,6 +66,20 @@ def record(path, argv):
     raise SystemExit(0)
 
 os.execv = record
+raise SystemExit(cli.main(sys.argv[1:]))
+"""
+
+# The CLI with the run of the terminal app replaced: it prints the path and the baud rate
+# that the app would open and exits 0.
+APP_RECORDED = """
+import json, sys
+from jupyterlab_device_bridge_extension import cli, terminal_app
+
+def record(app):
+    print(json.dumps([app.path, app.baud]))
+
+terminal_app.SerialTerminal.run = record
+cli._on_a_terminal = lambda: True  # the pipes of the test stand for a terminal
 raise SystemExit(cli.main(sys.argv[1:]))
 """
 
@@ -122,6 +140,10 @@ class Cli:
         """Run the CLI with `os.execv` replaced; stdout is then `[path, argv]` of the call as JSON."""
         return await self(*arguments, launch=("-c", EXEC_RECORDED))
 
+    async def app_recorded(self, *arguments):
+        """Run the CLI with the terminal app not started; stdout is then `[path, baud]` of the app as JSON."""
+        return await self(*arguments, launch=("-c", APP_RECORDED))
+
 
 @pytest.fixture(autouse=True)
 def plain_help(monkeypatch):
@@ -132,6 +154,16 @@ def plain_help(monkeypatch):
     """
     monkeypatch.setenv("PYTHON_COLORS", "0")
     monkeypatch.setenv("COLUMNS", "80")
+
+
+@pytest.fixture(autouse=True)
+def no_conda(tmp_path, monkeypatch):
+    """CONDA_EXE names a file that does not exist, so `shell` finds no conda environment of this machine.
+
+    A conda environment that holds an upload tool would make `shell` on a terminal show the
+    environment selector (tests/test_environments.py).
+    """
+    monkeypatch.setenv("CONDA_EXE", str(tmp_path / "no-conda"))
 
 
 @pytest.fixture
@@ -671,56 +703,57 @@ async def test_cli_signals_and_action_reach_the_port(cli_run, fake_tab):
 # ------------------------------------------------------------------ the serial terminal
 
 
-async def test_acc_term_108_terminal_becomes_pyserial_miniterm(cli_run, fake_tab):
-    """ACC-TERM-108 `terminal` replaces itself with `python -m serial.tools.miniterm <path> <baud>`; pyserial is a dependency of the wheel."""
+async def test_acc_term_165_terminal_starts_the_textual_app_on_the_device_path(cli_run, fake_tab):
+    """ACC-TERM-165 `terminal` starts the extension's Textual app on the device's path at the profile's baud rate; pyserial and textual are dependencies of the wheel."""
     _, path = await attach_serial(fake_tab)
 
-    outcome = await cli_run.exec_recorded("terminal", SERIAL_NAME)
+    outcome = await cli_run.app_recorded("terminal", SERIAL_NAME)
 
-    assert outcome.status == 0
-    assert json.loads(outcome.out) == [
-        sys.executable, [sys.executable, "-m", "serial.tools.miniterm", path, "115200"]]
-    assert "Ctrl+] quits" in outcome.err and "Ctrl+T opens its menu" in outcome.err
-    assert callable(importlib.import_module("serial.tools.miniterm").main)
-    assert any(requirement.startswith("pyserial") for requirement in project()["dependencies"])
+    assert (outcome.status, json.loads(outcome.out), outcome.err) == (0, [path, 115200], "")
+    for package in ("pyserial", "textual"):
+        assert any(requirement.startswith(f"{package}>=") for requirement in project()["dependencies"])
 
 
-def test_acc_cli_162_the_wheel_requires_the_basic_terminal_extension():
-    """ACC-CLI-162 pyproject.toml lists `jupyterlab-basic-terminal-extension>=1.0.8,<2` among the dependencies of the project, so pip installs it with the wheel."""
+def test_acc_cli_188_the_wheel_requires_the_basic_terminal_extension():
+    """ACC-CLI-188 pyproject.toml lists `jupyterlab-basic-terminal-extension>=1.0.9,<2` among the dependencies of the project, so pip installs it with the wheel."""
     requirements = [requirement for requirement in project()["dependencies"]
                     if requirement.startswith("jupyterlab-basic-terminal-extension")]
 
-    assert requirements == ["jupyterlab-basic-terminal-extension>=1.0.8,<2"]
+    assert requirements == ["jupyterlab-basic-terminal-extension>=1.0.9,<2"]
 
 
-async def test_acc_term_108_miniterm_runs_on_the_virtual_device(cli_run, fake_tab):
-    """ACC-TERM-108 the real `terminal` command becomes miniterm on the device: it shows what the port sends, sends what is typed, and Ctrl+] ends it."""
+async def test_acc_term_165_the_real_terminal_command_runs_the_app_on_the_virtual_device(
+        cli_run, fake_tab, monkeypatch):
+    """ACC-TERM-165 the real `terminal` command on a terminal shows the app's header, holds the device as the CLI process itself, shows what the port sends, sends a typed line, and Ctrl+Q ends it with status 0 and closes the device."""
+    # The theme is named, so the app asks the terminal nothing about its background.
+    monkeypatch.setenv("TEXTUAL_THEME", "stellars-tech-dark")
     tab, _ = await attach_serial(fake_tab)
     tab.echo = False
     keyboard, terminal = pty.openpty()
+    fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 160, 0, 0))
     os.set_blocking(keyboard, False)
     child = await cli_run.start("terminal", SERIAL_NAME, stdin=terminal, stdout=terminal, stderr=terminal)
     os.close(terminal)
     screen = b""
 
     def shows(text):
+        # Read on every call: a full terminal buffer would stop the app in a write.
         nonlocal screen
-        try:
+        with contextlib.suppress(BlockingIOError, OSError):
             screen += os.read(keyboard, 65536)
-        except BlockingIOError:
-            pass
         return text in screen
 
     try:
-        await tab.until(lambda: record(tab)["holder"])
-        assert record(tab)["holder"]["pid"] == child.pid, "the CLI process itself became the terminal program"
-        await tab.until(lambda: shows(b"--- Miniterm on "))
+        await tab.until(lambda: record(tab)["holder"], timeout=20)
+        assert record(tab)["holder"]["pid"] == child.pid, "the CLI process itself runs the app"
+        await tab.until(lambda: shows(b"jupyterlab-device terminal") and shows(SERIAL_NAME.encode()), timeout=20)
         await tab.port_sends(SERIAL_NAME, b"hello from the board\r\n")
         await tab.until(lambda: shows(b"hello from the board"))
-        os.write(keyboard, b"abc")
-        await tab.until(lambda: tab.written(SERIAL_NAME) == b"abc")
-        os.write(keyboard, b"\x1d")
-        assert await asyncio.wait_for(child.wait(), 10) == 0
+        os.write(keyboard, b"abc\r")
+        await tab.until(lambda: tab.written(SERIAL_NAME) == b"abc\n")
+        os.write(keyboard, b"\x11")
+        await tab.until(lambda: shows(b"") and child.returncode is not None, timeout=10)
+        assert child.returncode == 0
         await tab.until(lambda: record(tab)["holder"] is None)
     finally:
         os.close(keyboard)
@@ -731,11 +764,11 @@ async def test_acc_term_109_terminal_uses_the_profile_baud_or_the_flag(cli_run, 
     _, path = await attach_serial(fake_tab)
     assert (await cli_run("profile", SERIAL_NAME, "--baud", "9600")).status == 0
 
-    profile = await cli_run.exec_recorded("terminal", SERIAL_NAME)
-    flag = await cli_run.exec_recorded("terminal", SERIAL_NAME, "--baud", "57600")
+    profile = await cli_run.app_recorded("terminal", SERIAL_NAME)
+    flag = await cli_run.app_recorded("terminal", SERIAL_NAME, "--baud", "57600")
 
-    assert json.loads(profile.out)[1][-2:] == [path, "9600"]
-    assert json.loads(flag.out)[1][-2:] == [path, "57600"]
+    assert json.loads(profile.out) == [path, 9600]
+    assert json.loads(flag.out) == [path, 57600]
 
 
 async def test_acc_term_110_terminal_refuses_a_device_another_program_holds(cli_run, fake_tab, tool):
@@ -744,13 +777,42 @@ async def test_acc_term_110_terminal_refuses_a_device_another_program_holds(cli_
     holder = await holding(tab, tool, HOLD, path)
     name = program_name(holder.pid)
 
-    outcome = await cli_run.exec_recorded("terminal", SERIAL_NAME)
+    outcome = await cli_run.app_recorded("terminal", SERIAL_NAME)
 
-    assert (outcome.status, outcome.out) == (1, b""), "the terminal program was not started"
+    assert (outcome.status, outcome.out) == (1, b""), "the terminal app was not started"
     assert outcome.err == (
         f"{cli.PROG}: {SERIAL_NAME} is held by {name} (pid {holder.pid}) - wait until that program "
         "ends or stop it, then run this command again\n")
     await end(holder)
+
+
+async def test_def_cli_22_terminal_without_a_terminal_exits_2_and_does_not_hold_the_device(cli_run, fake_tab):
+    """DEF-CLI-22 `terminal` with standard input and standard error on no terminal exits 2 at once, names `monitor read` for an agent, and the device keeps no holder."""
+    tab, path = await attach_serial(fake_tab)
+
+    outcome = await cli_run("terminal", SERIAL_NAME)
+
+    assert (outcome.status, outcome.out) == (2, b"")
+    assert outcome.err.startswith(f"{cli.PROG}: terminal is an app for a person and needs a terminal")
+    assert "jupyterlab-device monitor read" in outcome.err
+    assert record(tab)["holder"] is None
+
+
+def test_acc_term_174_terminal_help_lists_the_keys_and_says_that_the_command_is_for_a_person():
+    """ACC-TERM-174 `terminal --help` has one line for each key of the app, with the key and the text of the app's key line, says that the command is for a person and not for an agent, and names `monitor read` and `monitor write` for an agent."""
+    from jupyterlab_device_bridge_extension import terminal_app
+
+    text = PARSERS[("terminal",)].format_help()
+    words = " ".join(text.split())  # the help text breaks its lines
+
+    for binding in terminal_app.SerialTerminal.BINDINGS:
+        key = "Esc" if binding.key == "escape" else binding.key.replace("ctrl+", "Ctrl+").title()
+        assert re.search(rf"^  {re.escape(key)} +{re.escape(binding.description)}\b", text, re.MULTILINE), (
+            f"`terminal --help` has no line for {key} ({binding.description})")
+    assert re.search(r"^  Enter +send the typed line", text, re.MULTILINE)
+    assert "for a person at a terminal, not for a script or an agent" in words
+    assert "An agent reads with `jupyterlab-device monitor read` and writes with `jupyterlab-device monitor write`" in words
+    assert "miniterm" not in text
 
 
 # ------------------------------------------------------------------------------- run
@@ -900,7 +962,7 @@ NO_DEVICE = "No device is attached."
 # The tool line with all three known upload tools on PATH, and the two lines with none of them.
 THREE_TOOLS = ("avrdude", "stm32flash", "esptool")
 FOR_THREE_TOOLS = ("For avrdude, stm32flash, esptool.",)
-NO_TOOL = ("No avrdude, stm32flash or esptool on PATH.", "Install one to make use of the device shell.")
+NO_TOOL = ("No avrdude, stm32flash, esptool or pio on PATH.", "Install one to make use of the device shell.")
 
 
 def banner(*device_lines, tools=FOR_THREE_TOOLS, colour=True):
@@ -1386,7 +1448,7 @@ async def test_acc_shim_142_the_banner_says_to_install_a_tool_when_none_is_on_pa
     assert (status, piped) == (0, (None, b""))
     assert displayed == banner(NO_DEVICE, tools=NO_TOOL) + "started\n"
     assert displayed.split("\n")[4:6] == [
-        "No avrdude, stm32flash or esptool on PATH.", "Install one to make use of the device shell."]
+        "No avrdude, stm32flash, esptool or pio on PATH.", "Install one to make use of the device shell."]
     assert not any(row.startswith("For ") for row in displayed.split("\n")) and "shim" not in displayed.lower()
     assert top_help().endswith(NO_UPLOAD_TOOL)
 
@@ -1454,7 +1516,7 @@ EXAMPLES_HEAD = """
 examples for the upload tools on PATH; <path> is the path of the serial device,
 which `jupyterlab-device list` prints:
 """
-NO_UPLOAD_TOOL = "\nNo upload tool is on PATH. Known tools: avrdude, stm32flash, esptool.\n"
+NO_UPLOAD_TOOL = "\nNo upload tool is on PATH. Known tools: avrdude, stm32flash, esptool, pio.\n"
 
 
 def path_with(monkeypatch, folder, *tools):
@@ -1556,6 +1618,25 @@ async def test_acc_cli_141_the_command_prints_the_examples_where_no_server_answe
 
     assert (outcome.status, outcome.err) == (0, "")
     assert outcome.out.decode().endswith(EXAMPLES_HEAD + example_lines(["avrdude"]))
+
+
+PIO_UPLOAD = ["run", "--", "pio", "run", "-t", "upload", "--upload-port", "/run/devices/tty-2341-0043"]
+
+
+@pytest.mark.parametrize("asked", [("run", "--help"), ("help", "run")], ids=" ".join)
+def test_acc_cli_184_run_help_shows_pio_and_how_pio_finds_the_virtual_device(asked, capsys):
+    """ACC-CLI-184 `run --help` and `help run` show the pio upload line under `run` among the examples and the `pio device monitor` line, and say that pio does not find the virtual device by itself, so --upload-port, --port, or upload_port and monitor_port in platformio.ini name its path."""
+    with pytest.raises(SystemExit):
+        cli.main(list(asked))
+    text = capsys.readouterr().out
+    words = " ".join(text.split())  # the help text breaks its lines
+
+    assert PIO_UPLOAD in examples(PARSERS[("run",)])
+    assert "\n  pio device monitor --port /run/devices/tty-2341-0043 --baud 115200\n" in text
+    assert ("pio does not find the virtual device by itself: name its path with --upload-port for an "
+            "upload and with --port for pio device monitor, or set upload_port and monitor_port in "
+            "platformio.ini") in words
+    assert "\n  upload_port = /run/devices/tty-2341-0043\n  monitor_port = /run/devices/tty-2341-0043\n" in text
 
 
 def test_acc_cli_135_run_help_says_that_the_devices_panel_lists_the_run_and_that_the_user_can_stop_it():

@@ -59,12 +59,16 @@ The byte path between a tool, the virtual serial device and the port in the brow
   - root-cause: 2026-10-12T16:23:01Z @kj validate_change takes every whole number above 0; vserial packs the speed into a 32-bit field; struct.error is none of the classes _claim and on_message catch, so the read loop of the socket ends
   - log: 2026-10-12T16:23:01Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
-- [ ] `DEF-SERIAL-20` **Closing the serial terminal leaves miniterm running** - MAJOR; closing the tab of the serial terminal only detaches the lab terminal; miniterm keeps running on the server and keeps the port open; closing the tab must stop miniterm
+- [x] `DEF-SERIAL-20` **Closing the serial terminal leaves miniterm running** - MAJOR; closing the tab of the serial terminal only detaches the lab terminal; miniterm keeps running on the server and keeps the port open; closing the tab must stop miniterm
+  - evidence: jest DEF-SERIAL-20 (launch args shutdownOnClose true, red with false) and galata close-tab test pass: session gone, holder null; terminal extension 1.0.12 local build; floor raised at its release; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
   - repro: open the serial terminal of a port, close its tab, list the lab terminals: the miniterm terminal still runs
   - test-tags: FUNCTIONAL
+  - root-cause: 2026-10-16T09:24:21Z @kj basic-terminal:launch shut the terminal session down only when the program ended, never when the tab closed; fixed by its optional argument shutdownOnClose, which the device bridge passes true
   - root-cause: 2026-10-14T17:39:56Z @kj likely cause: basic-terminal:launch opens the terminal through terminal:open and does not shut the session down when the widget closes; the lab setting shutdownOnClose defaults to false
   - log: 2026-10-14T17:39:56Z @kj added
   - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: seen on hardware: miniterm pid 3919 still held tty-1a86-7523 after its terminal was gone; the agent stopped it with SIGTERM to free the port
+  - log: 2026-10-16T06:08:56Z @kj fix decided by the Star Colonel: basic-terminal:launch gets an optional argument shutdownOnClose, default false, that ends the terminal session when its tab closes; the device bridge launches the serial terminal with it true
+  - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
 
 ## Preload shim `SHIM`
 
@@ -128,7 +132,8 @@ What the user sees and clicks in the lab
   - root-cause: 2026-10-13T13:40:09Z @kj jupyterlab_basic_terminal_extension 1.0.7 src/request.ts:47 throws ResponseError(response, data.message || data); its server bodies hold error and no message, so the body object becomes the message and the text is lost before this plugin gets the rejection
   - log: 2026-10-13T13:40:09Z @kj added
   - log: 2026-10-13T15:02:55Z @kj closed
-- [ ] `DEF-PANEL-21` **Confirm stop text is black on red** - MEDIUM; the armed button (Confirm stop, Confirm forget) shows black text on the red fill, hard to read
+- [x] `DEF-PANEL-21` **Confirm stop text is black on red** - MEDIUM; the armed button (Confirm stop, Confirm forget) shows black text on the red fill, hard to read
+  - evidence: jest DEF-PANEL-21 and galata dark-theme test pass: armed label --jp-ui-inverse-font-color0, rgb(0, 0, 0); red with color1; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
   - repro: in the dark theme click Stop of a run row once and read the button label
   - test-tags: FUNCTIONAL
   - root-cause: 2026-10-14T18:09:31Z @kj style/base.css .jp-mod-warn.jp-mod-confirm sets color --jp-ui-inverse-font-color1, which is black at 80 percent opacity in the dark theme; --jp-ui-inverse-font-color0 is opaque in both themes (#000 dark, #fff light)
@@ -136,6 +141,7 @@ What the user sees and clicks in the lab
   - log: 2026-10-14T17:39:56Z @kj added
   - log: 2026-10-14T18:07:38Z @kj Star Colonel keeps the two-click confirm of Stop and Forget, it is destructive; fix only the label colour: strong contrast on the red fill, same font weight
   - log: 2026-10-14T18:09:18Z @kj Star Colonel: the label of the armed button is drawn at 100 percent opacity, no transparent text colour
+  - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
 
 ## Command line and agent documents `CLI`
 
@@ -169,6 +175,13 @@ The jupyterlab-device command, its help texts, the README and the agent skill
   - root-cause: 2026-10-12T20:45:46Z @kj cmd_run catches only OSError around os.execvpe, and an empty first word raises ValueError
   - log: 2026-10-12T20:45:46Z @kj added
   - log: 2026-10-12T20:49:02Z @kj closed
+- [x] `DEF-CLI-22` **terminal without a terminal holds the port forever** - MEDIUM; jupyterlab-device terminal started with no terminal on standard input, for example by an agent harness, runs the Textual app forever, holds the device and blocks a later run; release 0.6.29's miniterm exited at once
+  - evidence: pytest test_def_cli_22 passes: terminal with stdin not a tty exits 2, prints nothing, names monitor read and write, holder None; red with the check removed (TimeoutError); ACC-CLI-84 unknown device still exits 1; gates on 0.6.37: Jest 264, pytest 525 passed 1 skipped, auth gate (logs/final0630-r5-test.log), lint 0 errors 25 warnings, Galata 82 passed (logs/final0630-r5-galata.log)
+  - repro: run jupyterlab-device terminal <device> < /dev/null; it never exits and the device shows it as holder
+  - test-tags: UNIT
+  - root-cause: 2026-10-16T10:28:16Z @kj cmd_terminal starts the Textual app without checking for a terminal; Textual then waits for input that never comes
+  - log: 2026-10-16T10:28:16Z @kj added
+  - log: 2026-10-16T11:16:56Z @kj closed; reason: cmd_terminal checks for a terminal on stdin and stderr after the device lookup and the holder check, before the app starts
 
 ## Continuous integration `CI`
 

@@ -14,6 +14,7 @@ import pytest
 from jupyterlab_device_bridge_extension import cli, pyusb_backend, shim_build
 
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
+SKILL = REPOSITORY / ".agents" / "skills" / "jupyterlab-device-bridge-extension" / "SKILL.md"
 
 pytestmark = pytest.mark.skipif(
     not (REPOSITORY / "pyproject.toml").is_file(),
@@ -141,3 +142,56 @@ def test_acc_cli_90_the_readme_says_how_a_pyusb_program_is_pointed_at_the_backen
     assert any("pyusb_backend.install()" in command and "pyocd" in command
                for command in command_lines(backend)), "a command line starts pyOCD after install()"
     assert "not run against pyOCD" in backend, "the passage says that pyOCD was not run"
+
+
+def skill_rules() -> list[str]:
+    """The bullets under `## Rules` of the agent skill."""
+    rules = SKILL.read_text(encoding="utf-8").split("## Rules", 1)[1]
+    return [line for line in rules.splitlines() if line.startswith("- ")]
+
+
+def test_acc_term_174_the_skill_tells_an_agent_to_use_monitor_read_and_monitor_write_instead_of_terminal():
+    """ACC-TERM-174 one rule of the agent skill says that `terminal` is for a person and tells an agent to read with `monitor read` and write with `monitor write` instead."""
+    rules = [rule for rule in skill_rules() if "`terminal`" in rule]
+
+    assert len(rules) == 1, f"{len(rules)} rules of the skill name `terminal`"
+    (rule,) = rules
+    assert "needs a person at a terminal" in rule
+    assert "Agent reads with `monitor read` and writes with `monitor write`, never with `terminal`" in rule
+
+
+# What the README and the skill must show of PlatformIO: the upload under `run`, the monitor,
+# and the two keys of platformio.ini.
+PIO_UPLOAD = f"{PROGRAM}run -- pio run -t upload --upload-port /run/devices/tty-2341-0043"
+PIO_MONITOR = "pio device monitor --port /run/devices/tty-2341-0043 --baud 115200"
+PIO_FINDS_NOTHING = ("pio does not find the virtual device by itself: name its path with --upload-port for "
+                     "an upload and with --port for pio device monitor, or set upload_port and monitor_port "
+                     "in platformio.ini")
+
+
+def test_acc_cli_184_the_readme_shows_pio_upload_and_monitor_and_how_pio_finds_the_virtual_device():
+    """ACC-CLI-184 the README section Working with an AI agent has a subsection on PlatformIO with the upload line under `run` and the `pio device monitor` line in a `bash` block, the sentence that pio does not find the virtual device by itself, and a platformio.ini block with upload_port and monitor_port."""
+    agent = sections(readme()["Working with an AI agent"], level=3)
+    titles = [title for title in agent if "PlatformIO" in title]
+
+    assert len(titles) == 1, f"the agent section has {len(titles)} subsections for PlatformIO"
+    (title,) = titles
+    text = agent[title]
+    commands = command_lines(text)
+    ini = [block for language, block in FENCE.findall(text) if language == "ini"]
+    assert PIO_UPLOAD in commands and PIO_MONITOR in commands
+    assert PIO_FINDS_NOTHING in " ".join(text.split())
+    assert ini == ["[env:uno]\nupload_port = /run/devices/tty-2341-0043\n"
+                   "monitor_port = /run/devices/tty-2341-0043\n"]
+
+
+def test_acc_cli_184_the_skill_shows_pio_upload_and_monitor_and_names_the_path_options():
+    """ACC-CLI-184 one rule of the agent skill names pio, shows the upload under `run --` with --upload-port and the monitor with --port, and names upload_port and monitor_port of platformio.ini."""
+    rules = [rule for rule in skill_rules() if "--upload-port" in rule]
+
+    assert len(rules) == 1, f"{len(rules)} rules of the skill name --upload-port"
+    (rule,) = rules
+    for phrase in ("pio does not find the virtual device by itself",
+                   "`run -- pio run -t upload --upload-port <path>`", "`pio device monitor --port <path>`",
+                   "`upload_port` and `monitor_port` in `platformio.ini`"):
+        assert phrase in rule, f"the pio rule of the skill lacks `{phrase}`"

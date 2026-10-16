@@ -129,10 +129,12 @@
   border-color: var(--jp-error-color1);
 }
 
-/* Forget, armed: the next click removes the grant */
+/* Forget and Stop, armed: the next click acts. The label is
+   --jp-ui-inverse-font-color0, which is opaque in both themes; color1 is black
+   at 80 percent in the dark theme */
 .jp-DeviceBridgePanel-button.jp-mod-warn.jp-mod-confirm {
   background: var(--jp-error-color1);
-  color: var(--jp-ui-inverse-font-color1);
+  color: var(--jp-ui-inverse-font-color0);
 }
 
 /* The message for a browser without the device interfaces */
@@ -320,10 +322,15 @@
 }
 
 /* lit for 80 ms from each report of traffic: single flashes for sparse
-   traffic, a steady light for steady traffic */
-.jp-DeviceBridgePanel-lamp[data-lit]::before {
+   traffic, a steady light for steady traffic. TX is blue, RX is yellow */
+.jp-DeviceBridgePanel-lamp[data-lamp='tx'][data-lit]::before {
   border-color: var(--jp-brand-color1);
   background: var(--jp-brand-color1);
+}
+
+.jp-DeviceBridgePanel-lamp[data-lamp='rx'][data-lit]::before {
+  border-color: var(--md-yellow-600);
+  background: var(--md-yellow-600);
 }
 
 /* a line of a row: the fixed words dim, the values in the text colour */
@@ -355,25 +362,11 @@
   padding-top: 4px;
 }
 
-/* Profile editor of a serial port: closed until the user opens it */
-.jp-DeviceBridgePanel-profile {
-  padding-top: 6px;
-  font-size: var(--jp-ui-font-size0);
-}
-
-.jp-DeviceBridgePanel-profileSummary {
-  color: var(--jp-ui-font-color2);
-  cursor: pointer;
-  user-select: none;
-}
-
-.jp-DeviceBridgePanel-profileSummary:hover {
-  color: var(--jp-ui-font-color1);
-}
-
-.jp-DeviceBridgePanel-profileSummary:focus-visible {
-  outline: 1px solid var(--jp-brand-color1);
-  outline-offset: 1px;
+/* Settings dialog of a serial port: one labelled field per line. The dialog
+   is no child of the panel, so its body has its own class name */
+.jp-DeviceBridgeSettings {
+  min-width: 300px;
+  font-size: var(--jp-ui-font-size1);
 }
 
 .jp-DeviceBridgePanel-field {

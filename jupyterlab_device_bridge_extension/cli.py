@@ -28,7 +28,7 @@ import shutil
 import sys
 import time
 
-from . import __version__, shim_build
+from . import __version__, environments, shim_build
 from .client import DeviceBridgeClient, DeviceBridgeError
 from .profiles import ACTIONS
 
@@ -47,6 +47,7 @@ UPLOAD_TOOLS = (
     ("avrdude", "avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i", False),
     ("stm32flash", "stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>", True),
     ("esptool", "esptool --port <path> write-flash 0x0 firmware.bin", True),
+    ("pio", "pio run -t upload --upload-port <path>", True),
 )
 _TOOL_NAMES = [name for name, _, _ in UPLOAD_TOOLS]
 # The bits of the square wave at the top of the banner: the letters J and L as two serial
@@ -88,9 +89,8 @@ def _tools_on_path() -> list[tuple[str, str, bool]]:
     return [tool for tool in UPLOAD_TOOLS if shutil.which(tool[0])]
 
 
-def _tool_lines() -> list[str]:
-    """The lines of the banner about the upload tools: the ones on PATH, or that one must be installed."""
-    found = [name for name, _, _ in _tools_on_path()]
+def _tool_lines(found: list[str]) -> list[str]:
+    """The lines of the banner about the upload tools: the ones found, or that one must be installed."""
     if found:
         return [f"For {', '.join(found)}."]
     return [f"No {', '.join(_TOOL_NAMES[:-1])} or {_TOOL_NAMES[-1]} on PATH.",
@@ -110,13 +110,15 @@ def _device_lines(table: dict) -> list[str]:
     return [f"({number}) {line}" for number, line in enumerate(usable, 1)] or ["No device is attached."]
 
 
-def _banner(device_lines: list[str]) -> str:
+def _banner(device_lines: list[str], chosen: environments.Environment) -> str:
     """What `shell` prints on a terminal before it becomes the shell.
 
     The banner in pale cyan, then the colour reset and an empty line. With the variable
     NO_COLOR set and not empty: the banner without an escape sequence, then an empty line.
+    An environment other than the current one gets a line with its name above the tool line.
     """
-    lines = "\n".join([*BANNER_TOP, *_tool_lines(), *device_lines, *BANNER_BOTTOM])
+    named = [] if chosen.prefix is None else [f"Environment: {chosen.name} ({chosen.scope})"]
+    lines = "\n".join([*BANNER_TOP, *named, *_tool_lines(list(chosen.tools)), *device_lines, *BANNER_BOTTOM])
     if os.environ.get("NO_COLOR"):
         return f"{lines}\n\n"
     return f"\x1b[38;2;159;224;238m{lines}\x1b[0m\n\n"
@@ -315,6 +317,11 @@ def cmd_monitor_write(bridge: DeviceBridgeClient, args: argparse.Namespace) -> i
     return 0
 
 
+def _on_a_terminal() -> bool:
+    """Standard input and standard error are a terminal: Textual reads keys from the first and draws on the second."""
+    return sys.stdin.isatty() and sys.stderr.isatty()
+
+
 def cmd_terminal(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
     record = bridge.serial(args.device).record()
     holder = record["holder"]
@@ -322,12 +329,19 @@ def cmd_terminal(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
         _say(f"{args.device} is held by {holder['name']} (pid {holder['pid']}) - "
              "wait until that program ends or stop it, then run this command again")
         return 1
+    if not _on_a_terminal():
+        # Without a terminal the app would wait for keys that never come and hold the device.
+        raise UsageError("terminal is an app for a person and needs a terminal on standard input and "
+                         "standard error; an agent reads with `jupyterlab-device monitor read` and writes "
+                         "with `jupyterlab-device monitor write`")
     baud = args.baud or record["settings"]["baudRate"]
-    _say("starting miniterm - Ctrl+] quits, Ctrl+T opens its menu (Ctrl+T then Ctrl+H lists the keys)")
-    # The terminal is pyserial's miniterm and nothing of this extension: the process
-    # becomes miniterm, which opens the path as any serial tool does.
-    command = [sys.executable, "-m", "serial.tools.miniterm", record["path"], str(baud)]
-    os.execv(command[0], command)
+    # Imported here: textual takes time to import, and no other command needs it.
+    from . import terminal_app, tui_theme
+
+    # The theme is chosen before the app starts: the app owns the terminal after that.
+    app = terminal_app.SerialTerminal(bridge, record, baud, tui_theme.pick_theme())
+    app.run()
+    return app.return_code or 0
 
 
 def cmd_signals(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
@@ -374,6 +388,17 @@ def _start_with_shim(bridge: DeviceBridgeClient, command: list[str] | None,
             _say(f"the server (device bridge {status['version']}) does not report the shell command of "
                  "its terminals - restart JupyterLab, so that the server runs the version of this command")
             return 1
+        # The user chooses the environment of the shell when another environment holds an upload
+        # tool and a terminal is on standard input and on standard error, where Textual draws.
+        found = []
+        if _on_a_terminal():
+            found = environments.find(os.getcwd(), _TOOL_NAMES)
+        if found or sys.stdout.isatty():
+            chosen = environments.current(_TOOL_NAMES)
+        if found:
+            from . import env_picker  # Textual is loaded only where the selector shows
+            chosen = env_picker.choose(chosen, found)
+            environment.update(environments.activation(chosen, environment.get("PATH", "")))
     # The server lists this process as a run, so the lab can show it and stop it. The
     # tool starts whatever becomes of that call, and nothing is printed about it. A device
     # shell is listed under its own name: the shell command of a lab can be a start script.
@@ -389,7 +414,7 @@ def _start_with_shim(bridge: DeviceBridgeClient, command: list[str] | None,
             device_lines = _device_lines(bridge.call("GET", "devices", timeout=RUN_REGISTER_S))
         # As UTF-8 bytes: a text write fails where the locale has no such characters. Flushed,
         # because the shell replaces this process and what it has not written yet.
-        sys.stdout.buffer.write(_banner(device_lines).encode())
+        sys.stdout.buffer.write(_banner(device_lines, chosen).encode())
         sys.stdout.flush()
     try:
         os.execvpe(command[0], command, environment)
@@ -570,17 +595,48 @@ Fails when the device is detached: the bytes would reach no port.
     p.add_argument("--newline", action="store_true", help="send a line feed (0x0a) after the bytes")
     p.set_defaults(func=cmd_monitor_write)
 
-    p = _sub(sub, "terminal", "open the serial terminal program on a serial port", """
-Starts pyserial's miniterm on the device's path and becomes that program: an
-interactive terminal for a person, not for a script. It needs a terminal on its
-standard input and runs until Ctrl+] is pressed; Ctrl+T opens miniterm's menu. A
-program without a terminal reads with `monitor read` and writes with `monitor write`.
+    p = _sub(sub, "terminal", "open the serial terminal app on a serial port, for a person", """
+Opens the serial terminal on the device: a full-screen app for a person at a
+terminal, not for a script or an agent. Without a terminal on standard input and
+standard error it exits with status 2. An agent reads with `jupyterlab-device
+monitor read` and writes with `jupyterlab-device monitor write`.
+
+The app shows one line for each line the port sends and for each block that is
+sent, with the time, as text or as hex digits. Enter sends the typed line: as
+text with the line ending (LF unless the settings say otherwise), or as hex
+digits with no line ending. The top row shows the device, its path, the
+settings, the DTR and RTS lines and the bytes received (RX) and sent (TX).
+
+keys (the bottom row of the app lists them too):
+  Ctrl+Q  quit
+  Esc     quit
+  Ctrl+O  settings: baud rate, data bits, parity, stop bits, the line ending and
+          text or hex for the typed line; Enter applies, Esc cancels
+  Ctrl+X  text/hex: show the traffic as text or as hex digits
+  Ctrl+P  pause: stop the scrolling of the traffic, and start it again
+  Ctrl+L  clear: empty the traffic view
+  F2      DTR on/off
+  F3      RTS on/off
+  F4      break of 0.25 s
+  F6      pulse DTR: the action pulse-dtr
+  F7      pulse RTS: the action pulse-rts
+  F8      ESP bootloader: the action esp-bootloader
+  F10     1200 baud touch: the action touch-1200
+  Ctrl+C  send 0x03 to the port; it does not quit
+  Enter   send the typed line
 
 The baud rate is the profile's unless --baud is given. The command refuses, with
 exit status 1, when another program holds the device, and names that program.
-miniterm opens the device as every tool does, so the action on open of the
-device's profile runs first. Set the profile `monitor` to open the terminal
-without an action.
+The app opens the device path as every tool does, so this command is the program
+that holds the device, and the action on open of the device's profile runs
+first. Set the profile `monitor` to open the terminal without an action. A
+setting applied with Ctrl+O changes the profile of the device. When the port is
+detached or removed the app stays open, shows `removed` and sends nothing until
+the port is attached again; after Forget, or when the device path failed, it
+stays removed: quit and start it again.
+
+Exit status: 0 after Ctrl+Q or Esc; 1 when another program holds the device or
+its path cannot be opened; 2 without a terminal.
 """, """
   jupyterlab-device terminal tty-2341-0043
   jupyterlab-device terminal tty-2341-0043 --baud 9600
@@ -756,8 +812,8 @@ exit status:
   2  wrong arguments; for `request`: nobody answered in time
   130  stopped with Ctrl+C
   `run` exits with the status of the tool it started, and with 127 when the tool
-  cannot be started; `shell` does the same with the shell; `terminal` exits with
-  the status of the terminal program
+  cannot be started; `shell` does the same with the shell; `terminal` exits 0
+  after Ctrl+Q or Esc, and 1 when the device is held or its path cannot be opened
 
 Results go to stdout and messages to stderr.
 
@@ -855,11 +911,27 @@ it.
 
 The command prints nothing of its own on standard output. `jupyterlab-device
 shell` starts a shell in which every tool has the library.
+
+PlatformIO: pio does not find the virtual device by itself: name its path with
+--upload-port for an upload and with --port for pio device monitor, or set
+upload_port and monitor_port in platformio.ini. An upload runs under `run --`,
+because the upload tool that pio starts sets DTR and RTS itself. pio device
+monitor needs no `run --`:
+
+  pio device monitor --port /run/devices/tty-2341-0043 --baud 115200
+
+The two keys in platformio.ini, under the environment of the board:
+
+  [env:uno]
+  upload_port = /run/devices/tty-2341-0043
+  monitor_port = /run/devices/tty-2341-0043
 """, """
   jupyterlab-device run -- avrdude -c arduino -p m328p \\
       -P /run/devices/tty-2341-0043 -U flash:w:blink.hex
   jupyterlab-device run --device tty-10c4-ea60 -- esptool \\
       --port /run/devices/tty-10c4-ea60 chip-id
+  jupyterlab-device run -- pio run -t upload \\
+      --upload-port /run/devices/tty-2341-0043
 """)
     p.usage = f"{PROG} run [-h] [--device D] -- CMD [ARG ...]"
     p.add_argument("--device", metavar="D",
@@ -887,9 +959,18 @@ Devices Panel) lists it as a run, with `jupyterlab-device shell` as its command
 line, and the user can stop it there. The shell then receives SIGHUP, and
 SIGKILL 3 s later when it still runs.
 
+When standard input and standard error are terminals and a conda environment or
+the .venv of the start folder, other than the active one, holds an upload tool
+(avrdude, stm32flash, esptool, pio), the command first shows a list of the
+environments: Enter starts the shell in the highlighted one, Esc keeps the
+current one. The shell then has that environment's bin first on PATH and the
+variables its activation sets.
+
 When standard output is a terminal the command first prints a banner: the
-upload tools found on PATH, the attached devices and two commands. With a pipe
-or a file as standard output it prints nothing of its own.
+environment chosen in the list, the upload tools of the environment, the
+attached devices and two commands. In the current environment the tools are
+those on PATH and in the tool folders of pipx and uv. With a pipe or a file as
+standard output it prints nothing of its own.
 
 Exit status: the status of the shell; 127 when the shell command cannot be
 started; 1 without a C compiler for the library, or when the server does not

@@ -23,18 +23,18 @@ The Devices panel with a serial port and a USB device, and a device shell: a lab
 
 ![Devices panel and a device shell](.resources/screenshot-shell.png)
 
-The panel while the simulated port sends bytes. The RX lamp is lit, and the section Device shell and tools lists the device shell:
+The panel while the simulated port sends bytes. The RX lamp is lit, and the section Device shells lists the device shell. The picture was taken before the section titles of the panel changed, so it shows the earlier titles:
 
-![Devices panel with traffic and a device shell in the section Device shell and tools](.resources/screenshot-panel.png)
+![Devices panel with traffic and a device shell in the section Device shells](.resources/screenshot-panel.png)
 
 ## Features
 
 - **Serial ports in the container** - a port granted in the browser has a virtual serial device at a stable path, which a serial tool opens as it opens a serial port
 - **Baud rate of the tool** - the baud rate a tool sets on the virtual device is the baud rate the browser opens the port with
 - **Port profiles** - parity, data bits, stop bits and the action on open, with built-in profiles for Arduino, STM32 and ESP boards
-- **Preload shim** - a tool started with `jupyterlab-device run` has its own DTR, RTS, break and parity calls passed to the port. The panel opens a device shell, a terminal in which every tool has the shim, lists every program that runs with the shim and stops one
+- **Preload shim** - a tool started with `jupyterlab-device run` has its own DTR, RTS, break and parity calls passed to the port. The panel opens a device shell, a terminal in which every tool has the shim, lists every program that runs with the shim and stops one. A device shell can start in a conda environment or a `.venv` that holds an upload tool
 - **Monitor for agents** - the server keeps the most recent bytes received from each port, so a short command-line call reads output that arrived before the call
-- **Serial terminal** - pyserial's miniterm in a JupyterLab terminal, on the virtual device
+- **Serial terminal** - a full-screen terminal app of this extension in a JupyterLab terminal, on the virtual device, with keys for the control lines, the reset actions and the serial settings
 - **USB devices in the container** - a granted USB device answers control, bulk and interrupt transfers of container programs through the command line, a Python client and a pyusb backend
 - **Device requests** - a container program asks for a device, and the lab shows the request with a Grant button
 - **Panel and status bar item** - the panel lists the devices, the program that holds each serial port or has each USB device open, and the pending device requests; each device row has a TX and an RX lamp that light when bytes pass; a status bar item is visible while any device is attached. The panel is hidden until it is switched on in the View menu
@@ -77,16 +77,16 @@ The choice is stored with the settings of the lab and holds after a page load. W
 The panel has:
 
 - **Plus icon** - in the header of the panel. A click opens a menu with **Connect Serial Port** and **Connect USB Device**; each opens the browser's dialog, and the device the user chooses is attached. A device granted earlier is attached again when the page loads, without a click
-- **One row per device** - kind, name, state (`attached`, `detached`, `removed` or `held by another tab`) and byte counters; for a serial port also the baud rate, the profile and the program that holds the virtual device; for a USB device the product name, whether a program has it open and the name of that program
-- **TX and RX lamps** - on every device row. They follow the traffic as the LEDs of a USB serial adapter do: a lamp is lit for 80 ms after each 50 ms period in which bytes passed in its direction. So sparse traffic gives single flashes, and steady traffic gives a steady light. For a device that another lab tab holds, a lamp flashes once when its byte counter grew, and the counters arrive once a second
+- **Section Serial and USB** - one row per device: kind, name, state (`attached`, `detached`, `removed` or `held by another tab`) and the byte counters `RX <n>, TX <n> bytes`; for a serial port also the baud rate, the profile and the program that holds the virtual device; for a USB device the product name, `Opened: yes` or `Opened: no`, and the name of the program that has it open. With no device the section reads `No device attached`
+- **TX and RX lamps** - on every device row; a lit TX lamp has the brand colour of the theme and a lit RX lamp is yellow. They follow the traffic as the LEDs of a USB serial adapter do: a lamp is lit for 80 ms after each 50 ms period in which bytes passed in its direction. So sparse traffic gives single flashes, and steady traffic gives a steady light. For a device that another lab tab holds, a lamp flashes once when its byte counter grew, and the counters arrive once a second
 - **Terminal** - on an attached serial port; opens the serial terminal
 - **Detach** - closes the device. The browser keeps the grant, and **Attach** opens the device again without a dialog
-- **Forget** - closes the device, removes it from the list and revokes the browser's grant. The first click changes the button to **Confirm forget**, the second click acts
-- **Profile settings** - on a serial port: profile, baud rate, data bits, parity, stop bits and the action when a program opens the port. A change applies at once
-- **Requests of programs** - each pending device request with the program, the device it asks for, the reason and a **Grant** button. The lab also raises a notification with that button
-- **Device shell and tools** - one row per program that was started through `jupyterlab-device run` or `jupyterlab-device shell`, in any terminal, also by an agent: the program, its process id, its command line and the device. **Stop** ends the program: the first click changes the button to **Confirm stop**, the second click acts. **Start** opens a device shell, a lab terminal in which every tool has the preload shim; see [Preload shim](#preload-shim). **Info** is there while a program runs. It shows the path of each attached device and example command lines for avrdude, stm32flash and esptool
-- **Round trip** - the last line shows the measured round trip between browser and server in milliseconds
-- **Absent interfaces** - when the browser gives the page no Web Serial or no WebUSB, the panel says so, names HTTPS and localhost, and the menu of the plus icon has no entry for that interface; with neither interface the plus icon is disabled
+- **Forget** - closes the device, removes it from the list and revokes the browser's grant. The first click changes the button to **Confirm forget**, in the error colour of the theme, the second click acts
+- **Settings** - on a serial port; opens the dialog `Serial settings of <name>` with the profile, baud rate, data bits, parity, stop bits and the action when a program opens the port. Choosing another profile fills the other fields with its values. **Save** applies the changed fields at once, **Cancel** changes nothing
+- **Section Requests** - each pending device request with the program, the device it asks for, the reason and a **Grant** button. The lab also raises a notification with that button
+- **Section Device shells** - one row per program that was started through `jupyterlab-device run` or `jupyterlab-device shell`, in any terminal, also by an agent: the program, its process id, its command line and the device. **Stop** ends the program: the first click changes the button to **Confirm stop**, in the error colour of the theme, the second click acts. **Start** opens a device shell, a lab terminal in which every tool has the preload shim; see [Preload shim](#preload-shim). **Info** is there while a program runs. It shows the path of each attached device and example command lines for avrdude, stm32flash, esptool and pio. With no program the section reads `No device shell opened`
+- **Round trip** - the last line, `Round trip: <ms> ms`, shows the measured round trip between browser and server, or `Round trip: not connected`
+- **Absent interfaces** - when the browser gives the page no Web Serial or no WebUSB, the panel says so in one line, for example `Web Serial and WebUSB need HTTPS or localhost, in Chrome or Edge`, and the menu of the plus icon has no entry for that interface; with neither interface the plus icon is disabled
 
 ### Commands
 
@@ -120,17 +120,21 @@ The settings are in **Settings → Settings Editor → Device Bridge**. A change
 
 - The five default settings apply to a serial port at the moment it is added: the port gets the profile `monitor` with these values
 - A port that is already in the Devices panel keeps its values when a default changes. That holds after a detach and a page load too, for as long as the Jupyter server runs. A port that was removed with **Forget** gets the defaults when it is added again
-- A profile chosen later for the port, in the panel or with `jupyterlab-device profile <device> <id>`, replaces these values
+- A profile chosen later for the port, in the Settings dialog of the panel or with `jupyterlab-device profile <device> <id>`, replaces these values
 - A port whose action on open is not the action of its profile has `on open <action>` after the profile in its line of `jupyterlab-device list`
 - With the defaults as they are installed, a port is added with 115200 baud, 8 data bits, no parity, 1 stop bit and no action on open
 
 ### Serial terminal
 
-The serial terminal is pyserial's miniterm; this extension has no terminal emulator of its own. The command starts `jupyterlab-device terminal <name>` in a new lab terminal, which starts miniterm on the virtual device with the baud rate of the profile. That terminal runs this one program, with no shell prompt, and its tab closes when miniterm ends.
+The serial terminal is a full-screen app of this extension. The command starts `jupyterlab-device terminal <name>` in a new lab terminal, which runs the app on the virtual device with the baud rate of the profile. That terminal runs this one program, with no shell prompt. Its tab closes when the app ends, and closing the tab ends the app, so the port is free again.
 
-- Ctrl+] leaves miniterm
-- Ctrl+T opens miniterm's menu; Ctrl+T then Ctrl+H lists its keys
-- miniterm opens the virtual device as every tool does: the panel shows it as the holding program, and the action on open of the profile runs
+- The top row names the device, its path, the serial settings, the DTR and RTS lines and the bytes received and sent. Below it each line the port sends and each block that is sent has its own line with the time, received bytes in amber and sent bytes in cyan, as text or as hex digits
+- Enter sends the typed line, as text with a line ending (LF unless the settings say otherwise) or as hex digits
+- Ctrl+Q or Esc quits; Ctrl+O opens the settings: baud rate, data bits, parity, stop bits, the line ending and text or hex. The bottom row lists every key; `jupyterlab-device terminal --help` explains each
+- Keys set DTR and RTS, send a break, run the actions `pulse-dtr`, `pulse-rts`, `esp-bootloader` and `touch-1200`, and Ctrl+C sends the byte 0x03 to the board
+- The app opens the virtual device as every tool does: the panel shows it as the holding program, and the action on open of the profile runs
+- A port that is detached or removed leaves the app open with the state `removed`, and nothing is sent until the port is attached again; after Forget, or when the device path failed, it stays removed until it is started again
+- The app follows a dark or a light terminal background
 - When the command line ends with an error less than 5 seconds after its start, for example because another program holds the port, the terminal stays open with the message until Enter is pressed
 - Where the server offers no terminals, or the lab has no `jupyterlab_basic_terminal_extension`, the lab shows the command line to run in a shell of the container
 - Where the terminal extension refuses the launch, the lab raises a notification that says the terminal did not start, followed by the reason as the terminal extension gives it, for example `invalid_cwd` when the folder of the file browser no longer exists
@@ -154,7 +158,7 @@ Each serial port has one virtual serial device in the container: a pty that a to
 
 ### Profiles
 
-A profile is the settings the browser opens the port with, and the action it runs on the port when a program opens the virtual device. It is set in the panel or with `jupyterlab-device profile <device> <id>`, and single fields can be overridden. A port that is added gets the profile `monitor`, with the default serial settings of the lab as overrides where they differ from that profile; see Settings.
+A profile is the settings the browser opens the port with, and the action it runs on the port when a program opens the virtual device. It is set in the Settings dialog of the panel, in the serial terminal or with `jupyterlab-device profile <device> <id>`, and single fields can be overridden. A port that is added gets the profile `monitor`, with the default serial settings of the lab as overrides where they differ from that profile; see Settings.
 
 | Profile            | Settings   | Action on open   | For                                                      |
 | ------------------ | ---------- | ---------------- | -------------------------------------------------------- |
@@ -185,7 +189,8 @@ A profile is the settings the browser opens the port with, and the action it run
 - **No C compiler** - `run` stops with exit status 1 and a message that names a profile as the way that needs no shim
 - **Statically linked tool** - a statically linked tool does not load the shim, so only a profile serves it
 - **Order** - a DTR, RTS or break call returns to the tool after the lab tab applied it, or after 1 s
-- **Device shell** - `jupyterlab-device shell` starts the shell of the lab's terminals with the shim: the shell command that the Jupyter server starts in a terminal, whichever shell that is. Every tool started in that shell has the shim, without `jupyterlab-device run --` in front. The shell first prints a banner in pale cyan, or without colour when the variable `NO_COLOR` is set: it names the upload tools that are installed, of avrdude, stm32flash and esptool, or says to install one when none is on `PATH`, and it lists each attached device, a serial port by its path with `(COM)` and a USB device by its name with `(USB)`
+- **Device shell** - `jupyterlab-device shell` starts the shell of the lab's terminals with the shim: the shell command that the Jupyter server starts in a terminal, whichever shell that is. Every tool started in that shell has the shim, without `jupyterlab-device run --` in front. The shell first prints a banner in pale cyan, or without colour when the variable `NO_COLOR` is set: it names the upload tools that are installed, of avrdude, stm32flash, esptool and pio, or says to install one when there is none, and it lists each attached device, a serial port by its path with `(COM)` and a USB device by its name with `(USB)`
+- **Environment of the device shell** - when a conda environment, or the `.venv` of the folder the shell starts in, holds an upload tool, `jupyterlab-device shell` on a terminal first shows a list of the environments with their tools. Enter starts the shell in the highlighted environment, with its `bin` first on `PATH` and the variables its activation sets; Esc keeps the current environment. The banner then names the chosen environment above the tool line
 - **Device shell from the panel** - the **Start** button of the panel and the command **Device Shell** run `jupyterlab-device shell` in a new lab terminal, in the folder of the file browser. `exit`, or **Stop** in the panel, ends the shell, and the tab of the terminal closes. When the shell cannot start, for example because the container has no C compiler, the terminal stays open with the message until Enter is pressed
 - **Shown in the panel** - `run` reports the program to the server before it starts it, so the panel lists the program while it lives, also one that an agent started. **Stop** sends the program `SIGHUP`, and `SIGKILL` 3 s later when it still lives. A shell ends on `SIGHUP` together with the tool that runs in it
 - **Tested with** - gcc and glibc 2.39 on x86-64 Linux, with Python programs and pyserial as the tool
@@ -289,15 +294,15 @@ For every board:
 - Set the profile of the board before the upload, and the profile `monitor` before the serial terminal is opened: the action on open runs at every open
 - `monitor read` prints what the port sent, also before the call, and does not open the virtual device. The buffer also holds the bytes the bootloader sent during the upload: `--lines 0 --follow --timeout <seconds>` prints only new output, `--lines <n>` the last lines of the buffer
 - `monitor read` shows readable text only when the port is open at the baud rate of the firmware. While no tool holds the device that is the profile's baud rate, and `jupyterlab-device profile <device> --baud <n>` sets it
-- `jupyterlab-device terminal` needs a person at a terminal. An agent reads with `monitor read` and writes with `monitor write`
+- `jupyterlab-device terminal` needs a person at a terminal. An agent reads with `monitor read` and writes with `monitor write`, never with `terminal`
 
 ### Installers of the firmware tools
 
 The folder `resources/envs/` of the repository holds three proposed installers. Each one creates one conda environment with the tools that build firmware and upload it:
 
-- `firmware-avr.py` - environment `firmware-avr`: nightly Rust with its source, avr-gcc, avrdude
+- `firmware-avr.py` - environment `firmware-avr`: nightly Rust with its source, avr-gcc, avrdude, PlatformIO with the Arduino AVR core
 - `firmware-stm32.py` - environment `firmware-stm32`: Rust with six Cortex-M targets, cargo-binutils, stm32flash
-- `firmware-esp.py` - environment `firmware-esp`: Rust for the ESP32 chips, espflash, esptool, arduino-cli with the ESP8266 core
+- `firmware-esp.py` - environment `firmware-esp`: Rust for the ESP32 chips, espflash, esptool, PlatformIO with the ESP8266 core
 
 The three import `firmware_env.py`, so the four files must be in one folder. An installer is a `uv` script and runs as a program, for example `resources/envs/firmware-avr.py`. It needs `uv`, x86-64 Linux, access to the internet, and conda at `/opt/conda/bin/conda` or at the path in the variable `CONDA_CMD`. The wheel installs the four files in `envs/` beside the agent skill, at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/envs/`. No test of this extension ran an installer.
 
@@ -372,6 +377,27 @@ jupyterlab-device monitor read tty-10c4-ea60 --lines 20
 
 - esptool before version 5 writes these option values and commands with an underscore: `no_reset`, `write_flash` (from knowledge)
 
+### PlatformIO
+
+pio does not find the virtual device by itself: name its path with --upload-port for an upload and with --port for pio device monitor, or set upload_port and monitor_port in platformio.ini. The upload runs under `jupyterlab-device run`, because the upload tool that pio starts, for example avrdude or esptool, sets DTR and RTS itself. `pio device monitor` is an interactive terminal for a person; an agent reads with `monitor read`.
+
+```bash
+jupyterlab-device profile tty-2341-0043 monitor
+jupyterlab-device run -- pio run -t upload --upload-port /run/devices/tty-2341-0043
+pio device monitor --port /run/devices/tty-2341-0043 --baud 115200
+jupyterlab-device monitor read tty-2341-0043 --lines 0 --follow --timeout 10
+```
+
+The two keys in `platformio.ini`, under the environment of the board, make the options unnecessary:
+
+```ini
+[env:uno]
+upload_port = /run/devices/tty-2341-0043
+monitor_port = /run/devices/tty-2341-0043
+```
+
+- The environment `firmware-avr` of the installers holds pio with the Arduino AVR core. The tests ran the real `pio device monitor` on a virtual device with a simulated tab. The upload ran only with a stand-in program for pio, which sets DTR and RTS as an upload tool does; no real pio upload was run
+
 ### Agent skill
 
 The agent skill, [`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`](.agents/skills/jupyterlab-device-bridge-extension/SKILL.md), tells an agent to read `jupyterlab-device --help` first and adds only the rules the help cannot state. One rule names the installers of the firmware tools, which the wheel installs in `envs/` beside the skill. The skill is in the repository and in the wheel, which installs it at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/SKILL.md`. No agent reads that directory, so one of the two links below makes the skill readable.
@@ -400,7 +426,7 @@ ln -s "$PWD/.agents/skills/jupyterlab-device-bridge-extension" ~/.claude/skills/
 | `profile <device> [<id>] [--baud N] [--data-bits N] [--parity P] [--stop-bits N] [--on-open ACTION]` | shows or sets the profile of a serial port                                                          |
 | `monitor read <device> [--lines N] [--follow] [--timeout S] [--raw]`                                 | prints the buffered output of a serial port; with `--follow` also new output until the timeout ends |
 | `monitor write <device> [TEXT] [--hex] [--newline]`                                                  | sends bytes to a serial port; standard input when no text is given                                  |
-| `terminal <device> [--baud N]`                                                                       | starts pyserial's miniterm on a serial port and becomes that program                                |
+| `terminal <device> [--baud N]`                                                                       | opens the serial terminal app on a serial port, for a person at a terminal                          |
 | `signals <device> [--dtr N] [--rts N]`                                                               | sets the DTR and RTS lines of a serial port, 1 or 0                                                 |
 | `action <device> <action>`                                                                           | runs one action on a serial port                                                                    |
 | `run [--device D] -- CMD [ARG ...]`                                                                  | starts a tool with the preload shim                                                                 |
@@ -418,9 +444,9 @@ ln -s "$PWD/.agents/skills/jupyterlab-device-bridge-extension" ~/.claude/skills/
 | `usb transfer <device> ENDPOINT [--length N] [--data HEX] [--timeout MS]`                            | runs one bulk or interrupt transfer; bit 7 of ENDPOINT gives the direction                          |
 
 - Results go to stdout and messages to stderr. Bytes of a USB transfer are printed and given as hexadecimal digits
-- `jupyterlab-device --help` ends with one example command line for each upload tool that is installed: it looks for avrdude, stm32flash and esptool on `PATH` at that moment and shows the lines of the section [Working with an AI agent](#working-with-an-ai-agent) for the ones it finds. So the help shows more after a conda environment with such a tool was activated. The path in an example is the placeholder `<path>`; `jupyterlab-device list` prints the real path
+- `jupyterlab-device --help` ends with one example command line for each upload tool that is installed: it looks for avrdude, stm32flash, esptool and pio on `PATH` at that moment and shows the lines of the section [Working with an AI agent](#working-with-an-ai-agent) for the ones it finds. So the help shows more after a conda environment with such a tool was activated. The path in an example is the placeholder `<path>`; `jupyterlab-device list` prints the real path
 - Exit status 0: done. 1: not done, and one line on stderr names the reason and the next step. 2: wrong arguments, and for `request` nobody answered in time. 130: stopped with Ctrl+C
-- `run` and `shell` exit with the status of the program they started, and with 127 when it cannot be started. `terminal` exits with the status of miniterm
+- `run` and `shell` exit with the status of the program they started, and with 127 when it cannot be started. `terminal` exits 0 after Ctrl+Q or Esc, 1 when another program holds the device or its path cannot be opened, and 2 without a terminal
 - The server is the first one that `jupyter server list` reports. The token is `JUPYTERHUB_API_TOKEN` or `JPY_API_TOKEN` when one is set, else the token of the listed server, else `JUPYTER_TOKEN`
 
 ## Security
@@ -452,7 +478,7 @@ The first version does not have:
 - A browser with the Web Serial and WebUSB interfaces; from knowledge these are desktop Chrome and Edge
 - The lab opened over HTTPS or at `localhost`; on a plain `http://` address that is not localhost the browser does not offer these interfaces
 - A C compiler (`cc` or `gcc`) in the container, only for `jupyterlab-device run` and `jupyterlab-device shell`
-- `jupyterlab_basic_terminal_extension` >= 1.0.8 and `/bin/bash` on the server, for the two commands of the lab that open a terminal; pip installs that extension together with this one
+- `jupyterlab_basic_terminal_extension` >= 1.0.9 and `/bin/bash` on the server, for the two commands of the lab that open a terminal; pip installs that extension together with this one. Closing the tab ends the program and frees the port
 - pyusb in the program's environment, only for the pyusb backend
 
 ## Install

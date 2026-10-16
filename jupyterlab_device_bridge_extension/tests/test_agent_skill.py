@@ -23,6 +23,10 @@ INSTALLED_COPY = pathlib.Path(sys.prefix) / "share" / "jupyter" / "agents" / "sk
 ENVS = REPOSITORY / "resources" / "envs"
 INSTALLED_ENVS = INSTALLED_COPY.parent / "envs"
 INSTALLERS = ("firmware-avr.py", "firmware-stm32.py", "firmware-esp.py")
+# Tools whose own command lines the skill shows; their flags are not flags of the CLI.
+TOOLS = ("pio",)
+# The originals of the copies in resources/envs, on the workstation where the installers are written.
+ORIGINALS = pathlib.Path.home() / ".local" / "lab-utils" / "envs"
 
 pytestmark = pytest.mark.skipif(
     not REPOSITORY_COPY.is_file(),
@@ -42,9 +46,17 @@ def test_acc_cli_86_the_skill_is_in_the_repository_and_mapped_into_the_wheel():
     assert len(skill.splitlines()) < 30, "the detail lives in --help, not in the skill"
 
 
+def own_words(rules: str) -> str:
+    """The rules without the words of other programs: a code span that starts with a tool, and the part of a span after ` -- `, the tool that `run` starts."""
+    def cut(span: re.Match) -> str:
+        words = span.group(1)
+        return "``" if words.split()[0] in TOOLS else f"`{words.split(' -- ')[0]}`"
+    return re.sub(r"`([^`]+)`", cut, rules)
+
+
 def test_acc_cli_86_the_skill_names_only_commands_and_flags_that_exist():
-    """ACC-CLI-86 every flag and every command the skill names in backticks is one the CLI has."""
-    rules = REPOSITORY_COPY.read_text().split("## Rules", 1)[1]
+    """ACC-CLI-86 every flag and every command the skill names in backticks is one the CLI has; the words of a tool that the skill shows are not the CLI's."""
+    rules = own_words(REPOSITORY_COPY.read_text().split("## Rules", 1)[1])
     flags = {flag for parser in PARSERS.values() for action in parser._actions for flag in action.option_strings}
     commands = {" ".join(path) for path in PARSERS if path}
     code = re.findall(r"`([^`]+)`", rules)
@@ -129,3 +141,32 @@ def test_acc_cli_126_the_wheel_installs_the_firmware_installers_beside_the_skill
             f"the installed {name} differs from the repository copy - run make install")
     for name in INSTALLERS:
         assert os.access(INSTALLED_ENVS / name, os.X_OK), f"the installed {name} is not executable"
+
+
+@pytest.mark.skipif(not ORIGINALS.is_dir(), reason=f"no originals of the installers at {ORIGINALS}")
+@pytest.mark.parametrize("name", [*INSTALLERS, "firmware_env.py"])
+def test_acc_cli_187_each_copy_of_resources_envs_is_its_original(name):
+    """ACC-CLI-187 each of the four files of resources/envs is byte for byte the file of the same name in ~/.local/lab-utils/envs, and an installer keeps its executable bit."""
+    assert (ENVS / name).read_bytes() == (ORIGINALS / name).read_bytes(), (
+        f"resources/envs/{name} differs from {ORIGINALS / name}")
+    if name in INSTALLERS:
+        assert os.access(ENVS / name, os.X_OK), f"resources/envs/{name} is not executable"
+
+
+def test_acc_cli_187_the_readme_of_lab_utils_is_not_copied_and_the_readme_names_platformio_for_firmware_avr():
+    """ACC-CLI-187 resources/envs holds no README.md, and the README line of `firmware-avr.py` names PlatformIO with the Arduino AVR core."""
+    lines = [line for line in (REPOSITORY / "README.md").read_text(encoding="utf-8").splitlines()
+             if line.startswith("- `firmware-avr.py`")]
+
+    assert not (ENVS / "README.md").exists()
+    assert len(lines) == 1, f"{len(lines)} README lines describe firmware-avr.py"
+    assert "PlatformIO with the Arduino AVR core" in lines[0]
+
+
+def test_acc_cli_187_the_copy_of_firmware_avr_installs_platformio_6_2_0_and_atmelavr_5_3_0():
+    """ACC-CLI-187 resources/envs/firmware-avr.py installs PlatformIO 6.2.0 with the PlatformIO platform atmelavr 5.3.0; this holds also where the originals are absent."""
+    installer = (ENVS / "firmware-avr.py").read_text(encoding="utf-8")
+
+    assert re.search(r'^PLATFORMIO = "6\.2\.0"$', installer, re.MULTILINE)
+    assert re.search(r'^ATMELAVR = "5\.3\.0"', installer, re.MULTILINE)
+    assert 'env.platformio(PLATFORMIO, f"atmelavr@{ATMELAVR}"' in installer

@@ -281,6 +281,28 @@ class Env:
         )
         self.link(self.prefix / "cargo/bin")
 
+    def platformio(self, version: str, platform: str, board: str, *tools: str) -> None:
+        """Install PlatformIO into the environment's Python, then the platform with the toolchain and
+        the Arduino core for the board into PLATFORMIO_CORE_DIR. `pio pkg install` resolves the
+        packages a build needs only inside a project, so a temporary project names the board.
+
+        tools - optional packages of the platform that a build does not install, such as an
+                uploader; each is installed at the version the platform requires
+        """
+        self.run(self.prefix / "bin/python", "-m", "pip", "install", f"platformio=={version}")
+        project = self.tmp / "project"
+        project.mkdir()
+        (project / "platformio.ini").write_text(
+            f"[env:{board}]\nplatform = {platform}\nboard = {board}\nframework = arduino\n"
+        )
+        self.run("pio", "pkg", "install", cwd=project)
+        core = Path(self.environ()["PLATFORMIO_CORE_DIR"])
+        manifest = core / "platforms" / platform.split("@")[0] / "platform.json"
+        packages = json.loads(manifest.read_text())["packages"]
+        for tool in tools:
+            spec = f"{packages[tool]['owner']}/{tool}@{packages[tool]['version']}"
+            self.run("pio", "pkg", "install", "--tool", spec, cwd=project)
+
     def link(self, bin_dir: Path) -> None:
         """Symlink every program of a tool's own bin folder into the environment's bin folder."""
         for program in bin_dir.iterdir():

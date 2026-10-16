@@ -5,7 +5,8 @@
  * programs, the runs and the round trip. A click that opens a dialog of the browser,
  * a dialog of the lab or a lab terminal goes to a handler of the plugin. The plus icon
  * opens a menu that the plugin made from its connect commands. Attach, detach,
- * forget, a profile change and the stop of a run go to the model.
+ * forget, a profile change from the Settings dialog of a serial row and the stop of a
+ * run go to the model.
  *
  * Hooks for the functional tests. Each one is an id or an attribute, never a class
  * name, and none of them changes with the text of a label.
@@ -42,8 +43,10 @@
  *                       [data-field="holder"]    <program> | none
  *     buttons           [data-action="attach"], [data-action="detach"],
  *                       [data-action="forget"], on a serial row [data-action="terminal"]
- *     profile editor    [data-profile-field="profile|baudRate|dataBits|parity|stopBits|onOpen"]
- *                       inside the <details> of a serial row; a change event sends the value
+ *                       and [data-action="settings"]
+ *   Settings dialog     a dialog of the lab, not in the panel, with the fields
+ *                       [data-profile-field="profile|baudRate|dataBits|parity|stopBits|onOpen"]
+ *                       and the buttons Cancel and Save; Save sends the changed fields
  *   device section      [data-section="devices"]; its [data-field="count"] reads (<n>)
  *   request section     [data-section="requests"]; hidden while no request is pending
  *   request row         [data-request="<id>"] with [data-field="program"],
@@ -68,7 +71,7 @@
  * Stop of a run row does the same with the label "Confirm stop".
  */
 
-import { Notification } from '@jupyterlab/apputils';
+import { Dialog, Notification, showDialog } from '@jupyterlab/apputils';
 import { addIcon } from '@jupyterlab/ui-components';
 
 import { Menu, Widget } from '@lumino/widgets';
@@ -79,6 +82,7 @@ import type {
   DeviceKind,
   IDeviceActivity,
   IDeviceRequest,
+  IProfile,
   IProfileChange,
   IRunRecord,
   ISerialRecord,
@@ -223,6 +227,12 @@ function field(name: string, className = VALUE_CLASS, text = ''): HTMLElement {
   return node;
 }
 
+/** Give an element a tooltip with the full text of what it shows in short. */
+function tip<T extends HTMLElement>(node: T, title: string): T {
+  node.title = title;
+  return node;
+}
+
 /** One line of a row: fixed texts and the elements of the values between them. */
 function line(...parts: Array<string | HTMLElement>): HTMLElement {
   const node = el('div', 'jp-DeviceBridgePanel-detail');
@@ -309,124 +319,175 @@ function select(
   return node;
 }
 
+/** The values a Settings dialog shows: the profile id and the six fields as text. */
+type SettingsValues = Record<keyof IProfileChange, string>;
+
 /**
- * The profile editor of a serial port: the profile id and the single fields that
- * override it. A change of a field goes to the server at once.
- *
- * @param first The record the editor shows first
- * @param model The model of the device bridge
+ * The body of the Settings dialog of a serial port: the profile id and the single
+ * fields that override it, filled with the values of the port when it opens. The lab
+ * calls `getValue` when the user clicks Save.
  */
-function profileEditor(
-  first: ISerialRecord,
-  model: DeviceBridgeModel
-): IRow<ISerialRecord> {
-  let shown = first;
-  const baudRate = el('input', 'jp-DeviceBridgePanel-input');
-  // Not a number field: its arrow keys and the mouse wheel change the value by 1.
-  baudRate.type = 'text';
-  baudRate.setAttribute('inputmode', 'numeric');
-  const controls: Array<
+class SerialSettingsBody extends Widget {
+  /**
+   * @param record The record of the port when the dialog opens
+   * @param profiles The profiles of the server
+   */
+  constructor(record: ISerialRecord, profiles: IProfile[]) {
+    super();
+    this.addClass('jp-DeviceBridgeSettings');
+    this._record = record;
+    this._profiles = profiles;
+    const baudRate = el('input', 'jp-DeviceBridgePanel-input');
+    // Not a number field: its arrow keys and the mouse wheel change the value by 1.
+    baudRate.type = 'text';
+    baudRate.setAttribute('inputmode', 'numeric');
+    this._controls = [
+      [
+        'profile',
+        'Profile',
+        select(profiles.map(profile => [profile.id, profile.label]))
+      ],
+      ['baudRate', 'Baud rate', baudRate],
+      [
+        'dataBits',
+        'Data bits',
+        select([
+          ['7', '7'],
+          ['8', '8']
+        ])
+      ],
+      [
+        'parity',
+        'Parity',
+        select([
+          ['none', 'None'],
+          ['even', 'Even'],
+          ['odd', 'Odd']
+        ])
+      ],
+      [
+        'stopBits',
+        'Stop bits',
+        select([
+          ['1', '1'],
+          ['2', '2']
+        ])
+      ],
+      [
+        'onOpen',
+        'When a program opens the port',
+        select(Object.entries(ACTION_LABELS))
+      ]
+    ];
+    for (const [key, label, control] of this._controls) {
+      control.dataset.profileField = key;
+      const labelled = el('label', 'jp-DeviceBridgePanel-field');
+      labelled.append(
+        el('span', 'jp-DeviceBridgePanel-fieldLabel', label),
+        control
+      );
+      this.node.append(labelled);
+    }
+    const [, , profile] = this._controls[0];
+    // A profile id removes the overrides, so the fields show what that profile gives.
+    profile.addEventListener('change', () =>
+      this._fill(this._reference(profile.value))
+    );
+    this._fill(this._reference(record.profile));
+  }
+
+  /**
+   * The fields that differ from what the port has: the profile id when it changed, and
+   * each field that differs from the values of the chosen profile.
+   *
+   * @returns The body of the profile request; empty when nothing changed
+   */
+  getValue(): IProfileChange {
+    const change: Record<string, string | number> = {};
+    const [, , profile] = this._controls[0];
+    const reference = {
+      ...this._reference(profile.value),
+      profile: this._record.profile
+    };
+    for (const [key, , control] of this._controls) {
+      if (control.value !== reference[key]) {
+        change[key] = NUMBER_FIELDS.has(key)
+          ? Number(control.value)
+          : control.value;
+      }
+    }
+    return change as IProfileChange;
+  }
+
+  /**
+   * What the fields show for a profile id: for the profile of the port the profile with
+   * the overrides of the port, for another profile that profile alone.
+   */
+  private _reference(id: string): SettingsValues {
+    const record = this._record;
+    const own = id === record.profile;
+    const values = {
+      // Stand in for a profile id that is not in the list of the server.
+      ...record.settings,
+      onOpen: 'none',
+      ...this._profiles.find(profile => profile.id === id),
+      ...(own ? record.overrides : {}),
+      profile: id
+    };
+    const shown = {} as SettingsValues;
+    for (const [key] of this._controls) {
+      shown[key] = String(values[key]);
+    }
+    return shown;
+  }
+
+  private _fill(values: SettingsValues): void {
+    for (const [key, , control] of this._controls) {
+      control.value = values[key];
+    }
+  }
+
+  private readonly _record: ISerialRecord;
+  private readonly _profiles: IProfile[];
+  private readonly _controls: Array<
     [
       key: keyof IProfileChange,
       label: string,
       control: HTMLInputElement | HTMLSelectElement
     ]
-  > = [
-    [
-      'profile',
-      'Profile',
-      select(model.profiles.map(profile => [profile.id, profile.label]))
-    ],
-    ['baudRate', 'Baud rate', baudRate],
-    [
-      'dataBits',
-      'Data bits',
-      select([
-        ['7', '7'],
-        ['8', '8']
-      ])
-    ],
-    [
-      'parity',
-      'Parity',
-      select([
-        ['none', 'None'],
-        ['even', 'Even'],
-        ['odd', 'Odd']
-      ])
-    ],
-    [
-      'stopBits',
-      'Stop bits',
-      select([
-        ['1', '1'],
-        ['2', '2']
-      ])
-    ],
-    [
-      'onOpen',
-      'When a program opens the port',
-      select(Object.entries(ACTION_LABELS))
-    ]
-  ];
+  >;
+}
 
-  /** Write the profile of the shown record, with its overrides, into the fields. */
-  const fill = (everyField: boolean): void => {
-    const values = {
-      // Stand in for a profile id that is not in the list of the server.
-      ...shown.settings,
-      onOpen: 'none',
-      ...model.profiles.find(profile => profile.id === shown.profile),
-      ...shown.overrides,
-      profile: shown.profile
-    };
-    for (const [key, , control] of controls) {
-      const value = String(values[key]);
-      // The user may be typing a baud rate: an update of the device table leaves it.
-      const typing = control === baudRate && document.activeElement === control;
-      if (control.value !== value && (everyField || !typing)) {
-        control.value = value;
-      }
-    }
-  };
-
-  const node = el('details', 'jp-DeviceBridgePanel-profile');
-  node.append(
-    el('summary', 'jp-DeviceBridgePanel-profileSummary', 'Profile settings')
-  );
-  for (const [key, label, control] of controls) {
-    control.dataset.profileField = key;
-    control.addEventListener('change', () => {
-      const value = NUMBER_FIELDS.has(key)
-        ? Number(control.value)
-        : control.value;
-      model
-        .setProfile(shown.name, { [key]: value } as IProfileChange)
-        .catch((error: Error) => {
-          // Without `autoClose` the lab displays no toast.
-          Notification.emit(
-            `The profile of ${shown.name} was not changed: ${error.message}`,
-            'error',
-            { autoClose: false }
-          );
-          fill(true);
-        });
-    });
-    const labelled = el('label', 'jp-DeviceBridgePanel-field');
-    labelled.append(
-      el('span', 'jp-DeviceBridgePanel-fieldLabel', label),
-      control
-    );
-    node.append(labelled);
+/**
+ * Open the Settings dialog of a serial port. Save sends the changed fields in one
+ * profile request; Cancel changes nothing.
+ *
+ * @param record The record of the port
+ * @param model The model of the device bridge
+ */
+async function editSettings(
+  record: ISerialRecord,
+  model: DeviceBridgeModel
+): Promise<void> {
+  const result = await showDialog({
+    title: `Serial settings of ${record.name}`,
+    body: new SerialSettingsBody(record, model.profiles),
+    buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Save' })]
+  });
+  const change = result.value;
+  if (!result.button.accept || !change || Object.keys(change).length === 0) {
+    return;
   }
-
-  return {
-    node,
-    update(record: ISerialRecord): void {
-      shown = record;
-      fill(false);
-    }
-  };
+  try {
+    await model.setProfile(record.name, change);
+  } catch (error) {
+    // Without `autoClose` the lab displays no toast.
+    Notification.emit(
+      `Profile not changed: ${(error as Error).message}`,
+      'error',
+      { autoClose: false }
+    );
+  }
 }
 
 /**
@@ -491,15 +552,12 @@ function deviceRow(
   );
   const actions = el('div', 'jp-DeviceBridgePanel-itemActions');
   actions.append(attach, detach, forget);
-
-  node.append(
-    header,
-    details,
-    lamps,
-    line('From the device ', rx, ' bytes, to the device ', tx, ' bytes'),
-    error,
-    actions
+  const traffic = tip(
+    line('RX ', rx, ', TX ', tx, ' bytes'),
+    'Bytes from the device (RX) and to the device (TX)'
   );
+
+  node.append(header, details, lamps, traffic, error, actions);
   return {
     node,
     details,
@@ -560,13 +618,19 @@ function serialRow(
     'Open a lab terminal with a serial terminal program on this port',
     () => openTerminal(first.name)
   );
-  row.actions.prepend(terminal);
-  const editor = profileEditor(first, model);
-  row.node.append(editor.node);
+  let shown = first;
+  const settings = button(
+    'settings',
+    'Settings',
+    'Change the profile, the serial settings and the action on open of this port',
+    () => void editSettings(shown, model)
+  );
+  row.actions.prepend(terminal, settings);
 
   return {
     node: row.node,
     update(record: ISerialRecord): void {
+      shown = record;
       row.update(record);
       baud.textContent = String(record.settings.baudRate);
       profile.textContent = record.profile;
@@ -574,7 +638,6 @@ function serialRow(
         ? `${record.holder.name} (pid ${record.holder.pid})`
         : 'none';
       terminal.hidden = record.state !== 'attached';
-      editor.update(record);
     },
     dispose: row.dispose
   };
@@ -588,7 +651,10 @@ function usbRow(first: IUsbRecord, model: DeviceBridgeModel): IRow<IUsbRecord> {
   const productLine = line(product);
   row.details.append(
     productLine,
-    line('Open by a program: ', opened),
+    tip(
+      line('Opened: ', opened),
+      'Whether a program in the container has the device open'
+    ),
     line('Program: ', holder)
   );
 
@@ -629,11 +695,9 @@ function runRow(pid: number, model: DeviceBridgeModel): IRow<IRunRecord> {
     () => {
       model.stopRun(pid).catch((error: Error) => {
         // Without `autoClose` the lab displays no toast.
-        Notification.emit(
-          `The program with pid ${pid} was not stopped: ${error.message}`,
-          'error',
-          { autoClose: false }
-        );
+        Notification.emit(`Not stopped: ${error.message}`, 'error', {
+          autoClose: false
+        });
       });
     }
   );
@@ -689,15 +753,21 @@ function syncRows<K, R>(
   }
 }
 
-/** A section of the panel body: a header with a title and a count, then the content. */
+/**
+ * A section of the panel body: a header with a title and a count, then the content.
+ * The title is short; its tooltip says what the section holds.
+ */
 function section(
   name: string,
-  title: string,
+  [title, tooltip]: [title: string, tooltip: string],
   count: HTMLElement,
   ...content: HTMLElement[]
 ): HTMLElement {
   const header = el('div', 'jp-DeviceBridgePanel-sectionHeader');
-  header.append(el('span', 'jp-DeviceBridgePanel-sectionTitle', title), count);
+  header.append(
+    tip(el('span', 'jp-DeviceBridgePanel-sectionTitle', title), tooltip),
+    count
+  );
   const node = el('div', 'jp-DeviceBridgePanel-section');
   node.dataset.section = name;
   node.append(header, ...content);
@@ -747,20 +817,22 @@ export class DeviceBridgePanel extends Widget {
       add
     );
 
+    // The interfaces the browser does not give this page: the name and what it reaches.
     const missing = [
-      model.interfaces.serial ? '' : 'serial ports',
-      model.interfaces.usb ? '' : 'USB devices'
-    ].filter(Boolean);
+      model.interfaces.serial ? null : ['Web Serial', 'serial ports'],
+      model.interfaces.usb ? null : ['WebUSB', 'USB devices']
+    ].filter((names): names is string[] => names !== null);
     const absent = field(
       'absent',
       'jp-DeviceBridgePanel-banner',
-      `The browser gives this page no access to ${missing.join(' and ')}. Open the lab over HTTPS or at localhost, in Chrome or Edge.`
+      `${missing.map(([name]) => name).join(' and ')} ${missing.length === 1 ? 'needs' : 'need'} HTTPS or localhost, in Chrome or Edge`
     );
+    absent.title = `The browser gives this page no access to ${missing.map(([, reached]) => reached).join(' and ')}. Open the lab over HTTPS or at localhost, in Chrome or Edge.`;
     absent.hidden = missing.length === 0;
 
     this._requestSection = section(
       'requests',
-      'Requests of programs',
+      ['Requests', 'Requests of programs in the container for a device'],
       this._requestCount,
       this._requestList
     );
@@ -783,7 +855,7 @@ export class DeviceBridgePanel extends Widget {
       this._requestSection,
       section(
         'devices',
-        'Serial and USB devices',
+        ['Serial and USB', 'Serial ports and USB devices of this computer'],
         this._deviceCount,
         this._serialList,
         this._usbList,
@@ -791,7 +863,10 @@ export class DeviceBridgePanel extends Widget {
       ),
       section(
         'runs',
-        'Device shell and tools',
+        [
+          'Device shells',
+          'Device shells and tools started with jupyterlab-device run'
+        ],
         this._runCount,
         runActions,
         this._runList,
@@ -799,8 +874,11 @@ export class DeviceBridgePanel extends Widget {
       )
     );
 
-    const footer = el('div', 'jp-DeviceBridgePanel-footer');
-    footer.append('Browser to server round trip: ', this._roundTrip);
+    const footer = tip(
+      el('div', 'jp-DeviceBridgePanel-footer'),
+      'Round trip of a message from the browser to the server and back'
+    );
+    footer.append('Round trip: ', this._roundTrip);
     this.node.append(header, absent, body, footer);
 
     model.devicesChanged.connect(this._renderDevices, this);
@@ -909,9 +987,8 @@ export class DeviceBridgePanel extends Widget {
   private readonly _usbRows = new Map<string, IRow<IUsbRecord>>();
   private readonly _serialList = el('div', 'jp-DeviceBridgePanel-list');
   private readonly _usbList = el('div', 'jp-DeviceBridgePanel-list');
-  private readonly _empty = el(
-    'div',
-    'jp-DeviceBridgePanel-empty',
+  private readonly _empty = tip(
+    el('div', 'jp-DeviceBridgePanel-empty', 'No device attached'),
     'No device yet. Add a serial port or a USB device of this computer with the plus icon above.'
   );
   private readonly _deviceCount = field(
@@ -926,9 +1003,8 @@ export class DeviceBridgePanel extends Widget {
   );
   private readonly _runRows = new Map<number, IRow<IRunRecord>>();
   private readonly _runList = el('div', 'jp-DeviceBridgePanel-list');
-  private readonly _runEmpty = field(
-    'empty',
-    'jp-DeviceBridgePanel-empty',
+  private readonly _runEmpty = tip(
+    field('empty', 'jp-DeviceBridgePanel-empty', 'No device shell opened'),
     'No device shell is open. Start opens a terminal in which tools control the lines of the serial ports.'
   );
   private readonly _runCount = field(

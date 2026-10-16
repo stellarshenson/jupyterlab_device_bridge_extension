@@ -362,6 +362,26 @@ export const terminalText = (page: Page): Promise<string> =>
     return lines.map(line => line.trimEnd()).join('\n');
   });
 
+/**
+ * Wait until a lab terminal shows the header of the serial terminal app on a port.
+ * The app draws the header with one column of padding on the left and wraps it at
+ * the end of a word where the terminal is narrower than the header. So the first row
+ * opens with the name of the app and of the port, and the path of the device follows
+ * on that row or on a later one.
+ */
+export async function expectAppHeader(
+  page: Page,
+  name: string,
+  devicePath: string,
+  timeout: number
+): Promise<void> {
+  await expect
+    .poll(() => terminalText(page), { timeout })
+    .toMatch(new RegExp(`^ ?jupyterlab-device terminal · ${name}\\s`));
+  const escaped = devicePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  expect(await terminalText(page)).toMatch(new RegExp(`${escaped}\\s+·`));
+}
+
 /** One change of a lamp of a device row from off to lit or back, as `recordLamps` records it. */
 export interface ILampEvent {
   /** The name of the device of the row. */

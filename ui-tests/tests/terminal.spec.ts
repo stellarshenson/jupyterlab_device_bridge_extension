@@ -5,6 +5,7 @@ import {
   action,
   addSerial,
   closeTerminals,
+  expectAppHeader,
   ISimSerial,
   openLab,
   PANEL_SHOWN,
@@ -22,8 +23,8 @@ import {
 /**
  * Functional tests of the serial terminal: the lab starts the real
  * `jupyterlab-device terminal` in a terminal of the lab through the basic terminal
- * extension, the command becomes pyserial's miniterm on the virtual serial device, and
- * a simulated port in the browser (device-sim.js) is the other end. Ids in the titles
+ * extension, the command runs the extension's Textual app on the virtual serial device,
+ * and a simulated port in the browser (device-sim.js) is the other end. Ids in the titles
  * are the criteria of docs/acc-crit-device-bridge.md and the defects of
  * docs/defects-device-bridge.md.
  */
@@ -35,7 +36,7 @@ import {
 test.use({ autoGoto: false, mockSettings: PANEL_SHOWN, terminals: null });
 test.afterEach(closeTerminals);
 
-/** The terminal starts the CLI, which asks the server and becomes miniterm. */
+/** The terminal starts the CLI, which asks the server and starts the app. */
 const TERMINAL_START = 45000;
 const OPEN_TERMINAL = 'device-bridge:open-terminal';
 
@@ -47,17 +48,15 @@ const execute = (page: Page, command: string): Promise<void> =>
     await (window as any).jupyterapp.commands.execute(id);
   }, command);
 
-/** Wait until miniterm holds the virtual device of the port in a terminal tab of the lab. */
-async function miniterm(page: Page, port: ISimSerial): Promise<void> {
+/** Wait until the app holds the virtual device of the port in a terminal tab of the lab. */
+async function terminalApp(page: Page, port: ISimSerial): Promise<void> {
   const { path } = await serialRecord(port.name);
-  await expect
-    .poll(() => terminalText(page), { timeout: TERMINAL_START })
-    .toContain(`--- Miniterm on ${path}`);
+  await expectAppHeader(page, port.name, path, TERMINAL_START);
   await expect
     .poll(async () => (await serialRecord(port.name)).holder?.name, {
       timeout: TERMINAL_START
     })
-    .toMatch(/^python/);
+    .toBe('jupyterlab-devi');
 }
 
 test.describe('serial terminal', () => {
@@ -70,7 +69,7 @@ test.describe('serial terminal', () => {
     await addSerial(page, port);
 
     await execute(page, OPEN_TERMINAL);
-    await miniterm(page, port);
+    await terminalApp(page, port);
     expect(await terminalText(page)).not.toContain(line);
     await simSend(page, port.id, bytes(`${line}\r\n`));
 
@@ -79,25 +78,27 @@ test.describe('serial terminal', () => {
       .toContain(line);
   });
 
-  test('ACC-TERM-75 what the user types in the serial terminal is written to the port', async ({
+  test('ACC-TERM-75 a line the user types in the serial terminal is written to the port on Enter', async ({
     page
   }) => {
     const port = simSerial();
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
     await execute(page, OPEN_TERMINAL);
-    await miniterm(page, port);
+    await terminalApp(page, port);
     expect(await simWritten(page, port.id)).toEqual([]);
 
+    // The send field of the app has the focus; Enter sends the line with a line feed.
     await page.locator('.jp-Terminal').click();
     await page.keyboard.type('abc');
+    await page.keyboard.press('Enter');
 
     await expect
       .poll(() => simWritten(page, port.id), { timeout: TERMINAL_START })
-      .toEqual(bytes('abc'));
+      .toEqual(bytes('abc\n'));
   });
 
-  test('ACC-TERM-148 the Terminal button of a serial row starts the terminal program in a terminal tab with no command line typed, the tab shows the output of the port, and Ctrl+] closes the tab', async ({
+  test('ACC-TERM-148 the Terminal button of a serial row starts the terminal program in a terminal tab with no command line typed, the tab shows the output of the port, and Ctrl+Q closes the tab', async ({
     page
   }) => {
     const port = simSerial();
@@ -108,24 +109,22 @@ test.describe('serial terminal', () => {
 
     await action(row(page, port.name), 'terminal').click();
 
-    await miniterm(page, port);
+    await terminalApp(page, port);
     await expect(page.locator('.jp-Terminal')).toHaveCount(1);
-    // The lab typed no command line: the first text is what the CLI says before it
-    // becomes miniterm, and no line holds the command line.
+    // The lab typed no command line: the first row is the header of the app, and no
+    // line holds the command line.
     const text = await terminalText(page);
-    expect(text.split('\n')[0]).toMatch(
-      /^jupyterlab-device: starting miniterm /
-    );
-    expect(text).not.toContain('jupyterlab-device terminal');
+    expect(text.split('\n')[0]).toMatch(/^ ?jupyterlab-device terminal · /);
+    expect(text).not.toContain(`jupyterlab-device terminal ${port.name}`);
     await simSend(page, port.id, bytes(`${line}\r\n`));
     await expect
       .poll(() => terminalText(page), { timeout: TERMINAL_START })
       .toContain(line);
 
-    // Ctrl+] is the key of miniterm that ends it. The tab closes with the program,
+    // Ctrl+Q is the key of the app that ends it. The tab closes with the program,
     // and no program holds the port.
     await page.locator('.jp-Terminal').click();
-    await page.keyboard.press('Control+]');
+    await page.keyboard.press('Control+q');
     await expect(page.locator('.jp-Terminal')).toHaveCount(0, {
       timeout: ROUND_TRIP
     });
@@ -168,7 +167,7 @@ test.describe('serial terminal', () => {
       );
       expect(lines[1]).toBe('Press Enter to close this terminal.');
       await expect(page.locator('.jp-Terminal')).toHaveCount(1);
-      // Miniterm did not start: the tool still holds the port.
+      // The app did not start: the tool still holds the port.
       expect((await serialRecord(port.name)).holder.pid).toBe(tool.process.pid);
 
       await page.locator('.jp-Terminal').click();

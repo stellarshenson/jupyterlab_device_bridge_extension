@@ -36,6 +36,12 @@ c.ServerApp.terminado_settings = {"shell_command": ["/bin/bash"]}
 # removed from the environment of the test server and with it from every terminal.
 os.environ.pop("SHELL", None)
 
+# A device shell lists the conda environments that hold an upload tool and, in a lab
+# terminal, asks in which one to start. The suite must start the same shell on every
+# machine, so the server and its terminals get a conda program that does not exist and
+# the lookup finds no conda environment. env-picker.spec.ts makes its own .venv.
+os.environ["CONDA_EXE"] = "/nonexistent/conda"
+
 # The GalaxaHub message-of-the-day extension, where installed, opens its own tab at lab
 # start. Galata waits for the Launcher tab to be active, so every test would time out in
 # page.goto(). Ignored where the extension is not installed.

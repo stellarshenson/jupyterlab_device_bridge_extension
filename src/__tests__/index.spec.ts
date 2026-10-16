@@ -375,10 +375,14 @@ function pick(command: string): void {
   rectangle.mockRestore();
 }
 
-/** The list of words of every launch, in order. A launch has this list and nothing else: no folder. */
+/**
+ * The list of words of every launch, in order. A launch has this list and
+ * `shutdownOnClose: true` (DEF-SERIAL-20) and nothing else: no folder.
+ */
 const launches = (all: ILab): string[][] =>
   all.launch.mock.calls.map(([args]) => {
-    expect(Object.keys(args)).toEqual(['argv']);
+    expect(Object.keys(args).sort()).toEqual(['argv', 'shutdownOnClose']);
+    expect(args.shutdownOnClose).toBe(true);
     return args.argv as string[];
   });
 
@@ -635,7 +639,7 @@ describe('plugin: the plus icon of the panel', () => {
     }
   );
 
-  it('ACC-PANEL-154 with neither browser interface the plus icon is disabled and opens no menu, the panel says to open the lab over HTTPS or at localhost, and both connect commands are still registered, enabled and in the palette', async () => {
+  it('ACC-PANEL-154 with neither browser interface the plus icon is disabled and opens no menu, the panel says that both interfaces need HTTPS or localhost, and both connect commands are still registered, enabled and in the palette', async () => {
     const all = await lab({ interfaces: [] });
 
     expect(plus(all).disabled).toBe(true);
@@ -643,7 +647,7 @@ describe('plugin: the plus icon of the panel', () => {
     expect(menuOpen()).toBe(false);
     expect(
       all.panel.node.querySelector('[data-field="absent"]')!.textContent
-    ).toMatch(/Open the lab over HTTPS or at localhost/);
+    ).toBe('Web Serial and WebUSB need HTTPS or localhost, in Chrome or Edge');
     expect(offered(all)).toEqual([
       [true, true, true],
       [true, true, true]
@@ -1044,6 +1048,30 @@ describe('plugin: the serial terminal command', () => {
     expect(getItem).not.toHaveBeenCalled();
   });
 
+  it('DEF-SERIAL-20 the serial terminal command, the Terminal button of a row and the command Device Shell each call basic-terminal:launch with shutdownOnClose true, so that closing the tab ends the terminal session and its program', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    await all.commands.execute(OPEN_TERMINAL);
+    button(all, `[data-device="${UNO_NAME}"] [data-action="terminal"]`).click();
+    await tick();
+    await all.commands.execute(START_RUN);
+
+    const calls = all.launch.mock.calls as unknown as Array<
+      [{ argv: string[]; shutdownOnClose: unknown }]
+    >;
+    expect(calls).toHaveLength(3);
+    expect(calls.map(([args]) => args.shutdownOnClose)).toEqual([
+      true,
+      true,
+      true
+    ]);
+    expect(calls.map(([args]) => args.argv.slice(3))).toEqual([
+      terminalOn(UNO_NAME),
+      terminalOn(UNO_NAME),
+      ['jupyterlab-device', 'shell']
+    ]);
+  });
+
   it('ACC-TERM-79 a name that is no attached serial port raises a notification and reaches no command line', async () => {
     const all = await lab({
       ports: [new SimSerialPort(UNO)],
@@ -1410,18 +1438,20 @@ describe('plugin: the Info dialog of the runs section', () => {
     resolve(...parts: string[]): string;
   };
 
-  /** The three example lines of docs/design.md, word for word. */
+  /** The four example lines of docs/design.md, word for word. */
   const EXAMPLES: Record<string, string> = {
     avrdude:
       'avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i',
     stm32flash: 'stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>',
-    esptool: 'esptool --port <path> write-flash 0x0 firmware.bin'
+    esptool: 'esptool --port <path> write-flash 0x0 firmware.bin',
+    pio: 'pio run -t upload --upload-port <path>'
   };
   /** The example path that the README has in the command line of each tool. */
   const README_PATHS: Record<string, string> = {
     avrdude: '/run/devices/tty-2341-0043',
     stm32flash: '/run/devices/tty-0403-6001',
-    esptool: '/run/devices/tty-10c4-ea60'
+    esptool: '/run/devices/tty-10c4-ea60',
+    pio: '/run/devices/tty-2341-0043'
   };
   /** What a README line has in front of a tool that needs the shim. */
   const RUN_PREFIX = 'jupyterlab-device run -- ';
@@ -1574,7 +1604,12 @@ describe('plugin: the Info dialog of the runs section', () => {
     await openInfo(all);
     const shown = examples(opened().body);
 
-    expect(Object.keys(shown)).toEqual(['avrdude', 'stm32flash', 'esptool']);
+    expect(Object.keys(shown)).toEqual([
+      'avrdude',
+      'stm32flash',
+      'esptool',
+      'pio'
+    ]);
     for (const [tool, line] of Object.entries(shown)) {
       // The placeholder stands once in a line, where the README has its example path.
       expect(line!.split('<path>')).toHaveLength(2);
@@ -1594,7 +1629,7 @@ describe('plugin: the Info dialog of the runs section', () => {
     expect(note.textContent).toContain('No line was run against a board.');
   });
 
-  it('ACC-PANEL-140 the note of the Info dialog names a device shell and the section Device shell and tools, word for word', async () => {
+  it('ACC-PANEL-140 ACC-PANEL-175 the note of the Info dialog names a device shell and the section Device shells, word for word', async () => {
     const all = await lab();
 
     await openInfo(all);
@@ -1602,7 +1637,7 @@ describe('plugin: the Info dialog of the runs section', () => {
     expect(
       opened().body.querySelector('[data-field="note"]')!.textContent
     ).toBe(
-      'Type a line in a device shell. The button Start of the section Device shell and tools opens one. No line was run against a board.'
+      'Type a line in a device shell. The button Start of the section Device shells opens one. No line was run against a board.'
     );
   });
 });
@@ -1700,7 +1735,7 @@ describe('plugin: no text of the lab holds the word shim', () => {
         'This server offers no terminals. Run this command in a shell of the container: jupyterlab-device shell'
       ])
     );
-    expect(texts.join('\n')).toContain('Device shell and tools');
+    expect(texts.join('\n')).toContain('Device shells');
     expect(texts.join('\n')).toContain('No line was run against a board.');
     expect(texts.join('\n')).toContain('pid 4242');
 

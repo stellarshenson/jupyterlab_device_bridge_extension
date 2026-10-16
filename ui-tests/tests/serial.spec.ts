@@ -1,5 +1,5 @@
 import { expect, test } from '@jupyterlab/galata';
-import type { Locator } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import * as fs from 'fs';
 
 import {
@@ -422,13 +422,25 @@ test.describe('serial port', () => {
 });
 
 test.describe('default serial settings', () => {
-  /** The values of the profile editor in the row of a serial port. */
-  const editorValues = (portRow: Locator): Promise<string[]> =>
-    Promise.all(
+  /**
+   * The values of the Settings dialog of the row of a serial port: Settings opens the
+   * dialog, Cancel closes it again.
+   */
+  async function editorValues(page: Page, portRow: Locator): Promise<string[]> {
+    await action(portRow, 'settings').click();
+    const dialog = page.locator('.jp-Dialog');
+    const values = await Promise.all(
       ['baudRate', 'dataBits', 'parity', 'stopBits', 'onOpen'].map(name =>
-        portRow.locator(`[data-profile-field="${name}"]`).inputValue()
+        dialog.locator(`[data-profile-field="${name}"]`).inputValue()
       )
     );
+    await dialog
+      .locator('.jp-Dialog-button')
+      .filter({ hasText: 'Cancel' })
+      .click();
+    await expect(dialog).toHaveCount(0);
+    return values;
+  }
 
   test('ACC-PROF-118 a serial port added after the default settings were set to 9600 baud, 7 data bits, even parity, 2 stop bits and pulse-dtr is opened with them, and its row and its record show them', async ({
     page
@@ -472,10 +484,13 @@ test.describe('default serial settings', () => {
     const portRow = row(page, port.name);
     await expect(field(portRow, 'baud')).toHaveText('9600');
     await expect(field(portRow, 'profile')).toHaveText('monitor');
-    await portRow.locator('summary').click();
-    await expect
-      .poll(() => editorValues(portRow))
-      .toEqual(['9600', '7', 'even', '2', 'pulse-dtr']);
+    expect(await editorValues(page, portRow)).toEqual([
+      '9600',
+      '7',
+      'even',
+      '2',
+      'pulse-dtr'
+    ]);
 
     // The default action on open runs when a tool opens the device: DTR is pulsed.
     const { path } = await serialRecord(port.name);

@@ -49,8 +49,10 @@ const NO_ARGS = { args: { type: 'object', properties: {} } };
 /**
  * The command of jupyterlab_basic_terminal_extension. It takes `{argv}`, starts that
  * list of words in a terminal of the lab with no shell around it, and closes the tab
- * of the terminal when the program ends. This id is the only coupling to that
- * extension, so the plugin asks the command registry for it at each start.
+ * of the terminal when the program ends. With `shutdownOnClose: true` it also ends the
+ * terminal session, and with it the program, when the user closes the tab. This id is
+ * the only coupling to that extension, so the plugin asks the command registry for it
+ * at each start.
  */
 const BASIC_TERMINAL_LAUNCH = 'basic-terminal:launch';
 
@@ -96,7 +98,8 @@ const EXAMPLES: Array<[tool: string, line: string]> = [
     'avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i'
   ],
   ['stm32flash', 'stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>'],
-  ['esptool', 'esptool --port <path> write-flash 0x0 firmware.bin']
+  ['esptool', 'esptool --port <path> write-flash 0x0 firmware.bin'],
+  ['pio', 'pio run -t upload --upload-port <path>']
 ];
 
 /**
@@ -191,7 +194,7 @@ function runInfoBody(devices: IDeviceTable): Widget {
   add(
     'div',
     'text',
-    'Type a line in a device shell. The button Start of the section Device shell and tools opens one. No line was run against a board.'
+    'Type a line in a device shell. The button Start of the section Device shells opens one. No line was run against a board.'
   ).dataset.field = 'note';
   return body;
 }
@@ -302,8 +305,10 @@ const plugin: JupyterFrontEndPlugin<void> = {
         return;
       }
       try {
+        // A closed tab ends the program, so the serial terminal frees the port.
         await commands.execute(BASIC_TERMINAL_LAUNCH, {
-          argv: ['/bin/bash', '-c', LAUNCH_SCRIPT, CLI, ...words]
+          argv: ['/bin/bash', '-c', LAUNCH_SCRIPT, CLI, ...words],
+          shutdownOnClose: true
         });
       } catch (reason) {
         // The lab shows a rejected command to nobody. The reason has any length, so
