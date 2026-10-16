@@ -2,6 +2,31 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [0.6.30] - 2026-10-16
+
+The serial terminal is now a full-screen app of this extension, a device shell can start in the environment that holds an upload tool, and PlatformIO joins the upload tools. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Added
+
+- Serial terminal app: `jupyterlab-device terminal` shows each received line and each sent block with its time, as text or as hex digits, sends a typed line with a chosen line ending, sets DTR and RTS, sends a break and runs the actions of the board on function keys. Ctrl+O opens its settings for baud rate, data bits, parity, stop bits, line ending and text or hex. It has a dark and a light theme, chosen from the background of the terminal
+- Environment of the device shell: when a conda environment, or the `.venv` of the start folder, holds an upload tool, `jupyterlab-device shell` first lists those environments with their tools and starts the shell in the chosen one
+- pio (PlatformIO) is one of the upload tools that the banner of the device shell, the Info dialog and `jupyterlab-device --help` name. The README section `PlatformIO` gives the upload and monitor command lines
+- Settings dialog on each serial port of the Devices panel, with the profile, baud rate, data bits, parity, stop bits and the action on open
+
+### Changed
+
+- The serial terminal replaces pyserial's miniterm. Ctrl+Q or Esc quits it
+- The wheel requires `jupyterlab_basic_terminal_extension` 1.0.9 or newer and `textual` 8.2 or newer
+- A lit TX lamp has the brand colour of the theme and a lit RX lamp is yellow
+- The panel uses short section titles and button texts, with the full text in the tooltip
+- The installers `firmware-avr.py` and `firmware-esp.py` in `resources/envs/` install PlatformIO with the Arduino core; `firmware-esp.py` no longer installs arduino-cli
+
+### Fixed
+
+- Closing the tab of the serial terminal or of a device shell left the program running and the port held. Closing the tab now ends the program
+- `jupyterlab-device terminal` started without a terminal, for example by an agent, waited for keys forever and held the port. It now exits with status 2 and names `monitor read` and `monitor write`
+- The label of an armed **Confirm stop** or **Confirm forget** button was not opaque in the dark theme
+
 ## [0.6.29] - 2026-10-13
 
 ### Changed
