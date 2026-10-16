@@ -204,7 +204,9 @@ GitHub Actions workflows, and tests that fail only on a runner
 - [ ] `DEF-CI-23` **Three pytest tests fail on the GitHub runner** - MEDIUM; the Build workflow of commit d5e79cf failed: test_acc_shim_176 and test_acc_shim_181 raised KeyError CONDA_EXE, test_acc_term_166 saw the hex line of the first RX message without its 0a
   - test-tags: CI
   - repro: run the environment tests with CONDA_EXE unset; split the RX message of test_acc_term_166 across two reads more than 50 ms apart
+  - root-cause: 2026-10-16T12:19:09Z @kj the hex line of test_acc_term_166 is 81 columns; on the runner the RichLog wrapped it at its min_width of 78, the 0a went to a continuation line, and the view helper of the tests skipped every line without a time stamp; reproduced at an 80-column screen. The environment tests deleted CONDA_EXE, which the runner never sets
   - root-cause: 2026-10-16T12:08:43Z @kj the tests assumed this workstation: monkeypatch.delenv raised because the runner sets no CONDA_EXE, and test_acc_term_166 compared RX lines one to one although the pty may hand one message over in more than one read; a read timeout ends the line at the \r and the \n becomes its own line
   - log: 2026-10-16T12:08:43Z @kj added
   - log: 2026-10-16T12:08:52Z @kj edited test-tags added "CI"
+  - log: 2026-10-16T12:19:09Z @kj root-cause overridden; reason: the first record named a split read as the cause; the second CI run and a local 80-column run showed the wrapped line
 

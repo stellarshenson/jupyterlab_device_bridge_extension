@@ -50,13 +50,17 @@ def text_of(app, selector):
 
 
 def view(app):
-    """The lines of the traffic view as `(direction, body, colour)`."""
+    """The lines of the traffic view as `(direction, body, colour)`; a line the log wrapped counts once."""
     lines = []
     for strip in app.query_one("#traffic", RichLog).lines:
-        match = LINE.match(strip.text.rstrip())
+        text = strip.text.rstrip()
+        match = LINE.match(text)
+        colours = {segment.style.color.triplet.hex for segment in strip if segment.text.strip()}
         if match:
-            colours = {segment.style.color.triplet.hex for segment in strip if segment.text.strip()}
             lines.append((match[1], match[2], colours))
+        elif lines and text:
+            direction, body, before = lines[-1]
+            lines[-1] = (direction, f"{body} {text.strip()}", before | colours)
     return lines
 
 
