@@ -60,6 +60,11 @@ def view(app):
     return lines
 
 
+def rx(app, separator):
+    """The bodies of the RX lines joined: the pty may hand one message over in more than one read."""
+    return separator.join(body for direction, body, _ in view(app) if direction == "RX")
+
+
 async def held(tab, app):
     """Wait until the bridge shows this process as the holder and the app shows the port."""
     await tab.until(lambda: (record(tab)["holder"] or {}).get("pid") == os.getpid())
@@ -122,18 +127,18 @@ async def test_acc_term_166_the_view_lists_both_directions_with_time_and_switche
     async with app.run_test(size=SIZE) as pilot:
         await held(tab, app)
         await tab.port_sends(SERIAL_NAME, b"hello from the board\r\n")
-        await tab.until(lambda: len(view(app)) == 1)
+        await tab.until(lambda: rx(app, "") == "hello from the board")
         await type_line(pilot, "abc")
-        await tab.until(lambda: len(view(app)) == 2)
-        assert view(app) == [("RX", "hello from the board", {amber}), ("TX", "abc", {cyan})]
+        await tab.until(lambda: ("TX", "abc", {cyan}) in view(app))
+        assert all(colours == {amber} for direction, _, colours in view(app) if direction == "RX")
 
         await pilot.press("ctrl+x")
         await tab.port_sends(SERIAL_NAME, b"ABC")
-        await tab.until(lambda: len(view(app)) == 3)
-        assert [body for _, body, _ in view(app)] == [
-            "68 65 6c 6c 6f 20 66 72 6f 6d 20 74 68 65 20 62 6f 61 72 64 0d 0a", "61 62 63 0a", "41 42 43"]
+        await tab.until(lambda: rx(app, " ").endswith("41 42 43"))
+        assert rx(app, " ") == "68 65 6c 6c 6f 20 66 72 6f 6d 20 74 68 65 20 62 6f 61 72 64 0d 0a 41 42 43"
+        assert ("TX", "61 62 63 0a") in [(direction, body) for direction, body, _ in view(app)]
         await pilot.press("ctrl+x")
-        assert view(app)[2][1] == "ABC"
+        assert rx(app, "") == "hello from the boardABC"
 
         log = app.query_one("#traffic", RichLog)
         await pilot.press("ctrl+p")

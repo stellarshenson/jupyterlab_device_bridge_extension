@@ -201,4 +201,10 @@ GitHub Actions workflows, and tests that fail only on a runner
   - root-cause: 2026-10-13T10:12:16Z @kj pypiserver keeps at most 102400 bytes of one upload in memory; the README is the long description of the wheel, 48875 characters; with the wheel of 0.6.24 the largest description that passes has 46516
   - log: 2026-10-13T10:12:16Z @kj added
   - log: 2026-10-13T10:30:23Z @kj closed
+- [ ] `DEF-CI-23` **Three pytest tests fail on the GitHub runner** - MEDIUM; the Build workflow of commit d5e79cf failed: test_acc_shim_176 and test_acc_shim_181 raised KeyError CONDA_EXE, test_acc_term_166 saw the hex line of the first RX message without its 0a
+  - test-tags: CI
+  - repro: run the environment tests with CONDA_EXE unset; split the RX message of test_acc_term_166 across two reads more than 50 ms apart
+  - root-cause: 2026-10-16T12:08:43Z @kj the tests assumed this workstation: monkeypatch.delenv raised because the runner sets no CONDA_EXE, and test_acc_term_166 compared RX lines one to one although the pty may hand one message over in more than one read; a read timeout ends the line at the \r and the \n becomes its own line
+  - log: 2026-10-16T12:08:43Z @kj added
+  - log: 2026-10-16T12:08:52Z @kj edited test-tags added "CI"
 

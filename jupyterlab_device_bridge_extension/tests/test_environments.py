@@ -120,7 +120,7 @@ def test_acc_shim_176_conda_is_found_on_path_without_conda_exe(tmp_path, project
     prefix = conda_env(tmp_path / "envs", "on-path", "avrdude")
     folder = programs(tmp_path / "path")
     fake_conda(folder / "conda", [prefix])
-    monkeypatch.delenv("CONDA_EXE")
+    monkeypatch.delenv("CONDA_EXE", raising=False)
     monkeypatch.setenv("PATH", str(folder))
 
     assert environments.find(str(project), NAMES) == [
@@ -170,7 +170,7 @@ def test_acc_shim_181_a_failing_conda_skips_only_the_conda_environments(body, tm
 def test_acc_shim_181_without_conda_pipx_and_uv_the_lookup_finds_the_venv_and_the_tools_of_path(
         tmp_path, project, monkeypatch):
     """ACC-SHIM-181 with no conda at CONDA_EXE, none on PATH and none at the default place, and no pipx and no uv, the lookup runs no command for them: it finds the `.venv` and the tools of PATH."""
-    monkeypatch.delenv("CONDA_EXE")
+    monkeypatch.delenv("CONDA_EXE", raising=False)
     monkeypatch.setattr(environments, "DEFAULT_CONDA", str(tmp_path / "no-conda"))
     monkeypatch.setenv("PATH", str(programs(tmp_path / "path", "esptool")))
     programs(project / ".venv" / "bin", "avrdude")
