@@ -420,6 +420,36 @@ A tool's own DTR, RTS and parity calls passed to the bridge
   - test-tags: UNIT
   - log: 2026-10-14T19:09:05Z @kj added
   - log: 2026-10-16T09:24:23Z @kj closed; reason: evidence names the test, the mutation and the gate run
+- [ ] `ACC-SHIM-189` **Banner opens with the DEVICE BRIDGE logo** - HIGH; the banner of the device shell opens with DEVICE and BRIDGE in block letters with a shadow; it is 75% of the terminal's columns wide, at least 45; DEVICE BRIDGE stand on one row when that width holds them, else DEVICE above BRIDGE; under 45 columns no logo
+  - related: ACC-SHIM-136 - the square wave of that banner is replaced by the logo
+  - test: pytest test_cli.py on a pty of 80, 170 and 40 columns: two logo rows of words, one row, no logo; rules 60 and 127 columns wide; galata: the logo rows in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:01:52Z @kj added
+- [ ] `ACC-SHIM-190` **Banner has titled sections** - HIGH; under the logo the name line has the diamond, jupyterlab-device and its version, and ends with device shell at the right edge of the banner; then the sections Environment, Devices, Agent skill and Commands, each opened by a rule with its title, and a rule under the last
+  - related: ACC-PANEL-140 - the name line still ends with device shell
+  - test: pytest test_cli.py: the banner text without escape sequences on 80 and 170 columns equals the expected lines; galata: the section titles in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:01:52Z @kj added
+- [ ] `ACC-SHIM-191` **Banner colours follow roles and the background** - HIGH; the logo has a colour gradient and a darker shadow; the rules are grey; device names, paths and their information have a hue of their own, different from the other text; a light terminal background gives the light palette of the serial terminal; NO_COLOR removes every escape sequence
+  - related: ACC-SHIM-160 - pale cyan of that criterion is replaced by the colour roles
+  - test: pytest test_cli.py: more than 6 logo colours; the colour of a device path and of its settings differ from the text colour; TEXTUAL_THEME light gives the light values; NO_COLOR=1 no escape byte; galata: the colour of a device path
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:01:52Z @kj added
+- [ ] `ACC-SHIM-192` **Banner lists devices with their information** - MEDIUM; the Devices section lists each device attached without an error, serial first: COM, path, baud rate, framing and profile; USB, name, vendor:product id and product name; the information goes to the next line when the line is wider than the banner; with none it names the Devices panel
+  - related: ACC-SHIM-139 - its numbered device lines are replaced
+  - test: pytest test_cli.py: an attached serial port and USB device, a detached port and a port with an error; narrow and wide terminals; no device; galata: the device line in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:02:20Z @kj added
+- [ ] `ACC-SHIM-193` **Banner names the environment and its tools** - MEDIUM; the Environment section names the environment the shell starts in, the current environment or the name and scope chosen in the selector, and its upload tools; with none it says that avrdude, stm32flash, esptool and pio are not on PATH and to install one
+  - related: ACC-SHIM-142 - its tool lines move into the Environment section
+  - test: pytest test_cli.py and test_environments.py: three tools, no tool, a chosen conda environment; galata: the tool line in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:02:20Z @kj added
+- [ ] `ACC-SHIM-199` **Environment selector says what the choice does** - LOW; under its question the environment selector of the device shell says that the shell starts with the bin folder of the chosen environment first on PATH and the variables its activation sets, and that the first entry keeps the current environment
+  - related: ACC-SHIM-177 - the selector of that criterion
+  - test: pytest Textual pilot: the line under the question; galata env-picker.spec.ts: the line in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:02:20Z @kj added
 
 ## Monitor `MON`
 
@@ -963,6 +993,12 @@ A terminal in the lab on one attached port
   - test-tags: UNIT
   - log: 2026-10-14T19:09:06Z @kj added
   - log: 2026-10-16T09:24:23Z @kj closed; reason: evidence names the test, the mutation and the gate run
+- [ ] `ACC-TERM-198` **Key help of the serial terminal** - MEDIUM; Ctrl+Y in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+Y closes it and the terminal goes on; the key line names ^y; F1 and Ctrl+/ stay unused: the browser takes F1, and the terminal of the lab sends no byte for Ctrl+/
+  - test: pytest Textual pilot: ctrl+y opens the screen with every binding, Esc closes it; galata: Control+y in the lab terminal shows the screen
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:02:20Z @kj added
+  - log: 2026-10-17T09:29:28Z @kj amended text "Ctrl+/ in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+/ closes it and the terminal goes on; the key line names ^/; F1 stays unused, because the browser takes it" -> "Ctrl+Y in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+Y closes it and the terminal goes on; the key line names ^y; F1 and Ctrl+/ stay unused: the browser takes F1, and the terminal of the lab sends no byte for Ctrl+/"; reason: Ctrl+/ was filed first; xterm.js of the lab sends no byte for it, so the key moves to Ctrl+Y, the one free control letter
+  - log: 2026-10-17T09:29:28Z @kj edited test "pytest Textual pilot: ctrl+underscore opens the screen with every binding, Esc closes it; galata: Control+/ in the lab terminal shows the screen" -> "pytest Textual pilot: ctrl+y opens the screen with every binding, Esc closes it; galata: Control+y in the lab terminal shows the screen"
 
 ## Command line and agent documents `CLI`
 
@@ -1131,6 +1167,25 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-16T11:43:51Z @kj added
   - log: 2026-10-16T11:56:28Z @kj closed
+- [ ] `ACC-CLI-194` **Banner names the agent skill** - HIGH; the Agent skill section names the skill jupyterlab-device-bridge-extension and the path of its SKILL.md under the Python prefix, and says how an agent finds it: linked in ~/.agents/skills or ~/.claude/skills, or listed by a skill there that names the path; else that no link exists and jupyterlab-device help shows the link commands
+  - test: pytest test_cli.py with a private HOME: no link, a link in ~/.agents/skills, a link in ~/.claude/skills, a skill there that names the path, no SKILL.md under the prefix
+  - test-tags: UNIT
+  - log: 2026-10-17T09:02:20Z @kj added; reason: the four states of the section must each be stated, or a test cannot tell them apart
+- [ ] `ACC-CLI-195` **Banner lists commands with what they do** - MEDIUM; the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line
+  - related: ACC-CLI-141 - the two command lines of that banner are replaced
+  - test: pytest test_cli.py: the five command lines with their descriptions in one column on 80 columns, the descriptions on their own lines on 60 columns; galata: the help line in the lab terminal
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T09:02:20Z @kj added
+  - log: 2026-10-17T09:29:28Z @kj amended text "the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line" -> "the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line"
+  - log: 2026-10-17T09:29:29Z @kj edited test "pytest test_cli.py: the five command lines on 170 columns, the descriptions on their own lines on 80 columns; galata: the help line in the lab terminal" -> "pytest test_cli.py: the five command lines with their descriptions in one column on 80 columns, the descriptions on their own lines on 60 columns; galata: the help line in the lab terminal"
+- [ ] `ACC-CLI-196` **Help has a quick start** - MEDIUM; jupyterlab-device --help has a quick start section with the steps from a plugged-in board to its output: attach it in the Devices panel, list, profile, upload under run --, monitor read; each step that is a command line parses with the parser of the CLI
+  - test: pytest test_cli.py: the section and its five steps in --help; each command line of a step parses
+  - test-tags: UNIT
+  - log: 2026-10-17T09:02:20Z @kj added
+- [ ] `ACC-CLI-197` **Help names the agent skill** - MEDIUM; jupyterlab-device --help has an agent skill section with the skill name, the path of its SKILL.md under the Python prefix and the two link commands of the README section Agent skill
+  - test: pytest test_cli.py: the section in --help; the path is under sys.prefix; the two commands are the README lines with the prefix written out
+  - test-tags: UNIT
+  - log: 2026-10-17T09:02:20Z @kj added
 
 ## Grants, authentication and ownership `SEC`
 

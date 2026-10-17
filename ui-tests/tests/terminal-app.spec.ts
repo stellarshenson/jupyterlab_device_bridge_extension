@@ -98,3 +98,34 @@ test('ACC-TERM-169 in a lab terminal F2 sets DTR off and F6 pulses DTR on the si
     timeout: ROUND_TRIP
   });
 });
+
+test('ACC-TERM-198 in a lab terminal Ctrl+Y opens the key help of the serial terminal app, which lists the keys with what they do, and Esc closes it', async ({
+  page
+}) => {
+  const port = simSerial();
+  await openLab(page, { serial: [port] });
+  await addSerial(page, port);
+  await action(row(page, port.name), 'terminal').click();
+  const { path } = await serialRecord(port.name);
+  await expectAppHeader(page, port.name, path, TERMINAL_START);
+  expect(await terminalText(page)).toMatch(/\^y keys/);
+
+  await page.locator('.jp-Terminal').click();
+  await page.keyboard.press('Control+y');
+  await expect
+    .poll(() => terminalText(page), { timeout: ROUND_TRIP })
+    .toContain('Keys of the serial terminal');
+  const help = await terminalText(page);
+  expect(help).toMatch(/F2 +set DTR off, or on when it is off/);
+  expect(help).toMatch(/\^c +send the byte 0x03 to the board/);
+  expect(help).toContain('Esc or ^y closes this list');
+
+  await page.keyboard.press('Escape');
+  await expect
+    .poll(() => terminalText(page), { timeout: ROUND_TRIP })
+    .not.toContain('Keys of the serial terminal');
+  await page.keyboard.press('Control+q');
+  await expect(page.locator('.jp-Terminal')).toHaveCount(0, {
+    timeout: ROUND_TRIP
+  });
+});

@@ -17,6 +17,9 @@ from .environments import Environment
 
 # WSL leaves COLORTERM unset, and Textual then reduces the brand colours to 256.
 os.environ.setdefault("COLORTERM", "truecolor")
+# The line under the question: what the choice changes.
+EXPLAIN = ("The shell starts with the bin folder of the chosen environment first on PATH and the "
+           "variables that its activation sets. The first entry keeps the current environment.")
 
 
 def _entry(environment: Environment, width: int) -> str:
@@ -36,6 +39,7 @@ class EnvironmentPicker(App[Environment]):
     #hdr-title { width: 1fr; color: $st-cyan-bright; text-style: bold; padding: 0 1; }
     #hdr-version { width: auto; color: $st-muted; padding: 0 1; }
     #question { padding: 1 1 0 1; color: $st-text; }
+    #explain { padding: 0 1; color: $st-muted; }
     OptionList { height: auto; margin: 1 1; background: $st-screen; color: $st-text; border: round $st-border; }
     OptionList:focus { border: round $st-cyan; }
     OptionList > .option-list--option-highlighted,
@@ -60,6 +64,7 @@ class EnvironmentPicker(App[Environment]):
             yield Static("jupyterlab-device  device shell", id="hdr-title")
             yield Static(f"v{__version__}", id="hdr-version")
         yield Static("Start the device shell in which environment?", id="question")
+        yield Static(EXPLAIN, id="explain")
         width = max(len(choice.name) for choice in self.choices)
         yield OptionList(*(_entry(choice, width) for choice in self.choices))
         yield Footer()

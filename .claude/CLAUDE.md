@@ -84,8 +84,11 @@ architecture changes.
   - `pyusb_backend.py` - `get_backend()` and `install()`; the only module that imports pyusb
   - `shim_build.py`, `shim/devshim.c` - the preload shim: the C source ships in the wheel and is
     compiled on first use into `~/.cache/jupyterlab-device-bridge/`
+  - `banner.py` - the banner of `jupyterlab-device shell`: the DEVICE BRIDGE logo, the
+    sections Environment, Devices, Agent skill and Commands, 75% of the terminal's width,
+    in the colours of `tui_theme`
   - `terminal_app.py` - `SerialTerminal`, the full-screen Textual app of `jupyterlab-device
-    terminal`, with its settings screen `SettingsScreen`
+    terminal`, with its settings screen `SettingsScreen` and its key help `KeysScreen`
   - `tui_theme.py` - the dark and light themes of the Textual apps, chosen from the terminal's
     background
   - `environments.py` - the environments a device shell can start in: the `.venv` of the start

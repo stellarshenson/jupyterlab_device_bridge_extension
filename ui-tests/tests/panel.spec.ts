@@ -1036,10 +1036,11 @@ test.describe('Device shells', () => {
   test.use({ mockSettings: PANEL_SHOWN });
 
   const EMPTY = 'No device shell opened';
-  /** The line of the banner of a device shell that was started while no device was attached. */
-  const NO_DEVICE = 'No device is attached.';
+  /** The Devices section of the banner of a device shell started while no device was attached. */
+  const NO_DEVICE =
+    'No device is attached. Add one in the Devices panel of the lab.';
   /**
-   * The lines of the banner about the upload tools. The banner names the known tools
+   * The lines of the Environment section of the banner. The banner names the known tools
    * that the PATH of the test server holds, which is the PATH of the suite.
    */
   const TOOLS = ['avrdude', 'stm32flash', 'esptool', 'pio'].filter(tool =>
@@ -1054,10 +1055,11 @@ test.describe('Device shells', () => {
   );
   const TOOL_LINES =
     TOOLS.length > 0
-      ? [`For ${TOOLS.join(', ')}.`]
+      ? [`  current environment with ${TOOLS.join(', ')}`]
       : [
-          'No avrdude, stm32flash, esptool or pio on PATH.',
-          'Install one to make use of the device shell.'
+          '  current environment',
+          '  No avrdude, stm32flash, esptool or pio on PATH.',
+          '  Install one to make use of the device shell.'
         ];
 
   /** The processes the test started. Each is ended when the test ends, also when it failed. */
@@ -1087,16 +1089,16 @@ test.describe('Device shells', () => {
   }
 
   /**
-   * The colour that the terminal draws the banner in, read from the diamond that starts
-   * its second line, as 0xRRGGBB; null when the terminal has no such colour for it.
+   * The colour in which the terminal draws the first character of the first `text` of
+   * the banner, as 0xRRGGBB; null when the terminal has no such colour for it.
    */
-  const bannerColour = (page: Page): Promise<number | null> =>
-    page.evaluate(() => {
+  const colourOf = (page: Page, text: string): Promise<number | null> =>
+    page.evaluate(text => {
       for (const widget of (window as any).jupyterapp.shell.widgets('main')) {
         const buffer = widget.content?._term?.buffer.active;
         for (let index = 0; buffer && index < buffer.length; index++) {
           const row = buffer.getLine(index);
-          const at = row.translateToString(true).indexOf('◆');
+          const at = row.translateToString(true).indexOf(text);
           if (at >= 0) {
             const cell = row.getCell(at);
             return cell.isFgRGB() ? cell.getFgColor() : null;
@@ -1104,7 +1106,7 @@ test.describe('Device shells', () => {
         }
       }
       return null;
-    });
+    }, text);
 
   /**
    * The text of the banner in the lab terminal: its lines from the name line, which
@@ -1112,24 +1114,34 @@ test.describe('Device shells', () => {
    */
   const bannerText = async (page: Page): Promise<string[]> => {
     const lines = (await terminalText(page)).split('\n');
-    const first = lines.findIndex(line => line.startsWith('◆'));
+    const first = lines.findIndex(line => line.startsWith(' ◆ '));
     const rule = lines.findIndex(
       (line, index) => index > first && /^─+$/.test(line)
     );
     return first < 0 || rule < 0 ? [] : lines.slice(first, rule);
   };
 
+  /** The lines of one section of the banner, under its titled rule. */
+  const section = (banner: string[], title: string): string[] => {
+    const start = banner.findIndex(line => line.startsWith(`── ${title} ─`));
+    const end = banner.findIndex(
+      (line, index) => index > start && line.startsWith('── ')
+    );
+    return banner.slice(start + 1, end < 0 ? banner.length : end);
+  };
+
   /**
    * Start a device shell in a terminal of the lab and wait until the panel lists it.
    *
    * @param start What the user does: the click or the command that opens the terminal
-   * @param devices The lines of the banner for the attached devices
+   * @param devices The words of the Devices section: each device with its information,
+   *   which stands on the line of the device or on the line under it, after the width
    * @returns The process id of the run, which is the shell
    */
   async function startShell(
     page: Page,
     start: () => Promise<void>,
-    devices = [NO_DEVICE]
+    devices = NO_DEVICE
   ): Promise<number> {
     const rows = runsSection(page).locator('[data-run]');
     // The server ends the run of an earlier test within a second after its process ended.
@@ -1148,26 +1160,44 @@ test.describe('Device shells', () => {
         timeout: TERMINAL_START
       })
       .toBeGreaterThan(0);
-    // The first text of the terminal is the banner: the two rows of its wave, then its
-    // name line. The lab typed no command line: the terminal started the shell itself.
+    // The first text of the terminal is the banner: the rows of the DEVICE BRIDGE logo
+    // (ACC-SHIM-189), an empty line, then its name line. The lab typed no command line:
+    // the terminal started the shell itself.
     const lines = (await terminalText(page)).split('\n');
-    expect(lines[0] + lines[1]).toMatch(/^[─┐┌└┘ ]+$/);
-    expect(lines[2]).toMatch(/^◆ /);
+    const name = lines.findIndex(line => line.startsWith(' ◆ '));
+    expect([6, 12]).toContain(name - 1);
+    lines
+      .slice(0, name - 1)
+      .forEach(row => expect(row).toMatch(/^ [█╗╔═║╚╝ ]+$/));
+    expect(lines[name - 1]).toBe('');
     expect(lines.join('\n')).not.toContain('jupyterlab-device shell');
-    // The banner is pale cyan (ACC-SHIM-136). It names a device shell (ACC-PANEL-140),
-    // the upload tools on PATH (ACC-SHIM-142), the attached devices and no other
-    // device (ACC-SHIM-139) and two commands (ACC-CLI-141). No line holds the word shim.
-    expect(await bannerColour(page)).toBe(0x9fe0ee);
+    // The name line ends with device shell (ACC-SHIM-190, ACC-PANEL-140); the sections
+    // name the upload tools on PATH (ACC-SHIM-193), the attached devices and no other
+    // device (ACC-SHIM-192), the agent skill (ACC-CLI-194) and the commands
+    // (ACC-CLI-195). No line holds the word shim. The diamond is orange, dark or light
+    // after the background of the terminal (ACC-SHIM-191).
+    expect([0xda8230, 0xb5641b]).toContain(await colourOf(page, '◆'));
     const banner = await bannerText(page);
-    expect(banner).toEqual([
-      expect.stringMatching(/^◆ jupyterlab-device +device shell$/),
-      '',
-      ...TOOL_LINES,
-      ...devices,
-      '',
-      expect.stringMatching(/^jupyterlab-device list +all devices$/),
-      expect.stringMatching(/^jupyterlab-device help +example commands$/)
-    ]);
+    expect(banner[0]).toMatch(
+      /^ ◆ jupyterlab-device \d+\.\d+\.\d+ +device shell$/
+    );
+    expect(
+      banner
+        .filter(line => line.startsWith('── '))
+        .map(line => line.split(' ')[1])
+    ).toEqual(['Environment', 'Devices', 'Agent', 'Commands']);
+    expect(section(banner, 'Environment')).toEqual(TOOL_LINES);
+    expect(
+      section(banner, 'Devices').join(' ').split(/\s+/).join(' ').trim()
+    ).toBe(devices);
+    const skill = section(banner, 'Agent skill');
+    expect(skill[0]).toMatch(/^ {2}jupyterlab-device-bridge-extension\b/);
+    expect(skill.join('\n')).toMatch(
+      /^ {2}\/\S+\/share\/jupyter\/agents\/skills\/jupyterlab-device-bridge-extension\/SKILL\.md$/m
+    );
+    expect(section(banner, 'Commands').join('\n')).toMatch(
+      /^ {2}jupyterlab-device help\b/m
+    );
     expect(banner.join('\n')).not.toMatch(/shim/i);
 
     // The shell registered itself as a run under its own name, not under the name of
@@ -1264,11 +1294,17 @@ test.describe('Device shells', () => {
     const start = action(runsSection(page), 'start-run');
     await expect(start).toHaveText('Start');
 
-    // The banner lists what is attached: the port with its path, then the USB device.
-    const pid = await startShell(page, () => start.click(), [
-      `(1) ${devicePath} (COM)`,
-      `(2) ${device.name} (USB)`
-    ]);
+    // The banner lists what is attached: the port with its path and settings, then the
+    // USB device with its ids and product name, each path and name in its own hue.
+    const pid = await startShell(
+      page,
+      () => start.click(),
+      `● COM ${devicePath} 115200 8N1 profile monitor ` +
+        `● USB ${device.name} ${device.vendorId.toString(16).padStart(4, '0')}:` +
+        `${device.productId.toString(16).padStart(4, '0')} ${device.productName}`
+    );
+    expect([0x9fe0ee, 0x0b6f8f]).toContain(await colourOf(page, devicePath));
+    expect([0xa8dcc4, 0x2e7d5b]).toContain(await colourOf(page, '115200 8N1'));
 
     // The user types the command line of a tool into that terminal.
     const tool = toolCommand(devicePath, [

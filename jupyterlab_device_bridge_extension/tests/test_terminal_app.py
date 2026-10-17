@@ -21,7 +21,7 @@ from textual.widgets import Input, RadioButton, RadioSet, RichLog, Static
 
 from jupyterlab_device_bridge_extension import __version__, tui_theme
 from jupyterlab_device_bridge_extension.client import DeviceBridgeClient
-from jupyterlab_device_bridge_extension.terminal_app import SerialTerminal, SettingsScreen
+from jupyterlab_device_bridge_extension.terminal_app import KEY_HELP, KeysScreen, SerialTerminal, SettingsScreen
 from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_NAME
 
 from .test_client import REPOSITORY, attach_serial
@@ -244,6 +244,39 @@ async def test_acc_term_169_keys_set_the_control_lines_send_a_break_and_run_the_
                       "F2 DTR on/off", "F3 RTS on/off", "F4 break", "F6 pulse DTR", "F7 pulse RTS",
                       "F8 ESP bootloader", "F10 1200 baud touch", "^c send 0x03"):
             assert label in keys
+        await pilot.press("ctrl+q")
+
+
+async def test_acc_term_198_ctrl_y_opens_the_key_help_with_every_key(terminal):
+    """ACC-TERM-198 Ctrl+Y opens a screen that lists Enter and every key of the terminal with what it does; while it shows, F2 does nothing; Esc closes it, Ctrl+Y opens and closes it again, and the key line names ^y keys."""
+    tab, app = await terminal()
+    async with app.run_test(size=SIZE) as pilot:
+        await held(tab, app)
+        assert "^y keys" in text_of(app, "#keys")
+
+        await pilot.press("ctrl+y")
+        assert isinstance(app.screen, KeysScreen)
+        keys_list = app.screen.query_one("#keys-list", Static)
+        rows = str(keys_list.render()).split("\n")
+        # render() returns the text at any size: the laid-out size proves the screen shows it.
+        assert keys_list.size.width >= max(len(row) for row in rows)
+        assert keys_list.size.height == len(rows)
+        assert rows[0].split() ==["Enter", "send", "the", "typed", "line,", "with", "the", "line", "ending",
+                                   "of", "the", "settings"]
+        assert [row.split()[0] for row in rows[1:]] == [binding.key_display for binding in SerialTerminal.BINDINGS]
+        for row, binding in zip(rows[1:], SerialTerminal.BINDINGS):
+            assert row.split(None, 1)[1] == KEY_HELP[binding.action]
+        assert str(app.screen.query_one("#keys-hint", Static).render()) == "Esc or ^y closes this list"
+
+        await pilot.press("f2")
+        await pilot.pause(0.3)
+        assert tab.got("serial-signals") == []
+        await pilot.press("escape")
+        assert not isinstance(app.screen, KeysScreen)
+        await pilot.press("ctrl+y")
+        assert isinstance(app.screen, KeysScreen)
+        await pilot.press("ctrl+y")
+        assert not isinstance(app.screen, KeysScreen)
         await pilot.press("ctrl+q")
 
 

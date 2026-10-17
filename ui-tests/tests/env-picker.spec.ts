@@ -17,6 +17,10 @@ test.use({ autoGoto: false, mockSettings: PANEL_SHOWN, terminals: null });
 /** The terminal starts the CLI, which asks the server and shows the selector. */
 const TERMINAL_START = 45000;
 const QUESTION = 'Start the device shell in which environment?';
+/** The line under the question (ACC-SHIM-199), which the selector wraps to the terminal width. */
+const EXPLAIN =
+  'The shell starts with the bin folder of the chosen environment first on PATH and the ' +
+  'variables that its activation sets. The first entry keeps the current environment.';
 
 let venv = '';
 
@@ -59,6 +63,7 @@ test('ACC-SHIM-177 Start in a folder whose .venv holds an upload tool shows the 
     .poll(() => terminalText(page), { timeout: TERMINAL_START })
     .toContain(QUESTION);
   const list = await terminalText(page);
+  expect(list.split(/\s+/).join(' ')).toContain(EXPLAIN);
   expect(list).toMatch(/current environment/);
   expect(list).toMatch(/\.venv +project +esptool/);
   expect(list.indexOf('current environment')).toBeLessThan(
@@ -72,6 +77,6 @@ test('ACC-SHIM-177 Start in a folder whose .venv holds an upload tool shows the 
 
   await expect
     .poll(() => terminalText(page), { timeout: TERMINAL_START })
-    .toMatch(/^Environment: \.venv \(project\)\nFor esptool\.$/m);
+    .toMatch(/^ {2}\.venv \(project\) with esptool$/m);
   expect(await terminalText(page)).not.toContain(QUESTION);
 });

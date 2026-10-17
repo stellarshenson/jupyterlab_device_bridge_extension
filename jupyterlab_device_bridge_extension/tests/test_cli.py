@@ -28,7 +28,8 @@ from typing import NamedTuple
 import pytest
 import tornado.web
 
-from jupyterlab_device_bridge_extension import cli, shim_build
+from jupyterlab_device_bridge_extension import __version__, cli, shim_build, tui_theme
+from jupyterlab_device_bridge_extension import banner as banner_module
 from jupyterlab_device_bridge_extension import manager as manager_module
 from jupyterlab_device_bridge_extension.manager import BridgeError
 from jupyterlab_device_bridge_extension.routes import DevicesHandler, RunsHandler, StatusHandler
@@ -945,35 +946,102 @@ async def test_acc_shim_128_run_starts_the_tool_when_the_server_does_not_answer_
     assert len(asked) == 1 and 1.8 < ended - asked[0] < 5
 
 
-# The banner of a device shell, as the criteria and docs/design.md have it: the square wave
-# and the name line above the lines of the tools and of the devices; an empty line, the two
-# hint lines and the rule under them.
-BANNER_TOP = """\
-────┐   ┌─┐ ┌─┐   ┌─┐ ┌─┐     ┌───┐   ┌─┐ ┌───────────
-    └───┘ └─┘ └───┘ └─┘ └─────┘   └───┘ └─┘
-◆ jupyterlab-device                       device shell
-
-"""
-BANNER_BOTTOM = """
-jupyterlab-device list      all devices
-jupyterlab-device help      example commands
-──────────────────────────────────────────────────────"""
-NO_DEVICE = "No device is attached."
-# The tool line with all three known upload tools on PATH, and the two lines with none of them.
+# The banner of a device shell, as the criteria and docs/design.md have it, without its escape
+# sequences: the logo, the name line and four titled sections. It is 75% of the terminal's
+# columns wide, at least 45; DEVICE BRIDGE stand on one row from 91 columns of banner width.
+DEVICE_ROWS = (
+    "██████╗ ███████╗██╗   ██╗██╗ ██████╗███████╗",
+    "██╔══██╗██╔════╝██║   ██║██║██╔════╝██╔════╝",
+    "██║  ██║█████╗  ██║   ██║██║██║     █████╗  ",
+    "██║  ██║██╔══╝  ╚██╗ ██╔╝██║██║     ██╔══╝  ",
+    "██████╔╝███████╗ ╚████╔╝ ██║╚██████╗███████╗",
+    "╚═════╝ ╚══════╝  ╚═══╝  ╚═╝ ╚═════╝╚══════╝",
+)
+BRIDGE_ROWS = (
+    "██████╗ ██████╗ ██╗██████╗  ██████╗ ███████╗",
+    "██╔══██╗██╔══██╗██║██╔══██╗██╔════╝ ██╔════╝",
+    "██████╔╝██████╔╝██║██║  ██║██║  ███╗█████╗  ",
+    "██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝  ",
+    "██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗",
+    "╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝",
+)
+NO_DEVICE = "No device is attached. Add one in the Devices panel of the lab."
+# The Environment section with all three known upload tools on PATH, and with none of them.
 THREE_TOOLS = ("avrdude", "stm32flash", "esptool")
-FOR_THREE_TOOLS = ("For avrdude, stm32flash, esptool.",)
-NO_TOOL = ("No avrdude, stm32flash, esptool or pio on PATH.", "Install one to make use of the device shell.")
+FOR_THREE_TOOLS = ("current environment with avrdude, stm32flash, esptool",)
+NO_TOOL = ("current environment", "No avrdude, stm32flash, esptool or pio on PATH.",
+           "Install one to make use of the device shell.")
+SKILL_MD = banner_module.skill_folder() / "SKILL.md"
+# The Agent skill section under the empty HOME of `lab`, where no agent finds the skill: the
+# name of the skill and its state, which goes to the next line when the two do not fit, then
+# the lines under them.
+SKILL_NOT_FOUND = (banner_module.SKILL, "○ no agent finds it", str(SKILL_MD),
+                   "jupyterlab-device help names the two commands that link it")
+COMMAND_ROWS = (
+    ("jupyterlab-device list", "devices and paths"),
+    ("jupyterlab-device profile <dev> <id>", "set a board profile"),
+    ("jupyterlab-device monitor read <dev>", "what a board sent"),
+    ("jupyterlab-device terminal <dev>", "serial terminal"),
+    ("jupyterlab-device help", "commands, examples"),
+)
+ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def banner(*device_lines, tools=FOR_THREE_TOOLS, colour=True):
-    """What a terminal gets for the banner with these lines of the tools and of the devices.
+def banner_width(columns):
+    return min(columns, max(45, int(columns * 0.75)))
 
-    Pale cyan comes before the banner, the colour reset and an empty line after it. Without
-    `colour` the banner has no escape sequence, and the empty line follows it.
+
+def rule(title, width):
+    return f"── {title} " + "─" * (width - len(title) - 4)
+
+
+def banner(devices=(NO_DEVICE,), tools=FOR_THREE_TOOLS, skill=SKILL_NOT_FOUND, columns=80):
+    """The text of the banner on a terminal of these columns, without escape sequences.
+
+    Args:
+        devices: The lines of the Devices section; None for a banner without that section.
+        tools: The lines of the Environment section.
+        skill: The lines of the Agent skill section.
     """
-    lines = "".join(f"{line}\n" for line in (*tools, *device_lines))
-    text = f"{BANNER_TOP}{lines}{BANNER_BOTTOM}"
-    return f"\x1b[38;2;159;224;238m{text}\x1b[0m\n\n" if colour else f"{text}\n\n"
+    width = banner_width(columns)
+    if columns < 45:
+        logo = []
+    elif width >= 91:
+        logo = [f" {device}  {bridge}".rstrip() for device, bridge in zip(DEVICE_ROWS, BRIDGE_ROWS)] + [""]
+    else:
+        logo = [f" {row}".rstrip() for row in DEVICE_ROWS + BRIDGE_ROWS] + [""]
+    name = f" ◆ jupyterlab-device {__version__}"
+    lines = [*logo, name + " " * max(2, width - len(name) - 12) + "device shell", "",
+             rule("Environment", width), *(f"  {line}" for line in tools)]
+    if devices is not None:
+        lines += [rule("Devices", width), *(f"  {line}" if line.strip() else line for line in devices)]
+    name, state, *under = skill
+    lines.append(rule("Agent skill", width))
+    lines += [f"  {name}  {state}"] if 2 + len(name) + 2 + len(state) <= width else [f"  {name}", f"    {state}"]
+    lines += [*(f"  {line}" for line in under), rule("Commands", width)]
+    column = max(len(command) for command, _ in COMMAND_ROWS)
+    if all(2 + column + 2 + len(what) <= width for _, what in COMMAND_ROWS):
+        lines += [f"  {command:<{column}}  {what}" for command, what in COMMAND_ROWS]
+    else:
+        lines += [line for command, what in COMMAND_ROWS for line in (f"  {command}", f"      {what}")]
+    return "\n".join([*lines, "─" * width]) + "\n\n"
+
+
+def plain(displayed):
+    """What a terminal displayed, without the escape sequences of the colours."""
+    return ESCAPE.sub("", displayed)
+
+
+def colour_at(displayed, text, offset=0):
+    """The colour, `#rrggbb`, in which the terminal draws the character `offset` of the first `text`."""
+    colour, shown, colours = None, "", []
+    for piece in re.split(r"(\x1b\[[0-9;]*m)", displayed):
+        if piece.startswith("\x1b[38;2;"):
+            colour = "#" + "".join(f"{int(part):02x}" for part in piece[7:-1].split(";"))
+        elif not piece.startswith("\x1b["):
+            shown += piece
+            colours += [colour] * len(piece)
+    return colours[shown.index(text) + offset]
 
 
 def device_calls(monkeypatch):
@@ -1057,6 +1125,9 @@ def terminal_shell(jp_serverapp, monkeypatch, *words):
 def lab_shell(jp_serverapp, tmp_path, monkeypatch):
     """The terminals of the test server start one stand-in program, and the CLI has neither the variable SHELL nor NO_COLOR.
 
+    TEXTUAL_THEME names the dark theme, so the banner has the dark colours and does not ask
+    the terminal for its background.
+
     Returns:
         The path of the stand-in, which prints `started` and ends.
     """
@@ -1064,6 +1135,7 @@ def lab_shell(jp_serverapp, tmp_path, monkeypatch):
     terminal_shell(jp_serverapp, monkeypatch, shell)
     monkeypatch.delenv("SHELL", raising=False)
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TEXTUAL_THEME", "stellars-tech-dark")
     return shell
 
 
@@ -1098,7 +1170,7 @@ async def on_a_terminal(cli_run, screen, *arguments, streams=("stdin", "stdout")
 @pytest.mark.usefixtures("three_upload_tools", "lab_shell")
 async def test_acc_shim_145_shell_prints_the_banner_on_a_terminal_before_it_becomes_the_shell(
         cli_run, manager, screen, monkeypatch):
-    """ACC-SHIM-145 `shell` on a terminal prints the banner in pale cyan, with the colour reset and an empty line after it, after the registration of the run and before the first output of the shell. The CLI has no variable SHELL, and the server of this test has no device."""
+    """ACC-SHIM-145 `shell` on a terminal prints the banner in colour, with the colour reset and an empty line after it, after the registration of the run and before the first output of the shell. The CLI has no variable SHELL, and the server of this test has no device."""
     register, at_registration = manager.register_run, []
 
     def registered(body):
@@ -1110,20 +1182,21 @@ async def test_acc_shim_145_shell_prints_the_banner_on_a_terminal_before_it_beco
     status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner(NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner() + "started\n"
+    assert displayed.startswith(" \x1b[38;2;") and displayed.endswith("\x1b[0m\nstarted\n")
     assert at_registration == [""], "the terminal displayed nothing before the run was registered"
 
 
 @pytest.mark.usefixtures("three_upload_tools", "lab_shell")
 async def test_acc_shim_136_the_banner_reaches_the_terminal_where_the_encoding_of_standard_output_lacks_its_characters(
         cli_run, screen, monkeypatch):
-    """ACC-SHIM-136 (the banner, which `shell` prints since ACC-SHIM-145) the banner reaches the terminal as UTF-8 and the shell starts, also where Python's encoding of standard output has no character for the wave, the rule and the diamond."""
+    """ACC-SHIM-136 (the banner, which `shell` prints since ACC-SHIM-145) the banner reaches the terminal as UTF-8 and the shell starts, also where Python's encoding of standard output has no character for the logo, the rules and the diamond."""
     monkeypatch.setenv("PYTHONIOENCODING", "ascii")
 
     status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner(NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner() + "started\n"
 
 
 @pytest.mark.usefixtures("lab_shell")
@@ -1140,14 +1213,14 @@ async def test_acc_shim_145_shell_prints_no_banner_when_standard_output_is_no_te
 @pytest.mark.usefixtures("three_upload_tools")
 async def test_acc_shim_160_the_banner_holds_no_escape_sequence_when_no_color_is_set(
         value, colour, cli_run, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-160 with the variable NO_COLOR set to a value that is not empty the banner on a terminal holds no escape sequence; with an empty NO_COLOR and without the variable it is pale cyan with the colour reset at its end."""
+    """ACC-SHIM-160 (ACC-SHIM-191 since the colours have roles) with the variable NO_COLOR set to a value that is not empty the banner on a terminal holds no escape sequence; with an empty NO_COLOR and without the variable it has colours and the colour reset at its end."""
     if value is not None:
         monkeypatch.setenv("NO_COLOR", value)
 
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
     assert status == 0
-    assert displayed == banner(NO_DEVICE, colour=colour) + "started\n"
+    assert plain(displayed) == banner() + "started\n"
     assert ("\x1b" in displayed) is colour
 
 
@@ -1296,26 +1369,35 @@ SERIAL_NAMES = [SERIAL_NAME, *(f"{SERIAL_NAME}-{n}" for n in (2, 3, 4))]
 SECOND_USB_KEY, SECOND_USB_NAME = "u:cafe:4001:SN0002", f"{USB_NAME}-2"
 
 
+def usb_record(tab, name):
+    """The USB record of the last device table a tab got."""
+    return next(device for device in tab.devices["usb"] if device["name"] == name)
+
+
 @pytest.mark.usefixtures("three_upload_tools")
-async def test_acc_shim_139_the_banner_lists_an_attached_serial_port_and_an_attached_usb_device(
+async def test_acc_shim_192_the_banner_lists_an_attached_serial_port_and_an_attached_usb_device(
         cli_run, fake_tab, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-139 with one attached serial port and one attached USB device the banner has, under the name line, the line that names the tools, line (1) with the path of the port and ` (COM)`, and line (2) with the name of the USB device and ` (USB)`; `shell` reads the devices with one call."""
+    """ACC-SHIM-192 (ACC-SHIM-139: one call for the devices) with one attached serial port and one attached USB device on a terminal of 80 columns the Devices section has the port with COM, its path and under it its settings and profile, then the USB device with USB, its name and under it its ids and product name; `shell` reads the devices with one call."""
     tab, path = await attach_serial(fake_tab)
     assert (await tab.claim_usb())["ok"]
     await tab.until(lambda: tab.devices["usb"])
+    usb = usb_record(tab, USB_NAME)
     asked = device_calls(monkeypatch)
 
     status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner(f"(1) {path} (COM)", f"(2) {USB_NAME} (USB)") + "started\n"
+    assert plain(displayed) == banner(devices=(
+        f"● COM  {path}", "       115200 8N1  profile monitor",
+        f"● USB  {USB_NAME}", f"       {usb['vendorId']:04x}:{usb['productId']:04x}  {usb['productName']}"),
+    ) + "started\n"
     assert len(asked) == 1
 
 
 @pytest.mark.usefixtures("three_upload_tools")
-async def test_acc_shim_139_the_banner_lists_no_detached_device_and_no_device_with_an_error(
-        cli_run, fake_tab, screen, lab_shell):
-    """ACC-SHIM-139 a detached device and a device whose record has an error get no line: the numbers count the listed devices over both kinds, serial devices first, in the order of the server's table."""
+async def test_acc_shim_192_the_banner_lists_no_detached_device_and_no_device_with_an_error(
+        cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-192 a detached device and a device whose record has an error get no line; the serial devices come first, in the order of the server's table; on a terminal of 170 columns each device has one line, with its information in one column."""
     tab = await fake_tab()
     # The USB devices are claimed first: the banner still lists them after the serial ports.
     assert (await tab.claim_usb())["ok"] and (await tab.claim_usb(SECOND_USB_KEY))["ok"]
@@ -1329,19 +1411,25 @@ async def test_acc_shim_139_the_banner_lists_no_detached_device_and_no_device_wi
     await tab.until(lambda: [(device["state"], device["portState"]) for device in tab.devices["serial"]] == [
         ("attached", "open"), ("detached", "closed"), ("attached", "error"), ("attached", "open")])
 
+    monkeypatch.setenv("COLUMNS", "170")
+
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
+    first, fourth = record(tab, SERIAL_NAMES[0])["path"], record(tab, SERIAL_NAMES[3])["path"]
+    usb = usb_record(tab, SECOND_USB_NAME)
+    column = max(len(first), len(fourth), len(SECOND_USB_NAME))
     assert status == 0
-    assert displayed == banner(
-        f"(1) {record(tab, SERIAL_NAMES[0])['path']} (COM)",
-        f"(2) {record(tab, SERIAL_NAMES[3])['path']} (COM)",
-        f"(3) {SECOND_USB_NAME} (USB)") + "started\n"
+    assert plain(displayed) == banner(devices=(
+        f"● COM  {first:<{column}}  115200 8N1  profile monitor",
+        f"● COM  {fourth:<{column}}  115200 8N1  profile monitor",
+        f"● USB  {SECOND_USB_NAME:<{column}}  {usb['vendorId']:04x}:{usb['productId']:04x}  {usb['productName']}"),
+        columns=170) + "started\n"
 
 
 @pytest.mark.usefixtures("three_upload_tools")
-async def test_acc_shim_139_the_banner_says_that_no_device_is_attached(
+async def test_acc_shim_192_the_banner_says_that_no_device_is_attached(
         cli_run, fake_tab, screen, lab_shell):
-    """ACC-SHIM-139 when the server has devices and none of them is attached without an error, the one line under the tools reads `No device is attached.`"""
+    """ACC-SHIM-192 when the server has devices and none of them is attached without an error, the Devices section has the one line that says that no device is attached and names the Devices panel."""
     tab, _ = await attach_serial(fake_tab)
     assert (await tab.claim_usb())["ok"]
     await tab.close()
@@ -1349,7 +1437,7 @@ async def test_acc_shim_139_the_banner_says_that_no_device_is_attached(
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
     assert status == 0
-    assert displayed == banner("No device is attached.") + "started\n"
+    assert plain(displayed) == banner() + "started\n"
 
 
 def refused(handler):
@@ -1364,20 +1452,20 @@ def no_table(handler):
 @pytest.mark.usefixtures("three_upload_tools")
 async def test_acc_shim_139_the_banner_has_no_device_line_when_the_devices_cannot_be_read(
         answer, cli_run, fake_tab, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-139 when `GET devices` fails, or answers something that is no device table, the banner has no device line and no line that says that no device is attached; the shell starts and nothing is printed about the failure."""
+    """ACC-SHIM-139 when `GET devices` fails, or answers something that is no device table, the banner has no Devices section; the shell starts and nothing is printed about the failure."""
     await attach_serial(fake_tab)
     monkeypatch.setattr(DevicesHandler, "get", answer)
 
     status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner() + "started\n"
+    assert plain(displayed) == banner(devices=None) + "started\n"
 
 
 @pytest.mark.usefixtures("three_upload_tools")
 async def test_acc_shim_139_shell_waits_2_s_for_the_devices_then_starts(
         cli_run, fake_tab, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-139 when `GET devices` gives no answer, `shell` waits 2 s for it, then prints the banner without a device line and starts the shell."""
+    """ACC-SHIM-139 when `GET devices` gives no answer, `shell` waits 2 s for it, then prints the banner without a Devices section and starts the shell."""
     await attach_serial(fake_tab)
     asked = []
     answer = asyncio.Event()
@@ -1394,7 +1482,7 @@ async def test_acc_shim_139_shell_waits_2_s_for_the_devices_then_starts(
     await asyncio.sleep(0.1)  # the handler ends within the test
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner() + "started\n"
+    assert plain(displayed) == banner(devices=None) + "started\n"
     # 2 s is the time of this call, 10 s the time of every other call of the CLI.
     assert len(asked) == 1 and 1.8 < ended - asked[0] < 5
 
@@ -1414,31 +1502,31 @@ async def test_acc_shim_139_the_devices_are_read_only_when_the_banner_is_printed
     assert status == 0 and asked == []
 
 
-# What the tool line of the banner is for the upload tools on PATH, in the order they are put there.
+# What the Environment section of the banner is for the upload tools on PATH, in the order they are put there.
 TOOL_LINES = {
-    ("avrdude", "stm32flash", "esptool"): "For avrdude, stm32flash, esptool.",
-    ("esptool", "avrdude"): "For avrdude, esptool.",
-    ("esptool",): "For esptool.",
+    ("avrdude", "stm32flash", "esptool"): "current environment with avrdude, stm32flash, esptool",
+    ("esptool", "avrdude"): "current environment with avrdude, esptool",
+    ("esptool",): "current environment with esptool",
 }
 
 
 @pytest.mark.parametrize("tools, line", TOOL_LINES.items(), ids=map(", ".join, TOOL_LINES))
-async def test_acc_shim_142_the_tool_line_of_the_banner_names_the_upload_tools_on_path(
+async def test_acc_shim_193_the_environment_section_names_the_upload_tools_on_path(
         tools, line, cli_run, screen, upload_tools, lab_shell):
-    """ACC-SHIM-142 the tool line of the banner names the known upload tools that PATH holds and no other, in the order avrdude, stm32flash, esptool; the top-level help of the same shell has an example for exactly these tools."""
+    """ACC-SHIM-193 (ACC-SHIM-142: the tools that are installed) the Environment section of the banner names the current environment and the known upload tools that PATH holds and no other, in the order avrdude, stm32flash, esptool; the top-level help of the same shell has an example for exactly these tools."""
     upload_tools(*tools)
 
     status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner(NO_DEVICE, tools=[line]) + "started\n"
+    assert plain(displayed) == banner(tools=[line]) + "started\n"
     assert top_help().endswith(EXAMPLES_HEAD + example_lines(tools))
 
 
 @pytest.mark.parametrize("file", [None, "avrdude"], ids=["an empty PATH folder", "a file avrdude that is no program"])
-async def test_acc_shim_142_the_banner_says_to_install_a_tool_when_none_is_on_path(
+async def test_acc_shim_193_the_banner_says_to_install_a_tool_when_none_is_on_path(
         file, cli_run, screen, upload_tools, lab_shell):
-    """ACC-SHIM-142 with no known upload tool that can be run on PATH the banner has, in place of the tool line, the line that none of the three is on PATH and the line that says to install one; no line starts with `For `, and the top-level help of the same shell says that no upload tool is on PATH."""
+    """ACC-SHIM-193 (ACC-SHIM-142: none installed) with no known upload tool that can be run on PATH the Environment section names the current environment, the line that none of the four is on PATH and the line that says to install one; the top-level help of the same shell says that no upload tool is on PATH."""
     folder = upload_tools()
     if file:
         (folder / file).write_text("no program\n")
@@ -1446,58 +1534,208 @@ async def test_acc_shim_142_the_banner_says_to_install_a_tool_when_none_is_on_pa
     status, displayed, piped = await on_a_terminal(cli_run, screen, "shell")
 
     assert (status, piped) == (0, (None, b""))
-    assert displayed == banner(NO_DEVICE, tools=NO_TOOL) + "started\n"
-    assert displayed.split("\n")[4:6] == [
-        "No avrdude, stm32flash, esptool or pio on PATH.", "Install one to make use of the device shell."]
-    assert not any(row.startswith("For ") for row in displayed.split("\n")) and "shim" not in displayed.lower()
+    assert plain(displayed) == banner(tools=NO_TOOL) + "started\n"
+    assert " with " not in plain(displayed).split(rule("Environment", 60))[1].split("──")[0]
+    assert "shim" not in displayed.lower()
     assert top_help().endswith(NO_UPLOAD_TOOL)
 
 
-async def test_acc_shim_142_a_file_that_is_no_program_is_not_named_in_the_tool_line(
+async def test_acc_shim_193_a_file_that_is_no_program_is_not_named_in_the_environment_section(
         cli_run, screen, upload_tools, lab_shell):
-    """ACC-SHIM-142 a file on PATH that has the name of a known upload tool and cannot be run is not named in the tool line beside a tool that can be run."""
+    """ACC-SHIM-193 (ACC-SHIM-142) a file on PATH that has the name of a known upload tool and cannot be run is not named in the Environment section beside a tool that can be run."""
     folder = upload_tools("esptool")
     (folder / "stm32flash").write_text("no program\n")
 
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
     assert status == 0
-    assert displayed == banner(NO_DEVICE, tools=["For esptool."]) + "started\n"
+    assert plain(displayed) == banner(tools=["current environment with esptool"]) + "started\n"
 
 
-async def test_acc_panel_140_the_banner_names_a_device_shell_and_does_not_hold_the_word_shim(
-        cli_run, screen, lab_shell):
-    """ACC-PANEL-140 the name line of the banner is 54 columns wide, starts with the name of the command and ends with `device shell`, and the banner does not hold the word shim."""
+@pytest.mark.parametrize("columns", [80, 170])
+async def test_acc_shim_190_the_name_line_ends_with_device_shell_at_the_edge_of_the_banner(
+        columns, cli_run, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-190 (ACC-PANEL-140: device shell, no word shim) under the logo and an empty line the name line has the diamond, the name of the command and its version, and ends with `device shell` at the right edge of the banner; the banner does not hold the word shim."""
+    monkeypatch.setenv("COLUMNS", str(columns))
 
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
-    name_line = displayed.split("\n")[2]
+    lines = plain(displayed).split("\n")
+    name_line = lines[13 if columns == 80 else 7]
     assert status == 0
-    assert name_line == "◆ jupyterlab-device" + " " * 23 + "device shell" and len(name_line) == 54
+    assert lines[12 if columns == 80 else 6] == ""
+    assert name_line.startswith(f" ◆ jupyterlab-device {__version__}  ")
+    assert name_line.endswith(" device shell") and len(name_line) == banner_width(columns)
     assert "shim" not in displayed.lower()
 
 
-async def test_acc_cli_141_the_banner_names_the_commands_list_and_help(cli_run, screen, lab_shell):
-    """ACC-CLI-141 (the second line names `jupyterlab-device help` since ACC-CLI-158) above its rule the banner has an empty line and two lines that name `jupyterlab-device list` with `all devices` and `jupyterlab-device help` with `example commands`, the two texts in one column."""
+def commands_section(displayed, columns):
+    lines = plain(displayed).split("\n")
+    start = lines.index(rule("Commands", banner_width(columns)))
+    return lines[start + 1:lines.index("─" * banner_width(columns), start)]
 
+
+async def test_acc_cli_195_the_commands_section_lists_five_commands_with_what_they_do(cli_run, screen, lab_shell):
+    """ACC-CLI-195 (ACC-CLI-141 and ACC-CLI-158: list and help) on a terminal of 80 columns the Commands section has one line for each of list, profile, monitor read, terminal and help, with what it does in one column; the banner holds no `--help`."""
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
-    lines = displayed.split("\n")
-    rule = lines.index("\u2500" * 54 + "\x1b[0m")
+    section = commands_section(displayed, 80)
     assert status == 0
-    assert lines[rule - 3:rule] == [
-        "", "jupyterlab-device list      all devices", "jupyterlab-device help      example commands"]
-    assert lines[rule - 2].index("all devices") == lines[rule - 1].index("example commands")
-
-
-async def test_acc_cli_158_the_banner_names_the_command_help(cli_run, screen, lab_shell):
-    """ACC-CLI-158 the line of the banner with `example commands` names `jupyterlab-device help`, and the banner holds no `--help`."""
-    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
-
-    named = [row.split()[:2] for row in displayed.split("\n") if row.endswith("example commands")]
-    assert status == 0
-    assert named == [[cli.PROG, "help"]]
+    assert [line.split("  ")[1].split()[:2] for line in section] == [
+        [cli.PROG, "list"], [cli.PROG, "profile"], [cli.PROG, "monitor"], [cli.PROG, "terminal"], [cli.PROG, "help"]]
+    assert len({line.index(what) for line, (_, what) in zip(section, COMMAND_ROWS)}) == 1
     assert "--help" not in displayed
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_cli_195_a_description_that_does_not_fit_goes_under_its_command(cli_run, screen, lab_shell, monkeypatch):
+    """ACC-CLI-195 on a terminal of 60 columns, where the banner is 45 columns wide, each description of the Commands section stands on the line under its command."""
+    monkeypatch.setenv("COLUMNS", "60")
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    assert status == 0
+    assert commands_section(displayed, 60) == [
+        line for command, what in COMMAND_ROWS for line in (f"  {command}", f"      {what}")]
+    assert plain(displayed) == banner(columns=60) + "started\n"
+
+
+@pytest.mark.parametrize("columns, rows", [(80, 12), (170, 6), (40, 0)],
+                         ids=["80 columns: DEVICE above BRIDGE", "170 columns: one row", "40 columns: no logo"])
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_189_the_banner_opens_with_the_logo_at_75_percent_of_the_width(
+        columns, rows, cli_run, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-189 the banner opens with DEVICE and BRIDGE in block letters: on 80 columns DEVICE above BRIDGE and a banner 60 columns wide, on 170 columns both words on one row and a banner 127 columns wide, on 40 columns no logo and a banner 40 columns wide."""
+    monkeypatch.setenv("COLUMNS", str(columns))
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    lines = plain(displayed).split("\n")
+    assert status == 0
+    assert plain(displayed) == banner(columns=columns) + "started\n"
+    assert lines[:rows] == banner(columns=columns).split("\n")[:rows]
+    assert lines[rows] == "" if rows else lines[0].startswith(" ◆ ")
+    assert lines[-4] == "─" * {80: 60, 170: 127, 40: 40}[columns]
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_189_the_width_comes_from_the_terminal(cli_run, lab_shell, monkeypatch):
+    """ACC-SHIM-189 without the variable COLUMNS the width of the banner comes from the size of the terminal: a terminal of 170 columns gives the one-row logo."""
+    monkeypatch.delenv("COLUMNS")
+    screen = Screen()
+    fcntl.ioctl(screen.terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 170, 0, 0))
+    try:
+        status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+    finally:
+        os.close(screen.keyboard)
+
+    assert status == 0
+    assert plain(displayed) == banner(columns=170) + "started\n"
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+async def test_acc_shim_191_the_banner_colours_follow_their_roles_and_the_background(
+        theme, cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-191 the full blocks of the logo have more than 6 colours of a gradient and its shadow the grey of the rules; a device path and its settings each have a colour of their own, different from the colour of the other text; TEXTUAL_THEME naming the light theme gives the colours of the light palette."""
+    _, path = await attach_serial(fake_tab)
+    monkeypatch.setenv("TEXTUAL_THEME", f"stellars-tech-{theme}")
+    colours = {**tui_theme.PALETTES[theme], **banner_module.EXTRA[theme]}
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    blocks = {colour_at(displayed, row.rstrip(), x)
+              for row in DEVICE_ROWS + BRIDGE_ROWS for x, char in enumerate(row) if char == "█"}
+    assert status == 0
+    assert len(blocks) > 6
+    assert colour_at(displayed, DEVICE_ROWS[0], 6) == colours["subtle"]  # the ╗ after the D
+    assert colour_at(displayed, "── Devices", 0) == colours["subtle"]
+    text = colour_at(displayed, "current environment", 0)
+    assert text == colours["text"]
+    assert colour_at(displayed, path, 0) == colours["device"] != text
+    assert colour_at(displayed, "115200 8N1", 0) == colours["info"] not in (text, colours["device"])
+
+
+def test_acc_cli_194_skill_state_says_how_an_agent_finds_the_skill(tmp_path):
+    """ACC-CLI-194 the state of the agent skill: not installed under the prefix; installed and found by no agent; linked in ~/.agents/skills; linked in ~/.claude/skills; listed by a skill there that names the path of its folder."""
+    prefix, home = tmp_path / "prefix", tmp_path / "home"
+    folder = banner_module.skill_folder(str(prefix))
+    assert banner_module.skill_state(str(prefix), home) == (None, None)
+
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("---\nname: jupyterlab-device-bridge-extension\n---\n")
+    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", None)
+
+    index = home / ".claude" / "skills" / "platform"
+    index.mkdir(parents=True)
+    (index / "SKILL.md").write_text(f"Details: [{folder}/SKILL.md]({folder}/SKILL.md)\n")
+    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", "listed by ~/.claude/skills/platform")
+
+    (home / ".claude" / "skills" / banner_module.SKILL).symlink_to(folder)
+    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", "linked in ~/.claude/skills")
+
+    (home / ".agents" / "skills").mkdir(parents=True)
+    (home / ".agents" / "skills" / banner_module.SKILL).symlink_to(folder)
+    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", "linked in ~/.agents/skills")
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_cli_194_the_banner_says_where_an_agent_finds_the_skill(cli_run, screen, lab_shell):
+    """ACC-CLI-194 with the folder of the skill linked into ~/.agents/skills of the HOME of the shell the Agent skill section names the skill, says that it is linked there, and has the path of its SKILL.md under the Python prefix; without the link it says that no agent finds it and names `jupyterlab-device help`."""
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+    assert status == 0 and plain(displayed) == banner() + "started\n"
+
+    skills = os.path.join(os.environ["HOME"], ".agents", "skills")
+    os.makedirs(skills)
+    os.symlink(SKILL_MD.parent, os.path.join(skills, banner_module.SKILL))
+    linked = Screen()
+    try:
+        status, displayed, _ = await on_a_terminal(cli_run, linked, "shell")
+    finally:
+        os.close(linked.keyboard)
+
+    assert status == 0
+    assert plain(displayed) == banner(skill=(banner_module.SKILL, "✓ linked in ~/.agents/skills", str(SKILL_MD))) + "started\n"
+    assert colour_at(displayed, "✓ linked", 0) == tui_theme.PALETTES["dark"]["mint"]
+
+
+def help_section(title):
+    """The lines of a section of the top-level help, from its title line to the empty line that ends it."""
+    lines = top_help().split("\n")
+    start = next(index for index, line in enumerate(lines) if line.startswith(title))
+    return lines[start:lines.index("", start)]
+
+
+def test_acc_cli_196_the_help_has_a_quick_start_whose_command_lines_parse():
+    """ACC-CLI-196 the top-level help has a quick start section with five numbered steps: the plus icon of the panel that the description names, then list, profile, an upload under `run --` and monitor read; each command line of a step is one the parser of the CLI accepts."""
+    section = help_section("quick start")
+    text = " ".join(" ".join(section).split())
+    steps = [line.strip() for line in section if re.match(r"  \d\. ", line)]
+
+    assert [step[:2] for step in steps] == ["1.", "2.", "3.", "4.", "5."]
+    assert "attaches the board in the panel of the lab named above: the plus icon, Connect Serial Port" in text
+    assert "Chrome's dialog" in text and f"{cli.PROG} request serial" in text
+    commands = [shlex.split(step[3:])[1:] for step in steps[1:]]
+    assert [words[0] for words in commands] == ["list", "profile", "run", "monitor"]
+    assert commands[2][1] == "--"
+    for words in commands:
+        cli.build_parser().parse_args(words[:words.index("--")] if "--" in words else words)
+
+
+def test_acc_cli_197_the_help_names_the_agent_skill_and_the_commands_that_link_it():
+    """ACC-CLI-197 the top-level help has an agent skill section with the name of the skill, the path of its SKILL.md under the Python prefix, and the commands that link its folder into ~/.agents/skills and ~/.claude/skills; the first is the README command with the prefix written out."""
+    section = help_section("agent skill")
+    text = " ".join(" ".join(section).split())
+    folder = os.path.join(sys.prefix, "share", "jupyter", "agents", "skills", banner_module.SKILL)
+    readme_line = next(line for text in readme().values() for line in command_lines(text)
+                       if line.startswith("mkdir -p ~/.agents/skills"))
+
+    assert banner_module.SKILL in text and f"{folder}/SKILL.md" in text
+    commands = [line.strip() for line in section if line.strip().startswith("mkdir -p")]
+    assert commands == [
+        readme_line.replace("\"$(python -c 'import sys; print(sys.prefix)')", sys.prefix).replace(
+            f"{banner_module.SKILL}\" ", f"{banner_module.SKILL} "),
+        f"mkdir -p ~/.claude/skills && ln -s {folder} ~/.claude/skills/{banner_module.SKILL}",
+    ]
 
 
 # -------------------------------------------------- the examples in the top-level help

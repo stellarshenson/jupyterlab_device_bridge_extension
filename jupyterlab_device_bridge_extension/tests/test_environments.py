@@ -15,14 +15,16 @@ import termios
 import time
 
 import pytest
-from textual.widgets import OptionList
+from textual.widgets import OptionList, Static
 
+from jupyterlab_device_bridge_extension import banner as banner_module
 from jupyterlab_device_bridge_extension import cli, environments, tui_theme
 from jupyterlab_device_bridge_extension.env_picker import EnvironmentPicker
 from jupyterlab_device_bridge_extension.environments import Environment
 
 from .test_cli import (  # noqa: F401 - `cli_run`, `lab`, `lab_shell` and `screen` are fixtures
-    BANNER_BOTTOM, BANNER_TOP, NO_DEVICE, cli_run, lab, lab_shell, on_a_terminal, screen, stand_in, terminal_shell)
+    NO_TOOL, cli_run, lab, lab_shell, on_a_terminal, plain, screen, stand_in, terminal_shell)
+from .test_cli import banner as cli_banner
 
 NAMES = list(cli._TOOL_NAMES)
 QUESTION = "Start the device shell in which environment?"
@@ -74,6 +76,8 @@ def no_active_environment(monkeypatch):
     for name in ("CONDA_PREFIX", "CONDA_DEFAULT_ENV", "VIRTUAL_ENV", "RUSTUP_HOME", "NO_COLOR"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TEXTUAL_THEME", DARK)
+    # The banner is 75 columns wide, 75% of the 100 columns that `sized` gives the terminal.
+    monkeypatch.setenv("COLUMNS", "100")
 
 
 @pytest.fixture
@@ -265,6 +269,19 @@ async def test_acc_shim_177_esc_keeps_the_current_environment(keys):
     assert app.return_value == CURRENT
 
 
+async def test_acc_shim_199_the_selector_says_what_the_choice_does():
+    """ACC-SHIM-199 under the question the selector says that the shell starts with the bin folder of the chosen environment first on PATH and the variables its activation sets, and that the first entry keeps the current environment."""
+    app = EnvironmentPicker(CURRENT, [FIRST], DARK)
+
+    async with app.run_test(size=(80, 24)):
+        children = [widget.id for widget in app.screen.children]
+        text = " ".join(str(app.query_one("#explain", Static).render()).split())
+
+    assert children.index("explain") == children.index("question") + 1
+    assert text == ("The shell starts with the bin folder of the chosen environment first on PATH and the "
+                    "variables that its activation sets. The first entry keeps the current environment.")
+
+
 @pytest.mark.parametrize("mode", ["dark", "light"])
 async def test_acc_shim_177_the_selector_has_the_brand_themes_dark_and_light(mode):
     """ACC-SHIM-177 the selector runs in the brand theme it is given, dark and light, and its screen has the screen colour of that theme."""
@@ -291,10 +308,9 @@ echo "VIRTUAL_ENV ${VIRTUAL_ENV:-}"
 ALTERNATE_SCREEN = "\x1b[?1049h"
 
 
-def banner(*lines):
-    """What a terminal shows for the banner of a device shell with these lines under its name line."""
-    body = "".join(f"{line}\n" for line in lines)
-    return f"\x1b[38;2;159;224;238m{BANNER_TOP}{body}{BANNER_BOTTOM}\x1b[0m\n\n"
+def banner(*environment):
+    """The text of the banner of a device shell, without escape sequences, with these lines in its Environment section."""
+    return cli_banner(tools=environment, columns=100)
 
 
 @pytest.fixture
@@ -360,7 +376,6 @@ async def shell_with_keys(cli_run, screen, *keys):
 
 
 DOWN, ENTER, ESC = b"\x1b[B", b"\r", b"\x1b"
-NO_TOOL = ("No avrdude, stm32flash, esptool or pio on PATH.", "Install one to make use of the device shell.")
 
 
 @pytest.mark.usefixtures("shell_path")
@@ -378,7 +393,7 @@ async def test_acc_shim_178_the_shell_runs_in_the_chosen_conda_environment(
     status, after = await shell_with_keys(cli_run, screen, DOWN, ENTER)
 
     assert status == 0
-    assert after.endswith(banner("Environment: fake-esp (global)", "For esptool.", NO_DEVICE) + (
+    assert plain(after).endswith(banner("fake-esp (global) with esptool") + (
         f"first {prefix}/bin\nCONDA_PREFIX {prefix}\nCONDA_DEFAULT_ENV fake-esp\n"
         f"RUSTUP_HOME {prefix}/rustup\nVIRTUAL_ENV \n"))
 
@@ -397,7 +412,7 @@ async def test_acc_shim_178_the_shell_runs_in_the_chosen_project_venv(
     status, after = await shell_with_keys(cli_run, screen, DOWN, ENTER)
 
     assert status == 0
-    assert after.endswith(banner("Environment: .venv (project)", "For avrdude.", NO_DEVICE) + (
+    assert plain(after).endswith(banner(".venv (project) with avrdude") + (
         f"first {venv}/bin\nCONDA_PREFIX \nCONDA_DEFAULT_ENV \nRUSTUP_HOME \nVIRTUAL_ENV {venv}\n"))
 
 
@@ -410,7 +425,7 @@ async def test_acc_shim_177_esc_in_the_selector_of_shell_keeps_the_current_envir
     status, after = await shell_with_keys(cli_run, screen, ESC)
 
     assert status == 0
-    assert after.endswith(banner("For esptool.", NO_DEVICE) + "started\n")
+    assert plain(after).endswith(banner("current environment with esptool") + "started\n")
 
 
 async def test_acc_shim_179_no_selector_when_no_environment_holds_a_tool(
@@ -424,7 +439,7 @@ async def test_acc_shim_179_no_selector_when_no_environment_holds_a_tool(
                                                streams=("stdin", "stdout", "stderr"))
 
     assert status == 0
-    assert displayed == banner(*NO_TOOL, NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner(*NO_TOOL) + "started\n"
     assert ALTERNATE_SCREEN not in displayed
 
 
@@ -437,7 +452,7 @@ async def test_acc_shim_179_no_selector_when_standard_input_is_no_terminal(
                                                streams=("stdout", "stderr"))
 
     assert status == 0
-    assert displayed == banner(*NO_TOOL, NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner(*NO_TOOL) + "started\n"
     assert ALTERNATE_SCREEN not in displayed
 
 
@@ -460,7 +475,7 @@ async def test_acc_shim_180_without_any_environment_the_shell_starts_at_once_wit
                                                streams=("stdin", "stdout", "stderr"))
 
     assert status == 0
-    assert displayed == banner("For esptool.", NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner("current environment with esptool") + "started\n"
 
 
 async def test_acc_shim_180_the_banner_lists_the_tools_of_the_pipx_and_uv_tool_directories(
@@ -478,7 +493,7 @@ async def test_acc_shim_180_the_banner_lists_the_tools_of_the_pipx_and_uv_tool_d
                                                streams=("stdin", "stdout", "stderr"))
 
     assert status == 0
-    assert displayed == banner("For avrdude, esptool.", NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner("current environment with avrdude, esptool") + "started\n"
 
 
 @pytest.mark.parametrize("body", FAILING_CONDA.values(), ids=FAILING_CONDA)
@@ -495,7 +510,7 @@ async def test_acc_shim_181_the_shell_starts_when_conda_fails(
                                                streams=("stdin", "stdout", "stderr"))
 
     assert status == 0
-    assert displayed == banner("For esptool.", NO_DEVICE) + "started\n"
+    assert plain(displayed) == banner("current environment with esptool") + "started\n"
     assert "Traceback" not in displayed
 
 
@@ -506,5 +521,6 @@ async def test_acc_shim_182_the_banner_lists_pio(cli_run, screen, project, lab_s
     status, displayed, _ = await on_a_terminal(cli_run, sized(screen), "shell")
 
     assert status == 0
-    assert displayed == banner("For avrdude, pio.", NO_DEVICE) + "started\n"
-    assert cli._tool_lines([]) == list(NO_TOOL)
+    assert plain(displayed) == banner("current environment with avrdude, pio") + "started\n"
+    nothing = banner_module.render(Environment("current environment", "current", ()), NAMES, [], 100, None)
+    assert "No avrdude, stm32flash, esptool or pio on PATH." in nothing

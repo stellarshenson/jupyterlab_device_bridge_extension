@@ -82,6 +82,13 @@ SettingsScreen { align: center middle; }
 #settings-box RadioButton { background: $st-surface; color: $st-text; }
 #settings-error { color: $st-rose; }
 #settings-hint { color: $st-muted; padding: 1 0; }
+KeysScreen { align: center middle; }
+#keys-box { width: auto; max-width: 90%; height: auto; max-height: 90%; background: $st-chrome;
+            border: round $st-cyan; padding: 0 2; }
+#keys-box Static { width: auto; max-width: 100%; }
+#keys-box .title { color: $st-cyan-bright; padding: 1 0; }
+#keys-list { color: $st-text; }
+#keys-hint { color: $st-muted; padding: 1 0; }
 """
 
 
@@ -183,6 +190,45 @@ class SettingsScreen(ModalScreen):
         self.dismiss(None)
 
 
+# What each key does, by the action of its binding; the key help lists every binding with it.
+KEY_HELP = {
+    "quit": "quit; the device path is closed and the port is free for another program",
+    "settings": "the serial settings: baud rate, data bits, parity, stop bits, line ending, text or hex",
+    "hex_view": "show the lines as text or as hex digits",
+    "pause": "stop the view from scrolling; press again to scroll on",
+    "clear": "remove every line from the view",
+    "line('dtr')": "set DTR off, or on when it is off",
+    "line('rts')": "set RTS off, or on when it is off",
+    "brk": f"send a break: the line held for {BREAK_S:g} s",
+    "run('pulse-dtr')": "run the action pulse-dtr of the bridge",
+    "run('pulse-rts')": "run the action pulse-rts of the bridge",
+    "run('esp-bootloader')": "run the action esp-bootloader of the bridge",
+    "run('touch-1200')": "run the action touch-1200 of the bridge",
+    "interrupt": "send the byte 0x03 to the board; the terminal does not quit",
+    "keys": "show or close this list",
+}
+
+
+class KeysScreen(ModalScreen):
+    """The keys of the serial terminal and what each does; Esc or Ctrl+Y closes it."""
+
+    BINDINGS = [Binding("escape", "close", "close")]
+
+    def compose(self) -> ComposeResult:
+        rows = [("Enter", "send the typed line, with the line ending of the settings")]
+        rows += [(binding.key_display, KEY_HELP.get(binding.action, binding.description))
+                 for binding in SerialTerminal.BINDINGS]
+        column = max(len(key) for key, _ in rows)
+        with Vertical(id="keys-box"):
+            yield Static("Keys of the serial terminal", classes="title", markup=False)
+            yield Static("\n".join(f"{key:<{column}}  {what}" for key, what in rows),
+                         id="keys-list", markup=False)
+            yield Static("Esc or ^y closes this list", id="keys-hint", markup=False)
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class SerialTerminal(App):
     """The terminal on one serial device of the bridge.
 
@@ -213,6 +259,9 @@ class SerialTerminal(App):
         Binding("f10", "run('touch-1200')", "1200 baud touch", key_display="F10", priority=True),
         # Ctrl+C does not quit: it goes to the board, which may run a program it interrupts.
         Binding("ctrl+c", "interrupt", "send 0x03", key_display="^c", priority=True),
+        # The key help is on the one control letter that neither the app, the send field, the
+        # browser nor the lab takes; the lab's terminal sends no byte for Ctrl+/.
+        Binding("ctrl+y", "keys", "keys", key_display="^y", priority=True),
     ]
 
     def __init__(self, bridge: DeviceBridgeClient, record: dict, baud: int, theme: str) -> None:
@@ -427,8 +476,18 @@ class SerialTerminal(App):
 
     def check_action(self, action: str, parameters: tuple) -> bool:
         # On the settings screen only quit and the focus keys (Tab, Shift+Tab) act; the
-        # other keys belong to its fields.
-        return action in ("quit", "focus_next", "focus_previous") or not isinstance(self.screen, SettingsScreen)
+        # other keys belong to its fields. On the key help only quit and the key that closes it.
+        if isinstance(self.screen, SettingsScreen):
+            return action in ("quit", "focus_next", "focus_previous")
+        if isinstance(self.screen, KeysScreen):
+            return action in ("quit", "keys")
+        return True
+
+    def action_keys(self) -> None:
+        if isinstance(self.screen, KeysScreen):
+            self.screen.dismiss()
+        else:
+            self.push_screen(KeysScreen())
 
     def action_settings(self) -> None:
         self.push_screen(SettingsScreen(self._record["settings"], self._ending, self._send_as),

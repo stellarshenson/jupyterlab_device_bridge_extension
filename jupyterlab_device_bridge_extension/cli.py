@@ -28,7 +28,7 @@ import shutil
 import sys
 import time
 
-from . import __version__, environments, shim_build
+from . import __version__, banner, environments, shim_build
 from .client import DeviceBridgeClient, DeviceBridgeError
 from .profiles import ACTIONS
 
@@ -50,38 +50,6 @@ UPLOAD_TOOLS = (
     ("pio", "pio run -t upload --upload-port <path>", True),
 )
 _TOOL_NAMES = [name for name, _, _ in UPLOAD_TOOLS]
-# The bits of the square wave at the top of the banner: the letters J and L as two serial
-# frames (start bit, 8 data bits with the lowest first, stop bit) between idle bits.
-_BANNER_BITS = "11" + "0010100101" + "0001100101" + "11111"
-
-
-def _wave(bits: str) -> str:
-    """Two rows that draw the bits as a square wave, two columns for each bit."""
-    top, bottom, last = "", "", bits[0]
-    for bit in bits:
-        high = bit == "1"
-        if bit == last:
-            top, bottom = top + ("\u2500" if high else " "), bottom + (" " if high else "\u2500")
-        else:  # an edge takes the first column of the new bit
-            top, bottom = top + ("\u250c" if high else "\u2510"), bottom + ("\u2518" if high else "\u2514")
-        top, bottom, last = top + ("\u2500" if high else " "), bottom + (" " if high else "\u2500"), bit
-    return f"{top.rstrip()}\n{bottom.rstrip()}"
-
-
-# The fixed lines of the banner of a device shell, above and under its lines of the tools and of
-# the devices. This file holds ASCII only, so the characters of the wave, of the rule (U+2500)
-# and the diamond (U+25C6) are written as escapes.
-BANNER_TOP = (
-    _wave(_BANNER_BITS),
-    f"\u25c6 {PROG}" + " " * 23 + "device shell",
-    "",
-)
-BANNER_BOTTOM = (
-    "",
-    f"{PROG} list      all devices",
-    f"{PROG} help      example commands",
-    "\u2500" * 54,
-)
 
 
 def _tools_on_path() -> list[tuple[str, str, bool]]:
@@ -89,39 +57,19 @@ def _tools_on_path() -> list[tuple[str, str, bool]]:
     return [tool for tool in UPLOAD_TOOLS if shutil.which(tool[0])]
 
 
-def _tool_lines(found: list[str]) -> list[str]:
-    """The lines of the banner about the upload tools: the ones found, or that one must be installed."""
-    if found:
-        return [f"For {', '.join(found)}."]
-    return [f"No {', '.join(_TOOL_NAMES[:-1])} or {_TOOL_NAMES[-1]} on PATH.",
-            "Install one to make use of the device shell."]
+def _banner_devices(table: dict) -> list[tuple[str, str, str]]:
+    """The devices of the banner for the device table of the server.
 
-
-def _device_lines(table: dict) -> list[str]:
-    """The device lines of the banner for the device table of the server.
-
-    One numbered line for each device that is attached and has no error, the serial devices
-    first: the path of a serial device, the name of a USB device. One line that says so when
-    no device is such a device.
+    `(kind, name, information)` for each device that is attached and has no error, the serial
+    devices first: `COM`, the path, the settings and the profile of a serial device; `USB`,
+    the name, the ids and the product name of a USB device.
     """
-    usable = [f"{record[field]} ({kind})"
-              for group, field, kind in (("serial", "path", "COM"), ("usb", "name", "USB"))
-              for record in table[group] if record["state"] == "attached" and not record["error"]]
-    return [f"({number}) {line}" for number, line in enumerate(usable, 1)] or ["No device is attached."]
-
-
-def _banner(device_lines: list[str], chosen: environments.Environment) -> str:
-    """What `shell` prints on a terminal before it becomes the shell.
-
-    The banner in pale cyan, then the colour reset and an empty line. With the variable
-    NO_COLOR set and not empty: the banner without an escape sequence, then an empty line.
-    An environment other than the current one gets a line with its name above the tool line.
-    """
-    named = [] if chosen.prefix is None else [f"Environment: {chosen.name} ({chosen.scope})"]
-    lines = "\n".join([*BANNER_TOP, *named, *_tool_lines(list(chosen.tools)), *device_lines, *BANNER_BOTTOM])
-    if os.environ.get("NO_COLOR"):
-        return f"{lines}\n\n"
-    return f"\x1b[38;2;159;224;238m{lines}\x1b[0m\n\n"
+    serial = [("COM", record["path"], f"{_settings_text(record['settings'])}  profile {record['profile']}")
+              for record in table["serial"] if record["state"] == "attached" and not record["error"]]
+    usb = [("USB", record["name"],
+            f"{record['vendorId']:04x}:{record['productId']:04x}  {record['productName'] or ''}".rstrip())
+           for record in table["usb"] if record["state"] == "attached" and not record["error"]]
+    return serial + usb
 
 
 def _upload_examples() -> str:
@@ -408,13 +356,14 @@ def _start_with_shim(bridge: DeviceBridgeClient, command: list[str] | None,
     with contextlib.suppress(Exception):
         bridge.call("POST", "runs", run, timeout=RUN_REGISTER_S)
     if device_shell and sys.stdout.isatty():
-        # The devices are read for the banner alone. Without them it has no device line.
-        device_lines = []
+        # The devices are read for the banner alone. Without them it has no Devices section.
+        devices = None
         with contextlib.suppress(Exception):
-            device_lines = _device_lines(bridge.call("GET", "devices", timeout=RUN_REGISTER_S))
+            devices = _banner_devices(bridge.call("GET", "devices", timeout=RUN_REGISTER_S))
+        text = banner.render(chosen, _TOOL_NAMES, devices, shutil.get_terminal_size().columns, banner.palette())
         # As UTF-8 bytes: a text write fails where the locale has no such characters. Flushed,
         # because the shell replaces this process and what it has not written yet.
-        sys.stdout.buffer.write(_banner(device_lines, chosen).encode())
+        sys.stdout.buffer.write(text.encode())
         sys.stdout.flush()
     try:
         os.execvpe(command[0], command, environment)
@@ -623,6 +572,7 @@ keys (the bottom row of the app lists them too):
   F8      ESP bootloader: the action esp-bootloader
   F10     1200 baud touch: the action touch-1200
   Ctrl+C  send 0x03 to the port; it does not quit
+  Ctrl+Y  keys: a list of every key with what it does; Esc or Ctrl+Y closes it
   Enter   send the typed line
 
 The baud rate is the profile's unless --baud is given. The command refuses, with
@@ -806,6 +756,26 @@ def build_parser() -> argparse.ArgumentParser:
 Every command has its own --help with examples: `{PROG} monitor read --help`,
 and `{PROG} help monitor read` prints the same.
 
+quick start, from a board plugged into the user's computer to its output:
+  1. The user attaches the board in the panel of the lab named above: the plus
+     icon, Connect Serial Port, then the board in Chrome's dialog. A program cannot
+     do this; it asks the user with `{PROG} request serial --reason TEXT`.
+  2. {PROG} list
+     The line of the board holds its name and its path, for example
+     tty-2341-0043 and /run/devices/tty-2341-0043.
+  3. {PROG} profile tty-2341-0043 arduino-upload
+  4. {PROG} run -- pio run -t upload --upload-port /run/devices/tty-2341-0043
+     A tool that sets DTR, RTS or parity itself runs under `run --`.
+  5. {PROG} monitor read tty-2341-0043 --lines 20
+
+agent skill:
+  {banner.SKILL} tells an agent how to use this command. The wheel
+  installs it at {banner.skill_folder() / "SKILL.md"}
+  An agent reads it once its folder is linked into the skills folder of the
+  agent, for example:
+    mkdir -p ~/.agents/skills && ln -s {banner.skill_folder()} ~/.agents/skills/{banner.SKILL}
+    mkdir -p ~/.claude/skills && ln -s {banner.skill_folder()} ~/.claude/skills/{banner.SKILL}
+
 exit status:
   0  done
   1  not done; one line on stderr names the reason and the next step
@@ -967,11 +937,13 @@ environments: Enter starts the shell in the highlighted one, Esc keeps the
 current one. The shell then has that environment's bin first on PATH and the
 variables its activation sets.
 
-When standard output is a terminal the command first prints a banner: the
-environment chosen in the list, the upload tools of the environment, the
-attached devices and two commands. In the current environment the tools are
-those on PATH and in the tool folders of pipx and uv. With a pipe or a file as
-standard output it prints nothing of its own.
+When standard output is a terminal the command first prints a banner for the
+person: the words DEVICE BRIDGE in block letters, the environment chosen in the
+list with its upload tools, the attached devices, where the agent skill is and
+whether an agent finds it, and five commands. In the current environment the
+tools are those on PATH and in the tool folders of pipx and uv. The banner is
+75% of the terminal's width. With a pipe or a file as standard output it prints
+nothing of its own.
 
 Exit status: the status of the shell; 127 when the shell command cannot be
 started; 1 without a C compiler for the library, or when the server does not

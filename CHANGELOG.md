@@ -2,6 +2,22 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.5] - 2026-10-17
+
+The device shell opens with a larger banner, and the help texts of the command line, the serial terminal and the environment selector say more. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Added
+
+- Banner of `jupyterlab-device shell`: DEVICE BRIDGE in block letters, at 75% of the terminal's width, on one row from 91 columns and on two rows below that. Sections Environment, Devices, Agent skill and Commands follow it. Device names and their information have colours of their own, in the dark or light theme of the terminal; with `NO_COLOR` set, the banner has no colour
+- The Agent skill section of the banner says where the wheel installed the skill and whether `~/.agents/skills` or `~/.claude/skills` links or lists it
+- `jupyterlab-device --help` has a quick start from an attached board to its output, and a section on the agent skill with the two commands that link it
+- Ctrl+Y in the serial terminal opens a list of every key with what it does; Esc or Ctrl+Y closes it
+- The environment selector of the device shell says what the choice changes
+
+### Changed
+
+- The installer `firmware-avr.py` in `resources/envs/` also installs simavr and pytest, as its original does
+
 ## [1.0.3] - 2026-10-16
 
 The version number moves from 0.6.30 to 1.0.3. The code, the settings and the dependencies are those of 0.6.30. The extension is tested against simulated devices in the browser; no test used a physical board.
