@@ -17,6 +17,7 @@ import urllib.request
 
 import pytest
 
+from jupyterlab_device_bridge_extension import client as client_module
 from jupyterlab_device_bridge_extension.client import NAMESPACE, DeviceBridgeClient, DeviceBridgeError
 from jupyterlab_device_bridge_extension.tests.fake_tab import (
     DEVICE_DESCRIPTOR,
@@ -31,18 +32,23 @@ REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
 # What discovery reads besides the server list. This workstation's own lab sets the
 # hub tokens; a test starts without any of them.
 DISCOVERY_VARIABLES = ("JUPYTERHUB_API_TOKEN", "JPY_API_TOKEN", "JUPYTER_TOKEN", "JUPYTER_PORT",
-                       "JUPYTERHUB_SERVICE_PREFIX")
+                       "JUPYTERHUB_SERVICE_PREFIX", "JUPYTERHUB_SERVICE_URL")
 NO_DEVICES = {"serial": [], "usb": []}
 # A program that finds the server and prints its device table.
 PRINT_DEVICES = ("from jupyterlab_device_bridge_extension.client import DeviceBridgeClient; "
                  "print(DeviceBridgeClient().devices())")
 
 
+def list_servers(directory, records):
+    """Put a `jupyter` in `directory` whose `server list --json` prints these records."""
+    script = directory / "jupyter"
+    script.write_text("#!/bin/sh\n" + "".join(f"echo '{json.dumps(record)}'\n" for record in records))
+    script.chmod(0o755)
+
+
 def list_server(directory, record):
     """Put a `jupyter` in `directory` whose `server list --json` prints this record, or nothing for None."""
-    script = directory / "jupyter"
-    script.write_text(f"#!/bin/sh\necho '{json.dumps(record) if record else ''}'\n")
-    script.chmod(0o755)
+    list_servers(directory, [record] if record else [])
 
 
 @pytest.fixture
@@ -164,6 +170,162 @@ async def test_acc_cli_83_loopback_without_a_proxy(lab, bridge_address, monkeypa
     out, _ = await asyncio.wait_for(child.communicate(), 30)
 
     assert (child.returncode, out.decode().strip()) == (0, str(NO_DEVICES))
+
+
+DECOY_PORT = 9
+
+
+def two_servers(lab, jp_http_port, jp_base_url, token):
+    """The dead server listed first, the lab's server second, the order that hid the lab's server."""
+    list_servers(lab, [
+        {"port": DECOY_PORT, "base_url": "/decoy/", "token": "decoy"},
+        {"port": jp_http_port, "base_url": jp_base_url, "token": token},
+    ])
+
+
+async def test_acc_cli_200_the_prefix_names_the_labs_server(lab, bridge_address, jp_http_port,
+                                                            jp_base_url, monkeypatch):
+    """ACC-CLI-200 with another server listed first, JUPYTERHUB_SERVICE_PREFIX selects the lab's server."""
+    url, token = bridge_address
+    two_servers(lab, jp_http_port, jp_base_url, token)
+    monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", jp_base_url)
+
+    client, answer = await asyncio.to_thread(discover)
+
+    assert client.base_url == url
+    assert answer == NO_DEVICES
+
+
+async def test_acc_cli_200_one_listed_server_is_unambiguous(lab, bridge_address, monkeypatch):
+    """ACC-CLI-200 with one listed server and no name in the environment, that server is used."""
+    url, token = bridge_address
+
+    client, answer = await asyncio.to_thread(discover)
+
+    assert client.base_url == url
+    assert answer == NO_DEVICES
+
+
+async def test_acc_cli_200_a_prefix_does_not_use_a_record_it_disowns(lab, bridge_address,
+                                                                     jp_http_port, jp_base_url,
+                                                                     monkeypatch):
+    """ACC-CLI-200 with the prefix set and only another server listed, the client falls back to this lab's address."""
+    url, token = bridge_address
+    list_server(lab, {"port": DECOY_PORT, "base_url": "/decoy/", "token": "decoy"})
+    monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", jp_base_url)
+    monkeypatch.setenv("JUPYTERHUB_API_TOKEN", token)
+    monkeypatch.setenv("JUPYTER_PORT", str(jp_http_port))
+
+    client, answer = await asyncio.to_thread(discover)
+
+    assert (client.base_url, client.token) == (url, token)
+    assert answer == NO_DEVICES
+
+
+async def test_acc_cli_200_several_without_a_name_are_refused(lab, bridge_address, jp_http_port,
+                                                              jp_base_url, monkeypatch):
+    """ACC-CLI-200 with several servers listed and no prefix match, the client refuses instead of guessing."""
+    url, token = bridge_address
+    two_servers(lab, jp_http_port, jp_base_url, token)
+    monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", "/user/someone.else/")
+
+    with pytest.raises(DeviceBridgeError) as refused:
+        await asyncio.to_thread(DeviceBridgeClient)
+
+    assert "none is this lab's" in str(refused.value)
+
+
+async def test_acc_cli_231_the_ancestor_record_wins_over_the_listing_order(lab, bridge_address,
+                                                                          jp_http_port, jp_base_url,
+                                                                          monkeypatch):
+    """ACC-CLI-231 the record whose pid is an ancestor is selected though it is listed second and no prefix matches."""
+    url, token = bridge_address
+    list_servers(lab, [
+        {"port": DECOY_PORT, "base_url": "/decoy/", "token": "decoy", "pid": 4001},
+        {"port": jp_http_port, "base_url": jp_base_url, "token": token, "pid": 4002},
+    ])
+    monkeypatch.setattr(client_module, "_ancestor_pids", lambda: {4002})
+
+    found, answer = await asyncio.to_thread(discover)
+
+    assert found.base_url == url
+    assert answer == NO_DEVICES
+
+
+async def test_acc_cli_231_without_an_ancestor_record_the_prefix_rule_decides(lab, bridge_address,
+                                                                              jp_http_port, jp_base_url,
+                                                                              monkeypatch):
+    """ACC-CLI-231 a record whose pid is no ancestor is not selected, and the prefix rule selects the lab's server."""
+    url, token = bridge_address
+    list_servers(lab, [
+        {"port": DECOY_PORT, "base_url": "/decoy/", "token": "decoy", "pid": os.getpid()},
+        {"port": jp_http_port, "base_url": jp_base_url, "token": token},
+    ])
+    monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", jp_base_url)
+
+    found, answer = await asyncio.to_thread(discover)
+
+    assert found.base_url == url
+    assert answer == NO_DEVICES
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="this platform has no /proc")
+def test_acc_cli_231_ancestor_pids_contains_the_parent():
+    """ACC-CLI-231 the parent chain of this process contains its parent."""
+    assert os.getppid() in client_module._ancestor_pids()
+
+
+def failing_server_list(directory, reason, status=1):
+    """Put a `jupyter` in `directory` whose `server list --json` fails with `reason`."""
+    script = directory / "jupyter"
+    script.write_text(f'#!/bin/sh\necho "{reason}" >&2\nexit {status}\n')
+    script.chmod(0o755)
+
+
+def flaky_server_list(directory, record, reason="the server list was interrupted"):
+    """Put a `jupyter` in `directory` whose first call fails and whose next calls list `record`."""
+    calls = directory / "calls"
+    script = directory / "jupyter"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'calls=$(cat "{calls}" 2>/dev/null || echo 0)\n'
+        f'echo $((calls + 1)) > "{calls}"\n'
+        'if [ "$calls" -eq 0 ]; then\n'
+        f'  echo "{reason}" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        f"echo '{json.dumps(record)}'\n"
+    )
+    script.chmod(0o755)
+
+
+async def test_acc_cli_200_a_transient_list_failure_is_tried_again(lab, bridge_address, jp_http_port,
+                                                                   jp_base_url, monkeypatch):
+    """ACC-CLI-200 a `jupyter server list` that fails once before it lists the lab's server still finds that server."""
+    url, token = bridge_address
+    flaky_server_list(lab, {"port": jp_http_port, "base_url": jp_base_url, "token": token})
+    monkeypatch.setenv("JUPYTER_PORT", str(DECOY_PORT))
+
+    client, answer = await asyncio.to_thread(discover)
+
+    assert client.base_url == url
+    assert answer == NO_DEVICES
+
+
+async def test_acc_cli_200_a_failed_list_is_not_a_fallback_address(lab, bridge_address, monkeypatch):
+    """ACC-CLI-200 a `jupyter server list` that keeps failing raises its reason instead of dialling JUPYTER_PORT."""
+    failing_server_list(lab, "ModuleNotFoundError: No module named 'tornado.util'")
+    monkeypatch.setenv("JUPYTER_PORT", str(DECOY_PORT))
+
+    with pytest.raises(DeviceBridgeError) as refused:
+        await asyncio.to_thread(DeviceBridgeClient)
+
+    message = str(refused.value)
+    assert refused.value.status is None
+    assert "jupyter server list --json" in message
+    assert "exited 1" in message
+    assert "No module named 'tornado.util'" in message
+    assert "cannot reach" not in message
 
 
 def every_operation(device):
@@ -306,7 +468,7 @@ async def test_acc_usb_61_a_stalled_transfer_raises_with_the_name_stall(fake_tab
 
 def every_serial_method(port):
     """Call each method of a `SerialDevice` once and return its record and the monitor's answer."""
-    port.set_profile(profile="stm32-bootloader", baudRate=57600)
+    port.set_settings(config="stm32-bootloader", baudRate=57600)
     port.write(bytes(range(256)))
     port.signals(dtr=False, rts=True)
     port.action("pulse-dtr")
@@ -314,7 +476,7 @@ def every_serial_method(port):
 
 
 async def test_acc_mon_43_the_serial_methods_of_the_client_reach_the_port(fake_tab, bridge_address):
-    """ACC-MON-43 the client's write reaches the port, as do its profile, signals and action; monitor returns the port's bytes."""
+    """ACC-MON-43 the client's write reaches the port, as do its settings, signals and action; monitor returns the port's bytes."""
     tab, _ = await attach_serial(fake_tab)
     bridge = DeviceBridgeClient(*bridge_address)
 
@@ -325,8 +487,8 @@ async def test_acc_mon_43_the_serial_methods_of_the_client_reach_the_port(fake_t
     assert tab.settings[SERIAL_NAME] == settings
     assert tab.signals[SERIAL_NAME] == {"dtr": False, "rts": True}
     assert [event["action"] for event in tab.got("serial-action")] == ["pulse-dtr"]
-    assert (record["profile"], record["overrides"], record["settings"]) == (
-        "stm32-bootloader", {"baudRate": 57600}, settings)
+    assert (record["config"], record["configured"]["baudRate"], record["settings"]) == (
+        None, 57600, settings)
     assert record["path"].endswith(f"/{SERIAL_NAME}")
     # The port of the tab double echoes: the monitor holds what was written.
     assert chunk == {"data": bytes(range(256)), "start": 0, "next": 256, "dropped": False}

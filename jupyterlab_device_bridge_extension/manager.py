@@ -19,10 +19,11 @@ import secrets
 import signal
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from tornado.web import HTTPError
 
-from . import profiles, usb
+from . import serial_settings, usb
 from .monitor import MonitorBuffer
 from .shim import ShimSocket
 from .usb import UsbDevice
@@ -111,21 +112,21 @@ class Tab:
 class SerialDevice:
     """One serial port with its virtual serial device, shim socket and monitor buffer.
 
-    The settings of the port are the profile's with the device's overrides. While a
-    tool holds the virtual device the baud rate is the tool's, and the frame format
-    is the tool's own when the shim reported it.
+    The port has one settings record: baud rate, data bits, parity, stop bits and the
+    action on open. While a tool holds the virtual device the baud rate is the tool's,
+    and the frame format is the tool's own when the shim reported it.
     """
 
     def __init__(self, manager: "DeviceManager", name: str, sid: int,
-                 vendor_id: int | None, product_id: int | None, overrides: dict) -> None:
+                 vendor_id: int | None, product_id: int | None, values: dict) -> None:
         self.manager = manager
         self.name = name
         self.sid = sid
         self.vendor_id = vendor_id
         self.product_id = product_id
         self.tab: str | None = None
-        self.profile = profiles.DEFAULT_PROFILE
-        self.overrides = overrides
+        self.values = dict(values)
+        self.config_id: str | None = serial_settings.matching_config_id(values)
         self.holder: dict | None = None
         self.port_state = "closed"
         self.signals: dict = {}
@@ -136,7 +137,7 @@ class SerialDevice:
         self._tool_frame: dict = {}
         self._shim_restart: asyncio.Future | None = None  # held so that the task is not collected
         self.path = os.path.join(manager.device_dir, name)
-        self.pty = VirtualSerial(self.path, self._profile()["baudRate"], self)
+        self.pty = VirtualSerial(self.path, self.values["baudRate"], self)
         self.shim = self._shim_socket()
         self.monitor = MonitorBuffer(manager.monitor_bytes)
         self.settings = self._target()  # what the port was last asked to be open with
@@ -155,18 +156,18 @@ class SerialDevice:
 
     def grant(self) -> dict:
         """The fields of the `claimed` answer for this device."""
-        return {"name": self.name, "sid": self.sid, "settings": self.settings,
-                "profile": self.profile}
+        return {"name": self.name, "sid": self.sid, "settings": self.settings}
 
-    def set_profile(self, change: dict) -> None:
-        """Apply a validated profile change: a profile id replaces the overrides, a field adds one."""
-        change = dict(change)
-        if "profile" in change:
-            self.profile = change.pop("profile")
-            self.overrides = {}
-        self.overrides.update(change)
-        self.pty.set_baud(self._profile()["baudRate"])
+    def set_values(self, values: dict, config_id: str | None) -> None:
+        """Take these five settings; `config_id` names the config they came from, or None."""
+        self.values = dict(values)
+        self.config_id = config_id
+        self.pty.set_baud(self.values["baudRate"])
         self._configure()
+
+    def set_fields(self, change: dict) -> None:
+        """Change single fields; the port is custom after this."""
+        self.set_values({**self.values, **change}, None)
 
     def port_reported(self, message: dict) -> None:
         """Take the tab's `serial-state`."""
@@ -188,7 +189,7 @@ class SerialDevice:
             ensure_dir(self.manager.shim_dir)
             await self.shim.start()
         except OSError as error:
-            # The port works with its profile alone; only `jupyterlab-device run` needs the socket.
+            # The port works with its settings alone; only `jupyterlab-device run` needs the socket.
             self.manager.log.error("device-bridge: no shim socket for %s: %s", self.name, error)
 
     def close(self) -> None:
@@ -201,7 +202,8 @@ class SerialDevice:
         return {
             "name": self.name, "path": self.path, "state": "attached" if self.tab else "detached",
             "portState": self.port_state, "tab": self.tab, "holder": self.holder,
-            "settings": self.settings, "profile": self.profile, "overrides": self.overrides,
+            "settings": self.settings, "configured": dict(self.values),
+            "config": self.config_id, "configName": self.manager.config_name(self.config_id),
             "signals": self.signals, "rx": self.rx, "tx": self.tx,
             "vendorId": self.vendor_id, "productId": self.product_id, "error": self.error,
         }
@@ -209,11 +211,11 @@ class SerialDevice:
     # ------------------------------------------------- the tool on the virtual device
 
     def tool_opened(self, holder: dict | None, baud: int) -> None:
-        """A tool opened the device: the profile's settings at the tool's baud, then the action."""
+        """A tool opened the device: the port's settings at the tool's baud, then the action."""
         self.holder = holder
         self._tool_baud = baud
         self._configure()
-        action = self._profile()["onOpen"]
+        action = self.values["onOpen"]
         if action != "none" and self.tab:
             self.manager.post(self, {"type": "serial-action", "action": action})
         self.manager.devices_changed()
@@ -229,7 +231,7 @@ class SerialDevice:
         self.manager.send_data(self, chunk)
 
     def tool_closed(self) -> None:
-        """The tool closed the device: back to the profile's own settings."""
+        """The tool closed the device: back to the port's own settings."""
         self.holder = None
         self._tool_frame = {}
         self._configure()
@@ -249,7 +251,7 @@ class SerialDevice:
         if kind == "frame":
             if self.pty.held:
                 # Web Serial opens a port with 7 or 8 data bits and 1 or 2 stop bits; a
-                # value outside that stays the profile's.
+                # value outside that stays the port's.
                 self._tool_frame = {"parity": values["parity"]}
                 if values["dataBits"] in (7, 8):
                     self._tool_frame["dataBits"] = values["dataBits"]
@@ -268,13 +270,9 @@ class SerialDevice:
     def _shim_socket(self) -> ShimSocket:
         return ShimSocket(self.manager.shim_dir, self.pty.minor, self._shim_event)
 
-    def _profile(self) -> dict:
-        return profiles.resolve(self.profile, self.overrides)
-
     def _target(self) -> dict:
         """The settings the port must be open with now."""
-        profile = self._profile()
-        settings = {field: profile[field] for field in profiles.SETTING_FIELDS}
+        settings = {field: self.values[field] for field in serial_settings.SETTING_FIELDS}
         if self.pty.held:
             settings.update(self._tool_frame, baudRate=self._tool_baud)
         return settings
@@ -304,13 +302,22 @@ class DeviceManager:
             exists, else at that first claim.
         monitor_bytes: Size of the monitor buffer of each serial port.
         log: The server's logger.
+        settings_path: File of the user-saved serial settings; the Jupyter data
+            directory when omitted.
     """
 
-    def __init__(self, device_dir: str, monitor_bytes: int, log: logging.Logger) -> None:
+    def __init__(self, device_dir: str, monitor_bytes: int, log: logging.Logger,
+                 settings_path: str | None = None) -> None:
         self.device_dir = device_dir
         self.shim_dir = os.path.join(device_dir, ".shim")
         self.monitor_bytes = monitor_bytes
         self.log = log
+        self.settings_path = Path(settings_path) if settings_path else serial_settings.settings_file()
+        self.saved_configs: list[dict] = []
+        try:
+            self.saved_configs = serial_settings.load_saved(self.settings_path)
+        except (OSError, serial_settings.SettingsError) as error:
+            log.error("device-bridge: the saved serial settings are not read: %s", error)
         self.command_timeout = COMMAND_TIMEOUT_S  # seconds a tab has to ack a command
         self.run_watch_interval = RUN_WATCH_S  # seconds between two looks at the processes of the runs
         self.run_kill_delay = RUN_KILL_S  # seconds a stopped run has to end before it gets SIGKILL
@@ -346,7 +353,7 @@ class DeviceManager:
             # The tab reconnected before its old socket closed.
             self.disconnect(self.tabs[tab_id])
         tab = self.tabs[tab_id] = Tab(tab_id, bool(serial), bool(usb), send)
-        tab.send({"type": "welcome", "tabId": tab_id, "profiles": profiles.PROFILES,
+        tab.send({"type": "welcome", "tabId": tab_id, "configs": self.configs(),
                   "deviceDir": self.device_dir})
         tab.send({"type": "devices", **self.table()})
         tab.send(self._requests_message())
@@ -452,10 +459,10 @@ class DeviceManager:
         match = kind in KINDS and isinstance(key, str) and _KEY_RES[kind].fullmatch(key)
         if not match:
             raise ValueError(f"it is not the key of a {kind} device")
-        overrides = {}
+        values = dict(serial_settings.DEFAULT_SETTINGS)
         if kind == "serial" and self._names.get(key) not in self.serial:
             # Checked before the key gets a name and before anything is made for the port.
-            overrides = profiles.default_overrides(defaults)
+            values = serial_settings.default_values(defaults)
         vendor, product = match["vendor"], match["product"]
         name = self._name(key, f"{_NAME_PREFIXES[kind]}-{vendor}-{product}" if vendor else "tty-port")
         ids = (int(vendor, 16), int(product, 16)) if vendor else (None, None)
@@ -470,7 +477,7 @@ class DeviceManager:
             return self.usb[name]
         if name not in self.serial:
             self._take_dir()
-            device = self.serial[name] = SerialDevice(self, name, next(self._sids), *ids, overrides)
+            device = self.serial[name] = SerialDevice(self, name, next(self._sids), *ids, values)
             self._by_sid[device.sid] = device
             await device.start_shim()
         return self.serial[name]
@@ -621,15 +628,93 @@ class DeviceManager:
             raise BridgeError(404, "unknown-device", f"no {kind} device named {name}")
         return table[name]
 
-    def set_profile(self, name: str, change: dict) -> dict:
-        """Set the profile id or single fields of a serial device; returns its record."""
+    def set_settings(self, name: str, change: dict) -> dict:
+        """Apply a saved config or single fields to a serial device; returns its record."""
         device = self.serial_device(name)
+        change = dict(change)
+        config_id = change.pop("config", None)
         try:
-            device.set_profile(profiles.validate_change(change))
-        except profiles.ProfileError as error:
-            raise BridgeError(400, "bad-profile", str(error)) from None
+            change = serial_settings.validate_change(change)
+        except serial_settings.SettingsError as error:
+            raise BridgeError(400, "bad-settings", str(error)) from None
+        saved = self.config_record(config_id) if config_id is not None else None
+        if saved is not None:
+            device.set_values({field: saved[field] for field in serial_settings.ALL_FIELDS},
+                              saved["id"])
+        if change:
+            device.set_fields(change)
         self.devices_changed()
         return device.record()
+
+    def configs(self) -> list[dict]:
+        """The system configs first, then the user-saved configs."""
+        return [dict(item) for item in serial_settings.SYSTEM_CONFIGS] + [
+            dict(item) for item in self.saved_configs]
+
+    def config_record(self, token: str) -> dict:
+        """The config with this id or name, a system config or a saved one.
+
+        Raises:
+            BridgeError: 404 for an unknown config.
+        """
+        for item in self.configs():
+            if token in (item["id"], item["name"]) or serial_settings.same_name(
+                    token, item["name"]):
+                return item
+        raise BridgeError(404, "unknown-config", f"no serial settings config named {token}")
+
+    def config_name(self, config_id: str | None) -> str | None:
+        """The name of a config, or None for a config that is not there or for no config."""
+        if config_id is None:
+            return None
+        for item in self.configs():
+            if item["id"] == config_id:
+                return item["name"]
+        return None
+
+    def save_config(self, name: object, change: dict) -> dict:
+        """Save these settings under a user name; returns the config.
+
+        Raises:
+            BridgeError: 400 for a bad name or value, 409 for a name that is taken.
+        """
+        try:
+            text = serial_settings.validate_name(name)
+            values = serial_settings.validate_change(change)
+        except serial_settings.SettingsError as error:
+            raise BridgeError(400, "bad-settings", str(error)) from None
+        if any(serial_settings.same_name(text, item["id"]) or serial_settings.same_name(
+                text, item["name"]) for item in self.configs()):
+            raise BridgeError(409, "name-taken",
+                              f"{text}: a serial settings config has this name or id")
+        saved = {"id": serial_settings.new_id(), "name": text, "system": False, **values}
+        self.saved_configs.append(saved)
+        try:
+            serial_settings.save_saved(self.settings_path, self.saved_configs)
+        except OSError as error:
+            self.saved_configs.remove(saved)
+            raise BridgeError(500, "settings-not-saved", f"{self.settings_path}: {error}") from None
+        return dict(saved)
+
+    def delete_config(self, token: str) -> None:
+        """Delete a user-saved config; a system config is refused.
+
+        Raises:
+            BridgeError: 404 for an unknown config, 409 for a system config.
+        """
+        saved = self.config_record(token)
+        if saved["system"]:
+            raise BridgeError(409, "system-config", f"{saved['name']} is a system config")
+        self.saved_configs = [item for item in self.saved_configs if item["id"] != saved["id"]]
+        for device in self.serial.values():
+            if device.config_id == saved["id"]:
+                device.config_id = None
+        try:
+            serial_settings.save_saved(self.settings_path, self.saved_configs)
+        except OSError as error:
+            self.saved_configs.append(saved)
+            raise BridgeError(500, "settings-not-saved", f"{self.settings_path}: {error}") from None
+        self.devices_changed()
 
     async def serial_write(self, name: str, body: dict) -> None:
         """Write `{data}` (base64) to the port."""
@@ -656,9 +741,9 @@ class DeviceManager:
         """Run the action of `{action}` on the port."""
         device = self.serial_device(name)
         action = body.get("action")
-        if action not in profiles.ACTIONS:
+        if action not in serial_settings.ACTIONS:
             raise BridgeError(400, "bad-request",
-                              f"action: {action!r} is not one of {', '.join(profiles.ACTIONS)}")
+                              f"action: {action!r} is not one of {', '.join(serial_settings.ACTIONS)}")
         await self.command(device, {"type": "serial-action", "action": action})
 
     async def usb_operation(self, name: str, op: str, body: dict) -> dict:

@@ -196,7 +196,7 @@ describe('DeviceBridgeModel: what it reports', () => {
     expect(plain.model.tabId).toBe('tab-1');
   });
 
-  it('ACC-PANEL-71 the tab id, the profiles and the device table arrive from the server, each with its signal', async () => {
+  it('ACC-PANEL-71 the tab id, the serial settings configs and the device table arrive from the server, each with its signal', async () => {
     const { model } = lab({ ports: [new SimSerialPort(UNO)] });
     const tabIds = emitted(model.tabIdChanged);
     const tables = emitted(model.devicesChanged);
@@ -207,7 +207,13 @@ describe('DeviceBridgeModel: what it reports', () => {
 
     expect(model.tabId).toBe('tab-1');
     expect(tabIds).toEqual(['tab-1']);
-    expect(model.profiles.map(profile => profile.id)).toEqual(['monitor']);
+    expect(model.configs.map(config => config.id)).toEqual([
+      'monitor',
+      'arduino-upload',
+      'arduino-isp',
+      'stm32-bootloader',
+      'esp-upload'
+    ]);
     expect(model.devices.serial).toEqual([
       expect.objectContaining({
         name: UNO_NAME,
@@ -560,8 +566,15 @@ describe('DeviceBridgeModel: attach, detach, forget, profile', () => {
       tab: 'tab-2',
       holder: null,
       settings: { baudRate: 115200, dataBits: 8, parity: 'none', stopBits: 1 },
-      profile: 'monitor',
-      overrides: {},
+      configured: {
+        baudRate: 115200,
+        dataBits: 8,
+        parity: 'none',
+        stopBits: 1,
+        onOpen: 'none'
+      },
+      config: null,
+      configName: null,
       signals: {},
       rx: 0,
       tx: 0,
@@ -669,8 +682,15 @@ describe('DeviceBridgeModel: attach, detach, forget, profile', () => {
       tab: 'tab-2',
       holder: null,
       settings: { baudRate: 115200, dataBits: 8, parity: 'none', stopBits: 1 },
-      profile: 'monitor',
-      overrides: {},
+      configured: {
+        baudRate: 115200,
+        dataBits: 8,
+        parity: 'none',
+        stopBits: 1,
+        onOpen: 'none'
+      },
+      config: null,
+      configName: null,
       signals: {},
       rx: 0,
       tx: 0,
@@ -697,28 +717,28 @@ describe('DeviceBridgeModel: attach, detach, forget, profile', () => {
     expect(model.hasGrant(serialTwin.name)).toBe(false);
   });
 
-  it('ACC-PROF-23 setProfile sends the change with PUT to serial/<name>/profile, and a refusal rejects with the message of the server', async () => {
+  it('ACC-PROF-204 setSettings sends the change with PUT to serial/<name>/settings, and a refusal rejects with the message of the server', async () => {
     const { model, fetch } = await connectedLab();
-    const change = { profile: 'stm32-bootloader', parity: 'even' } as const;
+    const change = { config: 'stm32-bootloader', parity: 'even' } as const;
 
-    await model.setProfile(UNO_NAME, change);
+    await model.setSettings(UNO_NAME, change);
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [request] = fetch.mock.calls[0] as unknown as [Request];
     expect(request.method).toBe('PUT');
     // The lab adds a query to a request that must not come from a cache.
     expect(request.url.split('?')[0]).toBe(
-      `http://lab.test/jupyterlab-device-bridge-extension/serial/${UNO_NAME}/profile`
+      `http://lab.test/jupyterlab-device-bridge-extension/serial/${UNO_NAME}/settings`
     );
     expect(JSON.parse(await request.text())).toEqual(change);
 
-    const refusal = { error: { code: 400, message: 'Unknown profile nope' } };
+    const refusal = { error: { code: 400, message: 'Unknown setting nope' } };
     fetch.mockResolvedValueOnce(
       new Response(JSON.stringify(refusal), { status: 400 })
     );
     await expect(
-      model.setProfile(UNO_NAME, { profile: 'nope' })
-    ).rejects.toThrow('Unknown profile nope');
+      model.setSettings(UNO_NAME, { parity: 'none' })
+    ).rejects.toThrow('Unknown setting nope');
   });
 });
 

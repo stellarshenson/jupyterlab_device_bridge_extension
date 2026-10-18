@@ -397,7 +397,7 @@ export interface ILampEvent {
 
 /**
  * Record in the page every change of a lamp of the Devices panel from off to lit and
- * back, from the start of each document. The lab lights a lamp for 80 ms from each
+ * back, from the start of each document. The lab lights a lamp for 200 ms from each
  * event, and a test that looks at the lamp now and then misses that time. An event
  * that comes while the lamp is lit keeps it lit and is no change. Call it before the
  * page loads the lab; with a browser context it records in every page of the context.

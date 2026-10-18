@@ -16,10 +16,12 @@ if importlib.util.find_spec("rich") is None:  # silent under uv; reached by a pl
 
 import collections
 import functools
+import hashlib
 import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -220,13 +222,16 @@ class Env:
         env.update({k: v.format(prefix=self.prefix) for k, v in self.variables.items()})
         return env
 
-    def run(self, *cmd, cwd: Path | None = None) -> None:
-        """Run a command. Its output goes to the log file, and its last line shows under the stage list."""
+    def run(self, *cmd, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        """Run a command. Its output goes to the log file, and its last line shows under the stage list.
+
+        env - the process environment; the activated environment by default
+        """
         cmd = [str(c) for c in cmd]
         self.ui.working()
         self.log.write(f"\n$ {' '.join(cmd)}\n")
         with subprocess.Popen(
-            cmd, cwd=cwd, env=self.environ(), text=True, errors="replace",
+            cmd, cwd=cwd, env=env or self.environ(), text=True, errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         ) as process:
             for line in process.stdout:
@@ -281,19 +286,20 @@ class Env:
         )
         self.link(self.prefix / "cargo/bin")
 
-    def platformio(self, version: str, platform: str, board: str, *tools: str) -> None:
+    def platformio(self, version: str, platform: str, board: str, *tools: str, framework: str = "arduino") -> None:
         """Install PlatformIO into the environment's Python, then the platform with the toolchain and
-        the Arduino core for the board into PLATFORMIO_CORE_DIR. `pio pkg install` resolves the
+        the framework for the board into PLATFORMIO_CORE_DIR. `pio pkg install` resolves the
         packages a build needs only inside a project, so a temporary project names the board.
 
-        tools - optional packages of the platform that a build does not install, such as an
-                uploader; each is installed at the version the platform requires
+        framework - the framework the temporary project names, arduino by default
+        tools     - optional packages of the platform that a build does not install, such as an
+                    uploader; each is installed at the version the platform requires
         """
         self.run(self.prefix / "bin/python", "-m", "pip", "install", f"platformio=={version}")
         project = self.tmp / "project"
-        project.mkdir()
+        project.mkdir(exist_ok=True)
         (project / "platformio.ini").write_text(
-            f"[env:{board}]\nplatform = {platform}\nboard = {board}\nframework = arduino\n"
+            f"[env:{board}]\nplatform = {platform}\nboard = {board}\nframework = {framework}\n"
         )
         self.run("pio", "pkg", "install", cwd=project)
         core = Path(self.environ()["PLATFORMIO_CORE_DIR"])
@@ -309,6 +315,57 @@ class Env:
             link = self.prefix / "bin" / program.name
             link.unlink(missing_ok=True)
             link.symlink_to(os.path.relpath(program, link.parent))
+
+    def circuit_simulator(self) -> None:
+        """ngspice, the batch simulator that runs the ltspice component's circuit netlist."""
+        self.run(
+            CONDA, "install", "--yes", "--override-channels", "--channel", "conda-forge",
+            "--prefix", self.prefix, "ngspice=41",
+        )
+
+    def qemu_system(self, version: str, url: str, sha256: str, target: str, machine: str) -> None:
+        """Build and install a minimal QEMU system emulator from pinned sources.
+
+        version - the upstream release, e.g. 11.1.2
+        url     - the source tarball; its sha256 must equal the pinned digest
+        target  - the QEMU target list, e.g. arm-softmmu
+        machine - the machine the simulator tier needs; the stage fails when the build lacks it
+
+        The build dependencies stay in the environment: removing them after the build is the
+        fragile step, and they are small next to the compiler the environment already carries.
+        The rpath points at the environment's lib folder, so the binary runs from the environment
+        on any machine without LD_LIBRARY_PATH.
+        """
+        self.run(
+            CONDA, "install", "--yes", "--override-channels", "--channel", "conda-forge",
+            "--prefix", self.prefix, "glib", "pixman", "zlib", "meson", "ninja", "pkg-config",
+        )
+        (archive,) = self.fetch(url)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != sha256:
+            raise RuntimeError(f"{url}: sha256 {digest} does not match the pinned {sha256}")
+        shutil.unpack_archive(archive, self.tmp, filter="fully_trusted")
+        source = self.tmp / f"qemu-{version}"
+        environment = dict(self.environ(), PKG_CONFIG_PATH=f"{self.prefix}/lib/pkgconfig")
+        compiler = self.prefix / "bin" / "x86_64-conda-linux-gnu-cc"
+        self.run(
+            source / "configure",
+            f"--prefix={self.prefix}", f"--target-list={target}",
+            "--without-default-features", "--disable-docs", "--disable-tools",
+            "--disable-guest-agent", "--disable-slirp", "--disable-gcrypt",
+            "--disable-nettle", "--disable-libssh", "--disable-curl",
+            f"--cc={compiler}", f"--extra-ldflags=-Wl,-rpath,{self.prefix}/lib",
+            cwd=source, env=environment,
+        )
+        jobs = str(os.cpu_count() or 1)
+        self.run("ninja", "-C", "build", f"-j{jobs}", cwd=source, env=environment)
+        self.run("ninja", "-C", "build", "install", cwd=source, env=environment)
+        binary = self.prefix / "bin" / f"qemu-system-{target.split('-')[0]}"
+        machines = subprocess.run(
+            [binary, "-machine", "help"], capture_output=True, text=True, env=self.environ()
+        ).stdout
+        if machine not in machines:
+            raise RuntimeError(f"{binary.name} has no {machine} machine")
 
 
 def install(

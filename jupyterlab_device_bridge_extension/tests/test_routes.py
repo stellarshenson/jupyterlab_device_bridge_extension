@@ -12,7 +12,7 @@ import tornado.web
 import tornado.websocket
 
 from jupyterlab_device_bridge_extension import __version__, manager as manager_module
-from jupyterlab_device_bridge_extension.profiles import PROFILES
+from jupyterlab_device_bridge_extension import serial_settings
 from jupyterlab_device_bridge_extension.routes import NAMESPACE, BridgeHandler
 from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_NAME, USB_NAME
 
@@ -20,8 +20,10 @@ from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_NAME, USB_N
 ROUTES = [
     ("StatusHandler", "GET", "status"),
     ("DevicesHandler", "GET", "devices"),
-    ("ProfilesHandler", "GET", "profiles"),
-    ("SerialProfileHandler", "PUT", f"serial/{SERIAL_NAME}/profile"),
+    ("SettingsConfigsHandler", "GET", "settings-configs"),
+    ("SettingsConfigsHandler", "POST", "settings-configs"),
+    ("SettingsConfigHandler", "DELETE", "settings-configs/config-0123abcd"),
+    ("SerialSettingsHandler", "PUT", f"serial/{SERIAL_NAME}/settings"),
     ("SerialMonitorHandler", "GET", f"serial/{SERIAL_NAME}/monitor"),
     ("SerialCommandHandler", "POST", f"serial/{SERIAL_NAME}/write"),
     ("SerialCommandHandler", "POST", f"serial/{SERIAL_NAME}/signals"),
@@ -38,7 +40,7 @@ ROUTES = [
 ]
 # Paths that take a device name, with the place of the name left open.
 NAMED = [
-    ("PUT", "serial/{}/profile"),
+    ("PUT", "serial/{}/settings"),
     ("GET", "serial/{}/monitor"),
     ("POST", "serial/{}/write"),
     ("POST", "serial/{}/signals"),
@@ -190,7 +192,7 @@ async def test_acc_sec_96_an_unknown_name_inside_the_pattern_is_404(api, fake_ta
     assert (await api("GET", "usb", SERIAL_NAME))[0] == 404, "a serial device is no USB device"
 
 
-# -------------------------------------------------------------- status, table, profiles
+# ------------------------------------------------------- status, table, settings configs
 
 
 async def test_acc_serial_15_status_lists_tabs_round_trip_directories_and_counts(
@@ -268,13 +270,14 @@ async def test_acc_shim_143_status_has_the_variable_shell_where_the_server_has_n
     assert with_empty_variable[1]["shell"] == without_variable[1]["shell"] == ["/bin/sh"]
 
 
-async def test_acc_prof_22_the_profiles_route_lists_the_built_in_profiles(api, fake_tab):
-    """ACC-PROF-22 `GET profiles` and the tab's welcome carry the five built-in profiles."""
-    status, document = await api("GET", "profiles")
+async def test_acc_prof_206_the_settings_configs_route_lists_the_system_configs(api, fake_tab):
+    """ACC-PROF-206 `GET settings-configs` and the tab's welcome carry the six system configs first."""
+    status, document = await api("GET", "settings-configs")
 
-    assert (status, document) == (200, {"profiles": PROFILES})
-    assert len(document["profiles"]) == 5
-    assert (await fake_tab()).welcome["profiles"] == PROFILES
+    assert (status, document) == (200, {"configs": serial_settings.SYSTEM_CONFIGS})
+    assert [item["id"] for item in document["configs"][:6]] == [
+        "default", "monitor", "arduino-upload", "arduino-isp", "stm32-bootloader", "esp-upload"]
+    assert (await fake_tab()).welcome["configs"] == serial_settings.SYSTEM_CONFIGS
 
 
 async def test_acc_serial_3_the_device_table_has_every_field_of_the_design(api, fake_tab, device_dir):
@@ -291,7 +294,9 @@ async def test_acc_serial_3_the_device_table_has_every_field_of_the_design(api, 
         "name": SERIAL_NAME, "path": os.path.join(device_dir, SERIAL_NAME), "state": "attached",
         "portState": "open", "tab": "tab-1", "holder": None,
         "settings": {"baudRate": 115200, "dataBits": 8, "parity": "none", "stopBits": 1},
-        "profile": "monitor", "overrides": {}, "signals": {}, "rx": 0, "tx": 0,
+        "configured": {"baudRate": 115200, "dataBits": 8, "parity": "none", "stopBits": 1,
+                       "onOpen": "none"},
+        "config": "default", "configName": "Default", "signals": {}, "rx": 0, "tx": 0,
         "vendorId": 0x2341, "productId": 0x0043, "error": None}]
     assert table["usb"] == [{
         "name": USB_NAME, "state": "attached", "tab": "tab-1", "vendorId": 0xCAFE, "productId": 0x4001,
@@ -301,73 +306,87 @@ async def test_acc_serial_3_the_device_table_has_every_field_of_the_design(api, 
         "serial": tab.devices["serial"], "usb": tab.devices["usb"]}
 
 
-# ---------------------------------------------------------------------------- profiles
+# -------------------------------------------------------------------- serial settings
 
 
-async def test_acc_prof_23_a_profile_change_reaches_the_record_and_the_port(api, fake_tab):
-    """ACC-PROF-23 a profile set through the route is in the device record and the port is reopened with its settings."""
+async def test_acc_prof_204_a_config_reaches_the_record_and_the_port(api, fake_tab):
+    """ACC-PROF-204 a config applied through the route is in the device record and the port is reopened with its settings."""
     tab = await attach(fake_tab)
 
-    status, changed = await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": "stm32-bootloader"})
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings",
+                                body={"config": "stm32-bootloader"})
 
-    assert (status, changed["profile"], changed["overrides"]) == (200, "stm32-bootloader", {})
+    assert (status, changed["config"], changed["configName"]) == (200, "stm32-bootloader", "STM32 bootloader")
+    assert changed["configured"] == {
+        "baudRate": 115200, "dataBits": 8, "parity": "even", "stopBits": 1, "onOpen": "none"}
     assert changed["settings"] == {"baudRate": 115200, "dataBits": 8, "parity": "even", "stopBits": 1}
     await tab.until(lambda: tab.got("serial-configure"))
     assert tab.got("serial-configure")[-1]["settings"] == changed["settings"]
-    await tab.until(lambda: record(tab)["profile"] == "stm32-bootloader")
+    await tab.until(lambda: record(tab)["config"] == "stm32-bootloader")
 
 
-async def test_acc_prof_24_single_fields_override_the_profile(api, fake_tab):
-    """ACC-PROF-24 single fields override the profile, a profile id clears the overrides, and both work on a detached device."""
+async def test_acc_prof_204_single_fields_make_the_port_custom(api, fake_tab):
+    """ACC-PROF-204 single fields change the port and make it custom, a config applied later names the config again, and both work on a detached device."""
     tab = await attach(fake_tab)
 
-    status, changed = await api("PUT", "serial", SERIAL_NAME, "profile",
-                                body={"profile": "arduino-upload", "baudRate": 57600})
-    assert (changed["profile"], changed["overrides"]) == ("arduino-upload", {"baudRate": 57600})
-    status, changed = await api("PUT", "serial", SERIAL_NAME, "profile",
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings",
+                                body={"config": "arduino-upload", "baudRate": 57600})
+    assert (changed["config"], changed["configured"]["baudRate"]) == (None, 57600)
+    assert changed["configured"]["onOpen"] == "pulse-dtr"
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings",
                                 body={"parity": "odd", "dataBits": 7, "stopBits": 2, "onOpen": "none"})
-    assert changed["overrides"] == {"baudRate": 57600, "parity": "odd", "dataBits": 7, "stopBits": 2,
-                                    "onOpen": "none"}
+    assert changed["configured"] == {
+        "baudRate": 57600, "dataBits": 7, "parity": "odd", "stopBits": 2, "onOpen": "none"}
     assert changed["settings"] == {"baudRate": 57600, "dataBits": 7, "parity": "odd", "stopBits": 2}
     await tab.until(lambda: tab.settings[SERIAL_NAME] == changed["settings"])
 
     await tab.release(SERIAL_NAME)
     await tab.until(lambda: record(tab)["state"] == "detached")
-    status, changed = await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": "arduino-isp"})
-    assert (status, changed["overrides"], changed["settings"]["baudRate"]) == (200, {}, 19200)
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings",
+                                body={"config": "arduino-isp"})
+    assert (status, changed["config"], changed["settings"]["baudRate"]) == (200, "arduino-isp", 19200)
     claimed = await tab.claim_serial()
-    assert (claimed["profile"], claimed["settings"]) == ("arduino-isp", changed["settings"])
+    assert (claimed["settings"], record(tab)["configName"]) == (changed["settings"], "Arduino as ISP")
 
 
 @pytest.mark.parametrize("body, field", [
-    ({"profile": "arduino"}, "profile"),
     ({"onOpen": "pulse-cts"}, "onOpen"),
     ({"parity": "mark"}, "parity"),
     ({"dataBits": 9}, "dataBits"),
     ({"stopBits": 3}, "stopBits"),
     ({"baudRate": 0}, "baudRate"),
     ({"baudRate": "fast"}, "baudRate"),
-    ({"profile": "esp-upload", "parity": "space"}, "parity"),
+    ({"config": "esp-upload", "parity": "space"}, "parity"),
     ({"speed": 9600}, "speed"),
 ])
-async def test_acc_prof_32_invalid_profile_input_is_400_and_names_the_field(body, field, api, fake_tab):
-    """ACC-PROF-32 an unknown profile id, action, parity or bit count is refused with status 400 and a message naming the field."""
+async def test_acc_prof_32_invalid_settings_input_is_400_and_names_the_field(body, field, api, fake_tab):
+    """ACC-PROF-32 an action, parity or bit count outside its choices is refused with status 400 and a message naming the field."""
     tab = await attach(fake_tab)
     before = record(tab)
 
-    status, document = await api("PUT", "serial", SERIAL_NAME, "profile", body=body)
+    status, document = await api("PUT", "serial", SERIAL_NAME, "settings", body=body)
 
-    assert (status, document["error"]["code"]) == (400, "bad-profile")
+    assert (status, document["error"]["code"]) == (400, "bad-settings")
     assert document["error"]["message"].startswith(f"{field}: ")
     assert (await api("GET", "devices"))[1]["serial"] == [before], "a refused change changed the device"
     assert tab.got("serial-configure") == []
+
+
+async def test_acc_prof_204_an_unknown_config_is_404(api, fake_tab):
+    """ACC-PROF-204 a config that is not in the list is refused with status 404 and changes nothing."""
+    await attach(fake_tab)
+
+    status, document = await api("PUT", "serial", SERIAL_NAME, "settings",
+                                 body={"config": "no-such-config"})
+
+    assert (status, document["error"]["code"]) == (404, "unknown-config")
 
 
 async def test_acc_prof_32_a_body_that_is_not_a_json_object_is_400(raw, jp_auth_header, http_server_client,
                                                                    jp_base_url, fake_tab):
     """ACC-PROF-32 a body that is not one JSON object is refused with status 400."""
     await attach(fake_tab)
-    url = f"{jp_base_url}{NAMESPACE}/serial/{SERIAL_NAME}/profile"
+    url = f"{jp_base_url}{NAMESPACE}/serial/{SERIAL_NAME}/settings"
 
     for body in ("[1, 2]", "not json", '"monitor"'):
         with pytest.raises(tornado.httpclient.HTTPClientError) as refused:

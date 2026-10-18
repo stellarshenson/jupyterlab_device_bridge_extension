@@ -431,7 +431,7 @@ async def test_acc_serial_3_a_stopped_server_leaves_no_path_and_no_socket_behind
 
 
 async def test_acc_sec_95_a_shim_directory_that_is_a_symlink_gets_no_socket(fake_tab, device_dir, tmp_path, caplog):
-    """ACC-SEC-95 with a symlink as the shim directory the server makes no socket and logs why; the port attaches and works with its profile."""
+    """ACC-SEC-95 with a symlink as the shim directory the server makes no socket and logs why; the port attaches and works with its settings."""
     target = tmp_path / "elsewhere"
     target.mkdir()
     os.mkdir(device_dir, 0o700)
@@ -678,10 +678,10 @@ async def test_acc_serial_10_the_baud_change_reaches_the_tab_before_the_bytes(fa
     assert [kind for kind, _ in order[1:]] == ["data"] * (len(order) - 1)
 
 
-async def test_acc_serial_12_after_the_tool_closed_the_port_returns_to_the_profile_baud(fake_tab, tool, api):
-    """ACC-SERIAL-12 when the tool closes the device the holder is cleared and the port returns to the profile's baud rate."""
+async def test_acc_serial_12_after_the_tool_closed_the_port_returns_to_its_own_baud(fake_tab, tool, api):
+    """ACC-SERIAL-12 when the tool closes the device the holder is cleared and the port returns to its own baud rate."""
     tab, path = await attach(fake_tab)
-    status, changed = await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": "arduino-isp"})
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings", body={"baudRate": 19200})
     assert (status, changed["settings"]["baudRate"]) == (200, 19200)
     child = await holding(tab, tool, BAUD_THEN_WRITE, path)
     child.stdin.write(b"\n")
@@ -696,7 +696,7 @@ async def test_acc_serial_12_after_the_tool_closed_the_port_returns_to_the_profi
 
     again = await holding(tab, tool, HOLD, path)
     await asyncio.sleep(0.2)
-    assert configured(tab) == [19200, 57600, 19200], "the next tool found the profile's baud rate on the device"
+    assert configured(tab) == [19200, 57600, 19200], "the next tool found the port's baud rate on the device"
     await end(again)
 
 
@@ -722,9 +722,9 @@ async def test_acc_serial_12_after_a_tool_was_killed_in_exclusive_mode_the_next_
 
 
 async def test_acc_prof_26_pulse_dtr_is_run_when_a_tool_opens_the_device(fake_tab, tool, api):
-    """ACC-PROF-26 with the arduino-upload profile a tool open sends `serial-action` pulse-dtr to the tab, once."""
+    """ACC-PROF-26 with the Arduino upload config a tool open sends `serial-action` pulse-dtr to the tab, once."""
     tab, path = await attach(fake_tab)
-    await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": "arduino-upload"})
+    await api("PUT", "serial", SERIAL_NAME, "settings", body={"config": "arduino-upload"})
     assert tab.got("serial-action") == []
 
     child = await holding(tab, tool, HOLD, path)
@@ -740,7 +740,7 @@ async def test_acc_prof_26_pulse_dtr_is_run_when_a_tool_opens_the_device(fake_ta
 async def test_acc_prof_26_the_action_follows_the_settings(fake_tab, tool, api):
     """ACC-PROF-26 on a tool open the tab gets the settings with the tool's baud first and the action after them."""
     tab, path = await attach(fake_tab)
-    await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": "esp-upload", "onOpen": "pulse-rts"})
+    await api("PUT", "serial", SERIAL_NAME, "settings", body={"config": "esp-upload", "onOpen": "pulse-rts"})
     child = await tool(BAUD_THEN_WRITE, path)
     child.stdin.write(b"\n")
     assert await line(child) == b"open\n"
@@ -755,10 +755,10 @@ async def test_acc_prof_26_the_action_follows_the_settings(fake_tab, tool, api):
 
 
 async def test_acc_prof_30_no_action_and_no_signal_with_on_open_none(fake_tab, tool, api):
-    """ACC-PROF-30 with the monitor or the arduino-isp profile a tool open sends no action and no signal to the tab."""
+    """ACC-PROF-30 with the Monitor or the Arduino as ISP config a tool open sends no action and no signal to the tab."""
     tab, path = await attach(fake_tab)
-    for profile in ("monitor", "arduino-isp"):
-        await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": profile})
+    for config_id in ("monitor", "arduino-isp"):
+        await api("PUT", "serial", SERIAL_NAME, "settings", body={"config": config_id})
 
         child = await tool(WRITE_64_KIB, path)
         assert await line(child) == b"written\n"
@@ -904,7 +904,7 @@ async def test_acc_shim_33_a_line_for_a_forgotten_device_is_answered_and_changes
 
 
 async def test_acc_shim_34_the_tools_own_frame_format_reopens_the_port(fake_tab, tool):
-    """ACC-SHIM-34 (socket side) the line `T 8 E 1` of a tool that holds the device reopens the port with even parity at the tool's baud rate, and the profile's format returns when the tool closes."""
+    """ACC-SHIM-34 (socket side) the line `T 8 E 1` of a tool that holds the device reopens the port with even parity at the tool's baud rate, and the port's format returns when the tool closes."""
     tab, path = await attach(fake_tab)
     child = await holding(tab, tool, BAUD_THEN_WRITE, path)
     child.stdin.write(b"\n")
@@ -919,7 +919,7 @@ async def test_acc_shim_34_the_tools_own_frame_format_reopens_the_port(fake_tab,
         "baudRate": 57600, "dataBits": 7, "parity": "odd", "stopBits": 2}
     assert (await shim_says(path, b"T 5 N 1\n"))[0] == b"ok\n"
     assert tab.got("serial-configure")[-1]["settings"] == {
-        "baudRate": 57600, "dataBits": 8, "parity": "none", "stopBits": 1}, "5 data bits stay the profile's 8"
+        "baudRate": 57600, "dataBits": 8, "parity": "none", "stopBits": 1}, "5 data bits stay the port's 8"
 
     await end(child)
     await tab.until(lambda: record(tab)["holder"] is None)
@@ -938,7 +938,7 @@ async def test_acc_shim_34_the_frame_format_is_applied_at_the_baud_rate_the_tool
     await asyncio.sleep(0.2)
 
     # One reopen takes both. Two when the 20 ms poll read the baud rate before the line of
-    # the shim arrived; then the first has the profile's parity still.
+    # the shim arrived; then the first has the port's parity still.
     settings = [event["settings"] for event in tab.got("serial-configure")]
     assert settings[-1] == {"baudRate": 57600, "dataBits": 8, "parity": "even", "stopBits": 1}
     assert len(settings) <= 2 and all(each["baudRate"] == 57600 for each in settings)
@@ -946,7 +946,7 @@ async def test_acc_shim_34_the_frame_format_is_applied_at_the_baud_rate_the_tool
 
 
 async def test_acc_shim_34_a_frame_format_line_with_no_tool_on_the_device_changes_nothing(fake_tab, tool):
-    """ACC-SHIM-34 (socket side) the line `T 8 E 1` while no tool holds the device is answered `ok` and sends no `serial-configure`, and the next tool gets the profile's parity (DEF-SHIM-3)."""
+    """ACC-SHIM-34 (socket side) the line `T 8 E 1` while no tool holds the device is answered `ok` and sends no `serial-configure`, and the next tool gets the port's parity (DEF-SHIM-3)."""
     tab, path = await attach(fake_tab)
 
     assert (await shim_says(path, b"T 8 E 1\n"))[0] == b"ok\n"
@@ -966,17 +966,46 @@ SECOND_KEY = "s:2341:0043:1"
 SECOND_NAME = f"{SERIAL_NAME}-2"
 
 
+async def test_acc_prof_218_a_new_port_names_its_config(fake_tab, api):
+    """ACC-PROF-218 a port claimed with the stock defaults carries the default config; a settings set on baudRate makes it custom."""
+    tab = await fake_tab()
+
+    claimed = await tab.claim_serial()
+
+    assert claimed["ok"]
+    await tab.until(lambda: record(tab)["portState"] == "open")
+    assert (record(tab)["config"], record(tab)["configName"]) == ("default", "Default")
+
+    # Any system config whose five values equal the initial settings is named, not only the
+    # default one.
+    esp = {"baudRate": 115200, "dataBits": 8, "parity": "none", "stopBits": 1,
+           "onOpen": "esp-bootloader"}
+    assert (await tab.claim_serial(SECOND_KEY, defaults=esp))["ok"]
+    await tab.until(lambda: record(tab, SECOND_NAME)["portState"] == "open")
+    assert (record(tab, SECOND_NAME)["config"],
+            record(tab, SECOND_NAME)["configName"]) == ("esp-upload", "ESP upload")
+
+    # 19200 8N1 with no action are the values of the arduino-isp config: one changed field
+    # still makes the port custom.
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings",
+                                body={"baudRate": 19200})
+
+    assert (status, changed["config"], changed["configName"]) == (200, None, None)
+
+
 async def test_acc_prof_118_a_port_the_server_has_no_record_of_is_opened_with_the_default_settings(
         fake_tab, tool, manager, api):
-    """ACC-PROF-118 the first claim of a serial key with `defaults` opens the port with them: the record has profile monitor and lists the values that differ from it as overrides, and the pty starts at that baud rate."""
+    """ACC-PROF-118 the first claim of a serial key with `defaults` opens the port with them: the record carries the five values as configured, names no config, and the pty starts at that baud rate."""
     tab = await fake_tab()
 
     claimed = await tab.claim_serial(defaults=DEFAULTS)
 
     frame = {"baudRate": 9600, "dataBits": 7, "parity": "even", "stopBits": 2}
-    assert (claimed["ok"], claimed["profile"], claimed["settings"]) == (True, "monitor", frame)
+    assert (claimed["ok"], claimed["settings"]) == (True, frame)
     await tab.until(lambda: record(tab)["portState"] == "open")
-    assert (record(tab)["profile"], record(tab)["overrides"], record(tab)["settings"]) == ("monitor", DEFAULTS, frame)
+    assert (record(tab)["configured"], record(tab)["config"], record(tab)["configName"]) == (
+        DEFAULTS, None, None)
+    assert record(tab)["settings"] == frame
     assert manager.serial[SERIAL_NAME].pty.speed() == 9600
 
     # A tool that opens the device finds that baud rate on it, so the port is not opened
@@ -988,14 +1017,17 @@ async def test_acc_prof_118_a_port_the_server_has_no_record_of_is_opened_with_th
     await end(child)
     await tab.until(lambda: record(tab)["holder"] is None)
 
-    # A profile chosen later replaces the default settings.
-    status, changed = await api("PUT", "serial", SERIAL_NAME, "profile", body={"profile": "arduino-isp"})
-    assert (status, changed["overrides"]) == (200, {})
+    # A config applied later replaces the default settings.
+    status, changed = await api("PUT", "serial", SERIAL_NAME, "settings",
+                                body={"config": "arduino-isp"})
+    assert (status, changed["config"], changed["configName"]) == (200, "arduino-isp", "Arduino as ISP")
+    assert changed["configured"] == {
+        "baudRate": 19200, "dataBits": 8, "parity": "none", "stopBits": 1, "onOpen": "none"}
     assert changed["settings"] == {"baudRate": 19200, "dataBits": 8, "parity": "none", "stopBits": 1}
 
 
-async def test_acc_prof_118_only_the_values_that_differ_from_profile_monitor_are_overrides(fake_tab):
-    """ACC-PROF-118 a default that equals profile monitor is no override, and a claim without `defaults` gives the port profile monitor unchanged."""
+async def test_acc_prof_203_a_claim_without_defaults_gets_the_built_in_values(fake_tab):
+    """ACC-PROF-203 a claim without `defaults` and a claim with an empty object give the built-in values; a port whose values equal a system config names it, and any other starts custom."""
     tab = await fake_tab()
 
     equal = await tab.claim_serial(defaults=OTHER_DEFAULTS)
@@ -1003,10 +1035,13 @@ async def test_acc_prof_118_only_the_values_that_differ_from_profile_monitor_are
     empty = await tab.claim_serial("s:2341:0043:2", defaults={})
 
     monitor = {"baudRate": 115200, "dataBits": 8, "parity": "none", "stopBits": 1}
-    assert (equal["settings"], record(tab)["overrides"]) == ({**monitor, "baudRate": 57600}, {"baudRate": 57600})
-    assert (absent["settings"], record(tab, SECOND_NAME)["overrides"]) == (monitor, {})
-    assert (empty["settings"], record(tab, f"{SERIAL_NAME}-3")["overrides"]) == (monitor, {})
-    assert {device["profile"] for device in tab.devices["serial"]} == {"monitor"}
+    built_in = {**monitor, "onOpen": "none"}
+    assert (equal["settings"], record(tab)["configured"]) == (
+        {**monitor, "baudRate": 57600}, OTHER_DEFAULTS)
+    assert (absent["settings"], record(tab, SECOND_NAME)["configured"]) == (monitor, built_in)
+    assert (empty["settings"], record(tab, f"{SERIAL_NAME}-3")["configured"]) == (monitor, built_in)
+    assert [(device["config"], device["configName"]) for device in tab.devices["serial"]] == [
+        (None, None), ("default", "Default"), ("default", "Default")]
 
 
 async def test_acc_prof_119_a_later_claim_with_other_defaults_keeps_the_record(fake_tab):
@@ -1026,20 +1061,20 @@ async def test_acc_prof_119_a_later_claim_with_other_defaults_keeps_the_record(f
     for later in (held, detached, reconnected, refused):
         assert later["ok"], "a claim of a key that has a record is granted whatever its defaults are"
         assert (later["settings"], later["sid"]) == (first["settings"], first["sid"])
-    assert (record(again)["overrides"], record(again)["settings"]) == (DEFAULTS, first["settings"])
+    assert (record(again)["configured"], record(again)["settings"]) == (DEFAULTS, first["settings"])
 
     # A port added after the change gets the new values.
     second = await again.claim_serial(SECOND_KEY, defaults=OTHER_DEFAULTS)
     assert second["settings"]["baudRate"] == 57600
-    assert record(again, SECOND_NAME)["overrides"] == {"baudRate": 57600}
-    assert record(again)["overrides"] == DEFAULTS
+    assert record(again, SECOND_NAME)["configured"] == OTHER_DEFAULTS
+    assert record(again)["configured"] == DEFAULTS
 
     # A forgotten port has no record: when it is added again it gets the values of that claim.
     await again.release(SERIAL_NAME, "forget")
     await again.until(lambda: all(device["name"] != SERIAL_NAME for device in again.devices["serial"]))
     added = await again.claim_serial(defaults=OTHER_DEFAULTS)
     assert (added["name"], added["settings"]["baudRate"]) == (SERIAL_NAME, 57600)
-    assert record(again)["overrides"] == {"baudRate": 57600}
+    assert record(again)["configured"] == OTHER_DEFAULTS
 
 
 @pytest.mark.parametrize("defaults", [
@@ -1060,7 +1095,7 @@ async def test_acc_prof_119_a_later_claim_with_other_defaults_keeps_the_record(f
 ])
 async def test_acc_prof_120_a_claim_with_refused_defaults_is_refused_and_makes_no_record(
         fake_tab, api, device_dir, caplog, defaults):
-    """ACC-PROF-120 a first claim whose `defaults` hold an unknown field, a profile id or a value outside the profile choices, or are no object, is refused: no record, no name for the key, no device directory, and the reason in the log."""
+    """ACC-PROF-120 a first claim whose `defaults` hold an unknown field or a value outside the choices, or are no object, is refused: no record, no name for the key, no device directory, and the reason in the log."""
     tab = await fake_tab()
 
     refused = await tab.claim_serial(SECOND_KEY, defaults=defaults)

@@ -25,6 +25,8 @@ from jupyterlab_device_bridge_extension.environments import Environment
 from .test_cli import (  # noqa: F401 - `cli_run`, `lab`, `lab_shell` and `screen` are fixtures
     NO_TOOL, cli_run, lab, lab_shell, on_a_terminal, plain, screen, stand_in, terminal_shell)
 from .test_cli import banner as cli_banner
+from .fake_tab import SERIAL_NAME
+from .test_client import attach_serial
 
 NAMES = list(cli._TOOL_NAMES)
 QUESTION = "Start the device shell in which environment?"
@@ -456,11 +458,14 @@ async def test_acc_shim_179_no_selector_when_standard_input_is_no_terminal(
     assert ALTERNATE_SCREEN not in displayed
 
 
-async def test_acc_shim_179_run_never_shows_the_selector(cli_run, screen, project, lab_shell, shell_path):
-    """ACC-SHIM-179 `run -- <tool>` on a terminal shows no selector although `.venv` holds a tool."""
+async def test_acc_shim_179_run_never_shows_the_selector(cli_run, fake_tab, screen, project, lab_shell,
+                                                         shell_path):
+    """ACC-SHIM-179 `run --device <name> -- <tool>` on a terminal shows no selector although `.venv` holds a tool."""
     programs(project / ".venv" / "bin", "avrdude")
+    await attach_serial(fake_tab)
 
-    status, displayed, _ = await on_a_terminal(cli_run, sized(screen), "run", "--", lab_shell,
+    status, displayed, _ = await on_a_terminal(cli_run, sized(screen), "run", "--device", SERIAL_NAME,
+                                               "--", lab_shell,
                                                streams=("stdin", "stdout", "stderr"))
 
     assert (status, displayed) == (0, "started\n")

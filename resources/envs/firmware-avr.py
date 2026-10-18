@@ -51,6 +51,11 @@ def platformio(env):
     env.run(env.prefix / "bin/python", "-m", "pip", "install", f"pytest=={PYTEST}")
 
 
+def circuit(env):
+    """ngspice runs the netlist of the opt-in ltspice component in batch mode."""
+    env.circuit_simulator()
+
+
 install(
     name="firmware-avr",
     summary="Firmware toolchain for AVR",
@@ -61,6 +66,7 @@ install(
         Stage(f"avr-gcc {AVR_GCC}", "downloads.arduino.cc", avr_gcc),
         Stage(f"avrdude {AVRDUDE}", "downloads.arduino.cc", avrdude),
         Stage(f"PlatformIO {PLATFORMIO}, atmelavr {ATMELAVR}, simavr, pytest {PYTEST}", "registry.platformio.org", platformio),
+        Stage("ngspice for the circuit simulation", "conda-forge", circuit),
     ],
     tools=[
         ("cargo", ["cargo", "--version"]),
@@ -70,6 +76,7 @@ install(
         ("pio", ["pio", "--version"]),
         ("PlatformIO platform", f"atmelavr {ATMELAVR} with framework-arduino-avr and simavr"),
         ("pytest", ["pytest", "--version"]),
+        ("ngspice", ["ngspice", "--version"]),
         ("target", "avr-none"),
     ],
     usage=[
@@ -77,5 +84,6 @@ install(
         'RUSTFLAGS="-C target-cpu=atmega328p" cargo build --release -Z build-std=core --target avr-none',
         "avrdude -c arduino -p atmega328p -P <serial device> -U flash:w:<firmware>.elf",
         "pio run --target upload --upload-port <serial device>    (in a PlatformIO project)",
+        "ngspice -b ltspice/circuit.cir    (the opt-in ltspice component runs the surrounding circuit)",
     ],
 )

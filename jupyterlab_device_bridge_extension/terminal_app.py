@@ -1,7 +1,7 @@
 """The serial terminal of `jupyterlab-device terminal`: a full-screen Textual app for a person.
 
 The app opens the virtual serial device with pyserial, as every serial tool does, so the
-bridge shows it as the holder and runs the action on open of the device's profile. One
+bridge shows it as the holder and runs the action on open of the port's settings. One
 thread reads the port and one writes to it, in the order the user sent the bytes. The
 serial settings, the control lines and the actions go through the REST API of the bridge
 (`DeviceBridgeClient`): a pty refuses the DTR, RTS and parity calls of a tool.
@@ -505,10 +505,10 @@ class SerialTerminal(App):
 
     def _set_settings(self, change: dict) -> None:
         # While a tool holds the device the baud rate of the port is the tool's own, so the
-        # app sets it on the path; the frame format is the profile's (docs/design.md).
+        # app sets it on the path; the frame format is the port's (docs/design.md).
         if "baudRate" in change:
             self._port.baudrate = change["baudRate"]
-        self._device.set_profile(**change)
+        self._device.set_settings(**change)
 
     def action_hex_view(self) -> None:
         self._hex_view = not self._hex_view

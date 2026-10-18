@@ -50,7 +50,7 @@ EXTRA = {
 }
 COMMANDS = (
     ("jupyterlab-device list", "devices and paths"),
-    ("jupyterlab-device profile <dev> <id>", "set a board profile"),
+    ("jupyterlab-device settings apply <dev> <config>", "apply saved serial settings"),
     ("jupyterlab-device monitor read <dev>", "what a board sent"),
     ("jupyterlab-device terminal <dev>", "serial terminal"),
     ("jupyterlab-device help", "commands, examples"),

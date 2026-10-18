@@ -1,0 +1,1 @@
+- 2026-10-17T17:16:04Z @kj acc-crit-device-bridge.md 295245b8 sha256:d4eceb449483e2d3232df85812b1d84657d3a417e2ba0b34bf99f3ec47e3cb22: rename the PROF category to Serial settings now that profiles are saved sets

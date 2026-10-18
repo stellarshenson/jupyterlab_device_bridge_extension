@@ -86,11 +86,11 @@ const COMMANDS = {
 /** How long a test waits for the lamps to show a stream of the port, which takes 1.2 s at most. */
 const LAMP_WAIT = 5000;
 /**
- * How long one flash of a lamp can take, in ms. A lamp is lit for 80 ms from each
+ * How long one flash of a lamp can take, in ms. A lamp is lit for 200 ms from each
  * event, and a timer of the page fires late under load.
  */
-const FLASH_MIN = 60;
-const FLASH_MAX = 250;
+const FLASH_MIN = 150;
+const FLASH_MAX = 400;
 /** A terminal of the lab starts the command line, which starts a shell or a terminal program. */
 const TERMINAL_START = 45000;
 /** The class the lab gives a menu item whose command is toggled: the item shows a check mark. */
@@ -172,7 +172,7 @@ const settingsDialog = (page: Page): Locator => page.locator('.jp-Dialog');
 
 /** A field of the open Settings dialog. */
 const settingsField = (page: Page, name: string): Locator =>
-  settingsDialog(page).locator(`[data-profile-field="${name}"]`);
+  settingsDialog(page).locator(`[data-setting-field="${name}"]`);
 
 /** Click Settings in the row of a serial port and wait for its dialog. */
 async function openSettings(page: Page, portRow: Locator): Promise<void> {
@@ -181,14 +181,18 @@ async function openSettings(page: Page, portRow: Locator): Promise<void> {
 }
 
 /**
- * Close the Settings dialog with its button Save, or Cancel. The close icon of the
- * dialog has the title Cancel too, so the button is found by its class and label.
+ * The footer button of the open Settings dialog with exactly this label. The close
+ * icon of the dialog has the title Cancel too, so the button is found by its class
+ * and label.
  */
-async function saveSettings(page: Page, button = 'Save'): Promise<void> {
-  await settingsDialog(page)
+const settingsButton = (page: Page, label: string): Locator =>
+  settingsDialog(page)
     .locator('.jp-Dialog-button')
-    .filter({ hasText: button })
-    .click();
+    .filter({ hasText: new RegExp(`^\\s*${label}\\s*$`) });
+
+/** Close the Settings dialog with its button Save, or Cancel. */
+async function saveSettings(page: Page, button = 'Save'): Promise<void> {
+  await settingsButton(page, button).click();
   await expect(settingsDialog(page)).toHaveCount(0);
 }
 
@@ -206,7 +210,7 @@ test.describe('Devices panel', () => {
     );
   });
 
-  test('ACC-PROF-23 parity, data bits, stop bits and the action on open of a serial port are set in the Settings dialog of its row', async ({
+  test('ACC-PROF-207 parity, data bits, stop bits and the action on open of a serial port are set in the Settings dialog of its row', async ({
     page
   }) => {
     const port = simSerial();
@@ -218,14 +222,22 @@ test.describe('Devices panel', () => {
       (await simArgs(page, port.id, 'open')).at(-1)?.[0];
 
     await openSettings(page, portRow);
-    await settingsField(page, 'profile').selectOption('stm32-bootloader');
+    await settingsField(page, 'config').selectOption('stm32-bootloader');
     await saveSettings(page);
 
-    await expect(field(portRow, 'profile')).toHaveText('stm32-bootloader', {
+    await expect(field(portRow, 'config')).toHaveText('STM32 bootloader', {
       timeout: ROUND_TRIP
     });
     expect(await serialRecord(port.name)).toMatchObject({
-      profile: 'stm32-bootloader',
+      config: 'stm32-bootloader',
+      configName: 'STM32 bootloader',
+      configured: {
+        baudRate: 115200,
+        dataBits: 8,
+        parity: 'even',
+        stopBits: 1,
+        onOpen: 'none'
+      },
       settings: { baudRate: 115200, dataBits: 8, parity: 'even', stopBits: 1 }
     });
     await expect
@@ -241,15 +253,21 @@ test.describe('Devices panel', () => {
     await saveSettings(page);
 
     await expect
-      .poll(async () => (await serialRecord(port.name)).overrides, {
+      .poll(async () => (await serialRecord(port.name)).configured, {
         timeout: ROUND_TRIP
       })
       .toEqual({
-        parity: 'odd',
+        baudRate: 115200,
         dataBits: 7,
+        parity: 'odd',
         stopBits: 2,
         onOpen: 'pulse-rts'
       });
+    await expect
+      .poll(async () => (await serialRecord(port.name)).config, {
+        timeout: ROUND_TRIP
+      })
+      .toBeNull();
     await expect
       .poll(openedWith, { timeout: ROUND_TRIP })
       .toMatchObject({ dataBits: 7, parity: 'odd', stopBits: 2 });
@@ -263,7 +281,7 @@ test.describe('Devices panel', () => {
       .toEqual([[{ requestToSend: false }], [{ requestToSend: true }]]);
   });
 
-  test('ACC-PROF-23 an arrow key in the baud rate field of the Settings dialog changes no baud rate', async ({
+  test('ACC-PROF-207 an arrow key in the baud rate field of the Settings dialog changes no baud rate', async ({
     page
   }) => {
     const port = simSerial();
@@ -271,22 +289,76 @@ test.describe('Devices panel', () => {
     await addSerial(page, port);
     await openSettings(page, row(page, port.name));
 
-    // DEF-PANEL-6: a number field takes the key as a step of 1.
-    await settingsField(page, 'baudRate').focus();
+    // DEF-PANEL-6: a number field takes the key as a step of 1. The one baud rate
+    // field is a text field, and the key changes nothing.
+    const baud = settingsField(page, 'baudRate');
+    await baud.focus();
     await page.keyboard.press('ArrowUp');
 
-    await expect(settingsField(page, 'baudRate')).toHaveValue('115200');
+    await expect(baud).toHaveValue('115200');
     // A changed baud rate would be sent with this change of the parity.
     await settingsField(page, 'parity').selectOption('even');
     await saveSettings(page);
     await expect
-      .poll(async () => (await serialRecord(port.name)).overrides, {
+      .poll(async () => (await serialRecord(port.name)).configured, {
         timeout: ROUND_TRIP
       })
-      .toEqual({ parity: 'even' });
+      .toMatchObject({ baudRate: 115200, parity: 'even' });
   });
 
-  test('ACC-PANEL-64 the panel lists every attached device with kind, name, state, holding program, and for a serial port baud rate and profile', async ({
+  test('ACC-PANEL-227 the help link of the Serial and USB header opens the normal read-only Markdown viewer in one tab, and a second click activates that tab instead of opening another', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const help = action(page.locator(PANEL), 'settings-help');
+    // The tab is titled by the name of its file, Device Bridge Help. The document
+    // manager gives the tab an id of its own, so the title is what locates it.
+    const tabs = page
+      .locator('.lm-DockPanel-tabBar .lm-TabBar-tab')
+      .filter({ hasText: 'Device Bridge Help' });
+    const launcher = page
+      .locator('.lm-DockPanel-tabBar .lm-TabBar-tab')
+      .filter({ hasText: 'Launcher' });
+
+    await help.click();
+    await expect(tabs).toHaveCount(1);
+    // The lab opens the file in its Markdown Preview, which renders read-only
+    // Markdown; a custom widget or an editor would not carry these classes.
+    await expect(page.locator('.jp-MarkdownViewer')).toBeVisible();
+    const tab = tabs.first();
+    await expect(tab).toHaveClass(/lm-mod-current/);
+
+    // Another tab takes the focus, so the second click must bring the help tab back.
+    await expect(launcher).toHaveCount(1);
+    await launcher.click();
+    await expect(tab).not.toHaveClass(/lm-mod-current/);
+
+    await help.click();
+    await expect(tabs).toHaveCount(1);
+    await expect(tab).toHaveClass(/lm-mod-current/);
+  });
+
+  test('ACC-PANEL-228 the help tab renders the headings Options, Connections, Tools and Connection configs, in this order', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    await action(page.locator(PANEL), 'settings-help').click();
+
+    const content = page.locator('.jp-MarkdownViewer');
+    await expect(content).toHaveCount(1);
+    await expect(content).toBeVisible();
+    await expect(content.locator('.jp-RenderedMarkdown')).toBeVisible();
+    // The Markdown renderer appends the pilcrow of a heading anchor link, so each
+    // pattern permits that mark after the name and nothing else.
+    await expect(content.locator('h2')).toHaveText([
+      /^Options\s*¶?$/,
+      /^Connections\s*¶?$/,
+      /^Tools\s*¶?$/,
+      /^Connection configs\s*¶?$/
+    ]);
+  });
+
+  test('ACC-PANEL-64 the panel lists every attached device with kind, name, state, holding program, and for a serial port baud rate, config and action on open', async ({
     page
   }) => {
     const port = simSerial();
@@ -317,7 +389,8 @@ test.describe('Devices panel', () => {
       `${holder.name} (pid ${tool.process.pid})`
     );
     await expect(field(portRow, 'baud')).toHaveText('19200');
-    await expect(field(portRow, 'profile')).toHaveText('monitor');
+    await expect(field(portRow, 'config')).toHaveText('Default');
+    await expect(field(portRow, 'on-open')).toHaveText('Do nothing');
 
     await expect(field(deviceRow, 'kind')).toHaveText('USB');
     await expect(field(deviceRow, 'name')).toHaveText(device.name);
@@ -334,13 +407,137 @@ test.describe('Devices panel', () => {
       timeout: ROUND_TRIP
     });
 
-    // The tool ends: the row shows no program and the baud rate of the profile.
+    // The tool ends: the row shows no program and the port's own baud rate.
     tool.process.stdin!.write('\n');
     expect((await tool.done).code).toBe(0);
     await expect(field(portRow, 'holder')).toHaveText('none', {
       timeout: ROUND_TRIP
     });
     await expect(field(portRow, 'baud')).toHaveText('115200');
+  });
+
+  test('ACC-PANEL-201 ACC-PANEL-202 the kind chip has a blue or pink tint and border, and its text reads at 4.5:1 or better in both themes', async ({
+    page
+  }) => {
+    const port = simSerial();
+    const device = simUsb();
+    await openLab(page, { serial: [port], usb: [device] });
+    await addSerial(page, port);
+    await addUsb(page, device);
+    const serialChip = field(row(page, port.name), 'kind');
+    const usbChip = field(row(page, device.name), 'kind');
+
+    type Rgba = [number, number, number, number];
+    /** A CSS colour as channels and alpha; `rgb()` gives alpha 1. */
+    const rgba = (value: string): Rgba => {
+      const [red, green, blue, alpha = 1] = value.match(/[\d.]+/g)!.map(Number);
+      return [red, green, blue, alpha];
+    };
+    /** `top` painted over `bottom`, both with their own alpha. */
+    const over = (top: Rgba, bottom: Rgba): Rgba => {
+      const alpha = top[3] + bottom[3] * (1 - top[3]);
+      return [
+        (top[0] * top[3] + bottom[0] * bottom[3] * (1 - top[3])) / alpha,
+        (top[1] * top[3] + bottom[1] * bottom[3] * (1 - top[3])) / alpha,
+        (top[2] * top[3] + bottom[2] * bottom[3] * (1 - top[3])) / alpha,
+        alpha
+      ];
+    };
+    /** WCAG relative luminance of a colour. */
+    const luminance = ([red, green, blue]: Rgba): number => {
+      const channel = (value: number): number => {
+        const part = value / 255;
+        return part <= 0.03928 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+      };
+      return (
+        0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+      );
+    };
+    /** WCAG contrast ratio of two colours. */
+    const contrast = (first: Rgba, second: Rgba): number => {
+      const [lighter, darker] = [luminance(first), luminance(second)].sort(
+        (left, right) => right - left
+      );
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    const style = (chip: Locator) =>
+      chip.evaluate(node => {
+        const tint = getComputedStyle(node, '::before');
+        const own = getComputedStyle(node);
+        return {
+          background: tint.backgroundColor,
+          opacity: Number(tint.opacity),
+          color: own.color,
+          border: own.borderTopColor
+        };
+      });
+    /** The colour of the panel behind the chip in this theme. */
+    const surface = async (): Promise<Rgba> =>
+      rgba(
+        await page.evaluate(() => {
+          const probe = document.createElement('div');
+          probe.style.background = 'var(--jp-layout-color1)';
+          document.body.append(probe);
+          const colour = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return colour;
+        })
+      );
+    const measure = async () => {
+      const layout = await surface();
+      const serial = await style(serialChip);
+      const usb = await style(usbChip);
+      const channels = (value: string) => value.match(/\d+/g)!.map(Number);
+      const [serialRed, , serialBlue] = channels(serial.background);
+      const [usbRed, , usbBlue] = channels(usb.background);
+      const [serialBorderRed, , serialBorderBlue] = channels(serial.border);
+      const [usbBorderRed, , usbBorderBlue] = channels(usb.border);
+
+      // The tint is translucent; serial leans blue, USB leans pink.
+      expect(serial.opacity).toBeGreaterThan(0);
+      expect(serial.opacity).toBeLessThan(1);
+      expect(usb.opacity).toBe(serial.opacity);
+      expect(serialBlue).toBeGreaterThan(serialRed);
+      expect(usbRed).toBeGreaterThan(usbBlue);
+      expect(serial.background).not.toBe(usb.background);
+
+      // The border carries the same hue at full strength; the text is the theme's UI font colour.
+      expect(serialBorderBlue).toBeGreaterThan(serialBorderRed);
+      expect(usbBorderRed).toBeGreaterThan(usbBorderBlue);
+      expect(serial.border).not.toBe(usb.border);
+
+      for (const chip of [serial, usb]) {
+        const tint = rgba(chip.background);
+        const painted = over([tint[0], tint[1], tint[2], chip.opacity], layout);
+        const text = over(rgba(chip.color), painted);
+        expect(contrast(text, painted)).toBeGreaterThanOrEqual(4.5);
+      }
+    };
+
+    // The chip's only label must stay readable in either theme.
+    await page.theme.setLightTheme();
+    await measure();
+    await page.theme.setDarkTheme();
+    try {
+      await measure();
+    } finally {
+      await page.theme.setLightTheme();
+    }
+  });
+
+  test('DEF-USB-25 the panel shows the USB product and manufacturer without the descriptor NUL', async ({
+    page
+  }) => {
+    const device = simUsb({
+      manufacturerName: 'Espressif\0',
+      productName: 'USB JTAG/serial debug unit\0'
+    });
+    await openLab(page, { usb: [device] });
+    await addUsb(page, device);
+
+    await expect(field(row(page, device.name), 'product')).toHaveText(
+      'Espressif USB JTAG/serial debug unit'
+    );
   });
 
   test('ACC-PANEL-65 each row shows byte counters that grow with traffic', async ({
@@ -350,21 +547,49 @@ test.describe('Devices panel', () => {
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
     const portRow = row(page, port.name);
-    await expect(field(portRow, 'rx')).toHaveText('0');
-    await expect(field(portRow, 'tx')).toHaveText('0');
+    await expect(field(portRow, 'rx')).toHaveText('0 bytes');
+    await expect(field(portRow, 'tx')).toHaveText('0 bytes');
 
     // 4 bytes to the port through the server; the simulated port sends them back.
     const written = await api('POST', `serial/${port.name}/write`, {
       data: Buffer.from('ping').toString('base64')
     });
     expect(written.status).toBe(200);
-    await expect(field(portRow, 'tx')).toHaveText('4', { timeout: ROUND_TRIP });
-    await expect(field(portRow, 'rx')).toHaveText('4', { timeout: ROUND_TRIP });
+    await expect(field(portRow, 'tx')).toHaveText('4 bytes', {
+      timeout: ROUND_TRIP
+    });
+    await expect(field(portRow, 'rx')).toHaveText('4 bytes', {
+      timeout: ROUND_TRIP
+    });
 
     // 3 bytes that the port sends on its own count as received only.
     await simSend(page, port.id, [1, 2, 3]);
-    await expect(field(portRow, 'rx')).toHaveText('7', { timeout: ROUND_TRIP });
-    await expect(field(portRow, 'tx')).toHaveText('4');
+    await expect(field(portRow, 'rx')).toHaveText('7 bytes', {
+      timeout: ROUND_TRIP
+    });
+    await expect(field(portRow, 'tx')).toHaveText('4 bytes');
+  });
+
+  test('ACC-PANEL-229 a stream past 10 KB shows the RX counter in kilobytes', async ({
+    page
+  }) => {
+    const port = simSerial({ echo: false });
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    await expect(field(portRow, 'rx')).toHaveText('0 bytes');
+    await expect(field(portRow, 'tx')).toHaveText('0 bytes');
+
+    // 10,001 bytes in one chunk from the simulated port: past the 10 KB boundary.
+    await simSend(
+      page,
+      port.id,
+      Array.from({ length: 10001 }, () => 0x55)
+    );
+    await expect(field(portRow, 'rx')).toHaveText('10.0 KB', {
+      timeout: ROUND_TRIP
+    });
+    await expect(field(portRow, 'tx')).toHaveText('0 bytes');
   });
 
   test('ACC-PANEL-138 bursts of bytes from the port 400 ms apart flash the RX lamp once each, bytes to the port flash the TX lamp, and a larger counter in the device table lights no lamp of a port this tab holds', async ({
@@ -402,7 +627,9 @@ test.describe('Devices panel', () => {
     await expect.poll(changes, { timeout: LAMP_WAIT }).toEqual(flashes);
     // The server gets the byte counters once a second. The device table that carries
     // the larger counter lights nothing.
-    await expect(field(portRow, 'rx')).toHaveText('9', { timeout: ROUND_TRIP });
+    await expect(field(portRow, 'rx')).toHaveText('9 bytes', {
+      timeout: ROUND_TRIP
+    });
     expect(await changes()).toEqual(flashes);
 
     // 4 bytes to the port through the server: the TX lamp flashes once.
@@ -412,7 +639,9 @@ test.describe('Devices panel', () => {
     expect(written.status).toBe(200);
     flashes.push(['tx', true], ['tx', false]);
     await expect.poll(changes, { timeout: LAMP_WAIT }).toEqual(flashes);
-    await expect(field(portRow, 'tx')).toHaveText('4', { timeout: ROUND_TRIP });
+    await expect(field(portRow, 'tx')).toHaveText('4 bytes', {
+      timeout: ROUND_TRIP
+    });
     expect(await changes()).toEqual(flashes);
 
     const events = await lampEvents(page, port.name);
@@ -423,7 +652,7 @@ test.describe('Devices panel', () => {
       // The circle of a lit lamp has another colour than the circle of a lamp that is off.
       expect(on.colour).not.toBe(off.colour);
     }
-    // The RX lamp was off between its flashes: about 320 ms each time.
+    // The RX lamp was off between its flashes: the rest of each 400 ms.
     for (const next of [2, 4]) {
       expect(events[next].at - events[next - 1].at).toBeGreaterThan(100);
     }
@@ -449,12 +678,12 @@ test.describe('Devices panel', () => {
     await expect
       .poll(() => lampChanges(page, port.name), { timeout: LAMP_WAIT })
       .toEqual(steady);
-    // Lit from the first period with bytes until 80 ms after the last one.
+    // Lit from the first period with bytes until 200 ms after the last one.
     const [on, off] = await lampEvents(page, port.name);
     expect(off.at - on.at).toBeGreaterThan(1000);
     expect(off.at - on.at).toBeLessThan(2500);
     // The device table with the 60 bytes counted comes within a second, and it lights nothing.
-    await expect(field(portRow, 'rx')).toHaveText('60', {
+    await expect(field(portRow, 'rx')).toHaveText('60 bytes', {
       timeout: ROUND_TRIP
     });
     expect(await lampChanges(page, port.name)).toEqual(steady);
@@ -483,14 +712,16 @@ test.describe('Devices panel', () => {
     await expect(other).toHaveAttribute('data-owner', 'other', {
       timeout: ROUND_TRIP
     });
-    await expect(field(other, 'rx')).toHaveText('3');
+    await expect(field(other, 'rx')).toHaveText('3 bytes');
     expect(await lampChanges(second, port.name)).toEqual([]);
     await expect(other.locator('[data-lit]')).toHaveCount(0);
 
     // The port sends 2 bytes more. The second tab moves no byte of this port: it
     // learns of them from the device table, and that table flashes the lamp.
     await simSend(page, port.id, [4, 5]);
-    await expect(field(other, 'rx')).toHaveText('5', { timeout: ROUND_TRIP });
+    await expect(field(other, 'rx')).toHaveText('5 bytes', {
+      timeout: ROUND_TRIP
+    });
     await expect
       .poll(() => lampChanges(second, port.name), { timeout: LAMP_WAIT })
       .toEqual([
@@ -561,7 +792,7 @@ test.describe('Devices panel', () => {
     await expect(requestRow).toHaveCount(0);
   });
 
-  test('ACC-PANEL-163 a lit TX lamp has the colour of --jp-brand-color1 and a lit RX lamp the colour of --md-yellow-600, and a lamp that goes off has the colour of an unlit lamp again', async ({
+  test('ACC-PANEL-163 a lit TX lamp has the colour of --jp-error-color1 and a lit RX lamp the colour of --jp-success-color1, and a lamp that goes off has the colour of an unlit lamp again', async ({
     page
   }) => {
     // The port does not send back what it gets: each direction has traffic of its own.
@@ -580,13 +811,13 @@ test.describe('Devices panel', () => {
         probe.remove();
         return colour;
       }, variable);
-    const blue = await colourOf('--jp-brand-color1');
-    const yellow = await colourOf('--md-yellow-600');
+    const red = await colourOf('--jp-error-color1');
+    const green = await colourOf('--jp-success-color1');
     const unlit = await portRow
       .locator('[data-lamp="rx"]')
       .evaluate(node => getComputedStyle(node, '::before').backgroundColor);
     // Three different colours: the lab defines both variables.
-    expect(new Set([blue, yellow, unlit, 'rgba(0, 0, 0, 0)']).size).toBe(4);
+    expect(new Set([red, green, unlit, 'rgba(0, 0, 0, 0)']).size).toBe(4);
 
     await simSend(page, port.id, [1, 2, 3]);
     await expect
@@ -614,9 +845,9 @@ test.describe('Devices panel', () => {
       event.colour
     ]);
     expect(colours).toEqual([
-      ['rx', true, yellow],
+      ['rx', true, green],
       ['rx', false, unlit],
-      ['tx', true, blue],
+      ['tx', true, red],
       ['tx', false, unlit]
     ]);
   });
@@ -636,15 +867,21 @@ test.describe('Devices panel', () => {
 
     await openSettings(page, portRow);
     const shown = await Promise.all(
-      ['profile', 'baudRate', 'dataBits', 'parity', 'stopBits', 'onOpen'].map(
+      ['config', 'baudRate', 'dataBits', 'parity', 'stopBits', 'onOpen'].map(
         name => settingsField(page, name).inputValue()
       )
     );
-    expect(shown).toEqual(['monitor', '115200', '8', 'none', '1', 'none']);
+    expect(shown).toEqual(['default', '115200', '8', 'none', '1', 'none']);
     await settingsField(page, 'baudRate').fill('9600');
     await saveSettings(page, 'Cancel');
 
-    expect((await serialRecord(port.name)).overrides).toEqual({});
+    expect((await serialRecord(port.name)).configured).toEqual({
+      baudRate: 115200,
+      dataBits: 8,
+      parity: 'none',
+      stopBits: 1,
+      onOpen: 'none'
+    });
     await expect(field(portRow, 'baud')).toHaveText('115200');
     expect(await opens()).toHaveLength(1);
 
@@ -662,9 +899,147 @@ test.describe('Devices panel', () => {
         expect.objectContaining({ baudRate: 115200 }),
         expect.objectContaining({ baudRate: 9600 })
       ]);
-    expect((await serialRecord(port.name)).overrides).toEqual({
+    expect((await serialRecord(port.name)).configured).toMatchObject({
       baudRate: 9600
     });
+  });
+
+  test('ACC-PANEL-221 the baud rate is one editable field, and a standard value and a typed value both reach the request', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    const baud = settingsField(page, 'baudRate');
+
+    await openSettings(page, portRow);
+    await expect(baud).toHaveValue('115200');
+
+    // A standard rate is typed into the one field and saved.
+    await baud.fill('9600');
+    await saveSettings(page);
+    await expect(field(portRow, 'baud')).toHaveText('9600', {
+      timeout: ROUND_TRIP
+    });
+    expect((await serialRecord(port.name)).configured).toMatchObject({
+      baudRate: 9600
+    });
+
+    // A rate outside the standard list is typed into the same field and saved.
+    await openSettings(page, portRow);
+    await expect(baud).toHaveValue('9600');
+    await baud.fill('250000');
+    await saveSettings(page);
+    await expect(field(portRow, 'baud')).toHaveText('250000', {
+      timeout: ROUND_TRIP
+    });
+    expect((await serialRecord(port.name)).configured).toMatchObject({
+      baudRate: 250000
+    });
+
+    // The next dialog shows the typed rate in the one field.
+    await openSettings(page, portRow);
+    await expect(baud).toHaveValue('250000');
+    await saveSettings(page, 'Cancel');
+  });
+
+  test('ACC-PANEL-232 the Settings dialog renders a table of six settings, and typing 250000 shows Custom while 115200 hides it', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const portRow = row(page, port.name);
+    await openSettings(page, portRow);
+
+    const dialog = settingsDialog(page);
+    const rows = dialog.locator('table tbody tr');
+    await expect(rows).toHaveCount(6);
+    await expect(rows.locator('th')).toHaveText([
+      'Config',
+      'Baud rate',
+      'Data bits',
+      'Parity',
+      'Stop bits',
+      'When a program opens the port'
+    ]);
+    // Every value cell holds exactly one control.
+    for (let index = 0; index < 6; index++) {
+      await expect(rows.nth(index).locator('td')).toHaveCount(1);
+      await expect(rows.nth(index).locator('td input, td select')).toHaveCount(
+        1
+      );
+    }
+
+    const baud = settingsField(page, 'baudRate');
+    const custom = dialog.locator('[data-setting-badge="custom"]');
+    await expect(custom).toBeHidden();
+
+    await baud.fill('250000');
+    await expect(custom).toBeVisible();
+    await saveSettings(page);
+    await expect(field(portRow, 'baud')).toHaveText('250000', {
+      timeout: ROUND_TRIP
+    });
+
+    await openSettings(page, portRow);
+    await expect(baud).toHaveValue('250000');
+    await expect(custom).toBeVisible();
+    await baud.fill('115200');
+    await expect(custom).toBeHidden();
+    await saveSettings(page, 'Cancel');
+  });
+
+  test('ACC-PANEL-233 each button of the Settings dialog is at most 30px high', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    await openSettings(page, row(page, port.name));
+
+    const buttons = settingsDialog(page).locator(
+      '.jp-DeviceBridgeSettings-button'
+    );
+    await expect(buttons).toHaveCount(4);
+    for (const label of ['Cancel', 'Delete config', 'Save as...', 'Save']) {
+      const box = await settingsButton(page, label).boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeLessThanOrEqual(30);
+    }
+  });
+
+  test('ACC-PANEL-222 the rendered Settings dialog has one accent button, Save; Delete config carries the warning class and Cancel and Save as... are secondary', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    await openSettings(page, row(page, port.name));
+    // The lab gives a warn button jp-mod-accept too, so the accent set is the accept
+    // class without the warning class: exactly one button, Save.
+    const accent = settingsDialog(page).locator(
+      '.jp-Dialog-button.jp-mod-accept:not(.jp-mod-warn)'
+    );
+    await expect(accent).toHaveCount(1);
+    await expect(accent).toHaveText('Save');
+    await expect(settingsButton(page, 'Save')).toHaveClass(/\bjp-mod-accept\b/);
+    await expect(settingsButton(page, 'Delete config')).toHaveClass(
+      /\bjp-mod-warn\b/
+    );
+    await expect(settingsButton(page, 'Cancel')).toHaveClass(
+      /\bjp-mod-reject\b/
+    );
+    await expect(settingsButton(page, 'Save as...')).toHaveClass(
+      /\bjp-mod-reject\b/
+    );
+    await expect(settingsButton(page, 'Cancel')).not.toHaveClass(
+      /\bjp-mod-accept\b/
+    );
+    await expect(settingsButton(page, 'Save as...')).not.toHaveClass(
+      /\bjp-mod-accept\b/
+    );
   });
 
   test('ACC-PANEL-175 an empty panel reads No device attached and No device shell opened, the sections Serial and USB and Device shells, and the footer Round trip; each tooltip has the full text', async ({
@@ -708,6 +1083,34 @@ test.describe('Devices panel', () => {
       /^Round trip: \d+\.\d ms$/,
       { timeout: ROUND_TRIP }
     );
+  });
+
+  test('ACC-PANEL-219 the footer has no background and no separator line, keeps the small font, and its round trip value has the muted colour of its label', async ({
+    page
+  }) => {
+    await openLab(page, {});
+    const panel = page.locator(PANEL);
+    const footer = panel.locator('.jp-DeviceBridgePanel-footer');
+    const roundTrip = field(footer, 'round-trip');
+
+    await expect(footer).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(footer).toHaveCSS('border-top-width', '0px');
+    // The size and the colour of the variable, as the browser computes them on the panel.
+    const token = await panel.evaluate(node => {
+      const probe = document.createElement('span');
+      probe.style.fontSize = 'var(--jp-ui-font-size0)';
+      probe.style.color = 'var(--jp-ui-font-color2)';
+      node.append(probe);
+      const style = getComputedStyle(probe);
+      const computed = { fontSize: style.fontSize, color: style.color };
+      probe.remove();
+      return computed;
+    });
+    expect(token.fontSize).toMatch(/px$/);
+    expect(token.color).toMatch(/^rgba?\(/);
+    await expect(footer).toHaveCSS('font-size', token.fontSize);
+    await expect(footer).toHaveCSS('color', token.color);
+    await expect(roundTrip).toHaveCSS('color', token.color);
   });
 
   test('DEF-SERIAL-20 closing the tab of the serial terminal ends its lab terminal session, and the device has no holder', async ({
@@ -1024,11 +1427,11 @@ test.describe('Devices panel', () => {
     await expect(
       toast(
         page,
-        'Profile not changed: baudRate: 4294967296 is not a whole number from 1 to 4294967295'
+        'Settings not changed: baudRate: 4294967296 is not a whole number from 1 to 4294967295'
       )
     ).toBeVisible();
     await expect(field(portRow, 'baud')).toHaveText('115200');
-    expect((await serialRecord(port.name)).overrides).toEqual({});
+    expect((await serialRecord(port.name)).configured.baudRate).toBe(115200);
   });
 });
 
@@ -1230,7 +1633,7 @@ test.describe('Device shells', () => {
     // A tool that opens the virtual device and holds it until a line arrives on stdin.
     const { path: devicePath } = await serialRecord(port.name);
     const command = toolCommand(devicePath, ['--hold']);
-    const run = startRun(['--', ...command]);
+    const run = startRun(['--device', port.name, '--', ...command]);
 
     const rowOfRun = await listed(page, run);
     await expect(field(rowOfRun, 'program')).toHaveText(basename(command[0]));
@@ -1239,7 +1642,7 @@ test.describe('Device shells', () => {
     await expect(field(rowOfRun, 'command')).toHaveText(
       command.join(' ').slice(0, 200)
     );
-    // The run named no device: its device is the port that its process holds.
+    // The run names the port: its device is that port, and its process holds it.
     await expect
       .poll(async () => (await serialRecord(port.name)).holder?.pid, {
         timeout: ROUND_TRIP
@@ -1259,27 +1662,113 @@ test.describe('Device shells', () => {
     await expect(field(section, 'empty')).toBeVisible();
   });
 
-  test('ACC-PANEL-131 every run is listed: a run with --device shows that device, and a run without it whose process holds no port shows no device', async ({
+  test('ACC-PANEL-131 a run started with --device is listed with that device, and its process holds no port', async ({
     page
   }) => {
     const port = simSerial();
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
 
-    // `cat` runs until its standard input ends, and it opens no device.
-    const plain = startRun(['--', 'cat']);
+    // `cat` runs until its standard input ends, and it opens no device: the row shows
+    // the device that the run named, not a port that its process holds.
     const named = startRun(['--device', port.name, '--', 'cat', '-u']);
 
-    const plainRow = await listed(page, plain);
     const namedRow = await listed(page, named);
-    await expect(field(runsSection(page), 'count')).toHaveText('(2)');
-    await expect(field(plainRow, 'program')).toHaveText('cat');
-    await expect(field(plainRow, 'command')).toHaveText('cat');
-    await expect(field(plainRow, 'device')).toHaveText('no device');
+    await expect(field(runsSection(page), 'count')).toHaveText('(1)');
     await expect(field(namedRow, 'program')).toHaveText('cat');
     await expect(field(namedRow, 'command')).toHaveText('cat -u');
     await expect(field(namedRow, 'device')).toHaveText(port.name);
     expect((await serialRecord(port.name)).holder).toBeNull();
+  });
+
+  test('ACC-PANEL-216 the Copy button of a run row copies the command line the row shows', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const run = startRun(['--device', port.name, '--', 'cat', '-u']);
+    const rowOfRun = await listed(page, run);
+    const command = (await field(rowOfRun, 'command').textContent())!;
+
+    // The button reads the command line of its own row, not the program of the run.
+    expect(command).toBe('cat -u');
+    await page
+      .context()
+      .grantPermissions(['clipboard-read', 'clipboard-write']);
+    const copy = action(rowOfRun, 'copy-run');
+    await expect(copy).toHaveText('Copy');
+    await expect(copy).toHaveAttribute(
+      'title',
+      `Copy the command line: ${command}`
+    );
+    await copy.click();
+
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()), {
+        timeout: ROUND_TRIP
+      })
+      .toBe(command);
+  });
+
+  test('ACC-PANEL-223 a click on the Copy button of a run row reads Copied when the command line reached the clipboard, and Copy again after a moment', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const run = startRun(['--device', port.name, '--', 'cat', '-u']);
+    const rowOfRun = await listed(page, run);
+    const copy = action(rowOfRun, 'copy-run');
+
+    await page
+      .context()
+      .grantPermissions(['clipboard-read', 'clipboard-write']);
+    await copy.click();
+
+    // The feedback comes after the copy, and the button is Copy again after a moment.
+    await expect(copy).toHaveText('Copied', { timeout: ROUND_TRIP });
+    await expect(copy).toHaveText('Copy', { timeout: ROUND_TRIP });
+  });
+
+  test('ACC-PANEL-224 a run that ends at once stays in the Device shells section about 3 seconds, then leaves', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const run = startRun(['--device', port.name, '--', 'true']);
+    const rowOfRun = runRow(page, run.pid);
+
+    // The server drops the run within a second, and its row stays until 3 s after
+    // it appeared.
+    await expect(rowOfRun).toBeVisible({ timeout: ROUND_TRIP });
+    const seen = Date.now();
+    await page.waitForTimeout(2000);
+    await expect(rowOfRun).toBeVisible();
+    await expect(rowOfRun).toHaveCount(0, { timeout: ROUND_TRIP });
+    const shown = Date.now() - seen;
+    expect(shown).toBeGreaterThanOrEqual(2000);
+    expect(shown).toBeLessThan(5000);
+  });
+
+  test('ACC-PANEL-225 a run that ended shows stopped and a disabled Stop while its row lingers, and Copy stays usable', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const run = startRun(['--device', port.name, '--', 'true']);
+    const rowOfRun = runRow(page, run.pid);
+
+    await expect(rowOfRun).toBeVisible({ timeout: ROUND_TRIP });
+    const stop = action(rowOfRun, 'stop-run');
+    await expect(stop).toBeDisabled({ timeout: ROUND_TRIP });
+    await expect(field(rowOfRun, 'state')).toBeVisible();
+    await expect(field(rowOfRun, 'state')).toHaveText('stopped');
+    await expect(action(rowOfRun, 'copy-run')).toBeEnabled();
+    // The row leaves 3 s after it appeared.
+    await expect(rowOfRun).toHaveCount(0, { timeout: ROUND_TRIP });
   });
 
   test('ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, with no command line typed; the panel lists the shell as the run jupyterlab-device shell; a tool started in the shell passes its DTR and RTS calls to the port; exit closes the tab, and the run leaves the panel', async ({
@@ -1299,7 +1788,7 @@ test.describe('Device shells', () => {
     const pid = await startShell(
       page,
       () => start.click(),
-      `● COM ${devicePath} 115200 8N1 profile monitor ` +
+      `● COM ${devicePath} 115200 8N1 on open: none ` +
         `● USB ${device.name} ${device.vendorId.toString(16).padStart(4, '0')}:` +
         `${device.productId.toString(16).padStart(4, '0')} ${device.productName}`
     );
@@ -1414,8 +1903,10 @@ test.describe('Device shells', () => {
   test('ACC-PANEL-133 the second click on Stop ends the program of a run and its row leaves the panel, and the first click ends nothing', async ({
     page
   }) => {
-    await openLab(page, {});
-    const run = startRun(['--', 'cat']);
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const run = startRun(['--device', port.name, '--', 'cat']);
     const rowOfRun = await listed(page, run);
     const stop = action(rowOfRun, 'stop-run');
     await expect(stop).toHaveText('Stop');
@@ -1440,8 +1931,10 @@ test.describe('Device shells', () => {
   test('DEF-PANEL-21 in the dark theme the label of an armed Stop is opaque black on the red fill', async ({
     page
   }) => {
-    await openLab(page, {});
-    const run = startRun(['--', 'cat']);
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    const run = startRun(['--device', port.name, '--', 'cat']);
     const stop = action(await listed(page, run), 'stop-run');
     await page.theme.setDarkTheme();
     try {
@@ -1497,7 +1990,7 @@ test.describe('Device shells', () => {
     await expect(info).toHaveCount(1);
     await expect(info).toBeHidden();
 
-    const run = startRun(['--', 'cat']);
+    const run = startRun(['--device', port.name, '--', 'cat']);
     await whileRunning(run, expect(info).toBeVisible({ timeout: ROUND_TRIP }));
     await expect(info).toHaveText('Info');
     await info.click();
@@ -1868,7 +2361,9 @@ test.describe('Show Devices Panel', () => {
     const portRow = row(page, port.name);
     await expect(portRow).toHaveAttribute('data-owner', 'this');
     await expect(field(portRow, 'state')).toHaveText('attached');
-    await expect(field(portRow, 'tx')).toHaveText('2', { timeout: ROUND_TRIP });
+    await expect(field(portRow, 'tx')).toHaveText('2 bytes', {
+      timeout: ROUND_TRIP
+    });
   });
 
   test('ACC-PANEL-122 when the lab cannot save showPanel the View menu item still shows the panel and marks the item, and a toast says that the setting was not saved', async ({

@@ -15,8 +15,8 @@ from pathlib import Path
 SOURCE = Path(__file__).parent / "shim" / "devshim.c"
 COMPILERS = ("cc", "gcc")
 NO_SHIM_NEEDED = (
-    "set a profile with `jupyterlab-device profile <device> <id>` instead: "
-    "a profile needs no shim"
+    "set the port's settings with `jupyterlab-device settings set <device>` instead: "
+    "the settings need no shim"
 )
 
 

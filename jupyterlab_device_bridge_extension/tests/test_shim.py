@@ -170,7 +170,7 @@ async def holds(tab, child):
 
 
 async def ends(tab, child):
-    """Close a tool's stdin, which ends it, and wait until the port is back at the profile's settings."""
+    """Close a tool's stdin, which ends it, and wait until the port is back at its own settings."""
     child.stdin.close()
     assert await asyncio.wait_for(child.wait(), 20) == 0
     await tab.until(lambda: record(tab)["holder"] is None and tab.settings[SERIAL_NAME] == settings("8N1"))
@@ -199,7 +199,7 @@ async def test_acc_shim_33_dtr_and_rts_calls_reach_the_port_in_the_tools_order(c
     assert bare.status != 0 and "Inappropriate ioctl for device" in bare.err, "a pty refuses the calls"
     assert tab.got("serial-signals") == []
 
-    outcome = await cli_run("run", "--", sys.executable, "-c", MODEM_LINES, path)
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", sys.executable, "-c", MODEM_LINES, path)
 
     assert (outcome.status, outcome.err) == (0, "")
     assert ast.literal_eval(outcome.out.decode()) == MODEM_LINES_ORDER
@@ -213,7 +213,7 @@ async def test_acc_shim_33_a_modem_line_call_returns_when_the_bridge_answered(cl
     tab, path = await attach_serial(fake_tab)
     tab.answers = False  # the bridge then answers the shim after 1 s
 
-    outcome = await cli_run("run", "--", sys.executable, "-c", TIMED_CALL, path)
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", sys.executable, "-c", TIMED_CALL, path)
 
     assert outcome.status == 0 and 0.9 < float(outcome.out) < 3
     assert lines(tab) == [(True, False)]
@@ -228,7 +228,8 @@ async def test_acc_shim_34_a_tool_that_sets_8e1_reads_it_back_and_the_port_gets_
     await ends(tab, bare)
     assert configured(tab) == []
 
-    child = await holds(tab, await cli_run.start("run", "--", sys.executable, "-c", SET_FRAME, path, stdin=PIPE))
+    child = await holds(tab, await cli_run.start("run", "--device", SERIAL_NAME, "--",
+                                                 sys.executable, "-c", SET_FRAME, path, stdin=PIPE))
     assert await answer(child, "8E1") == "8E1"
     assert tab.settings[SERIAL_NAME] == record(tab)["settings"] == settings("8E1")
     assert await answer(child, "8E1") == "8E1", "the same format a second time is accepted too"
@@ -243,7 +244,8 @@ async def test_acc_shim_34_the_format_and_the_baud_rate_of_one_call_reach_the_po
     """ACC-SHIM-34 a tool that sets its baud rate and 8E1 in one tcsetattr call has the port reopened at that rate with even parity."""
     tab, path = await attach_serial(fake_tab)
 
-    child = await holds(tab, await cli_run.start("run", "--", sys.executable, "-c", SET_FRAME, path, "57600",
+    child = await holds(tab, await cli_run.start("run", "--device", SERIAL_NAME, "--",
+                                                 sys.executable, "-c", SET_FRAME, path, "57600",
                                                  stdin=PIPE))
     assert await answer(child, "8E1") == "8E1"
 
@@ -265,7 +267,8 @@ async def test_acc_shim_33_and_34_pyserial_under_the_shim(cli_run, fake_tab):
     await tab.until(lambda: record(tab)["holder"] is None)
     assert all(each["parity"] == "none" for each in configured(tab)) and lines(tab) == []
 
-    child = await cli_run.start("run", "--", sys.executable, "-c", PYSERIAL, path, stdin=PIPE)
+    child = await cli_run.start("run", "--device", SERIAL_NAME, "--",
+                                sys.executable, "-c", PYSERIAL, path, stdin=PIPE)
 
     assert await answer(child) == "done"
     assert lines(tab) == PYSERIAL_ORDER
@@ -277,10 +280,11 @@ async def test_acc_shim_33_and_34_pyserial_under_the_shim(cli_run, fake_tab):
 
 
 async def test_acc_shim_34_the_format_of_a_tool_that_closed_without_a_write_ends_with_that_tool(cli_run, fake_tab):
-    """ACC-SHIM-34 a tool under the shim that opens the device, sets 8E1 and closes it without a write has the port reopened with even parity each time, and the next tool gets the profile's format (DEF-SHIM-3)."""
+    """ACC-SHIM-34 a tool under the shim that opens the device, sets 8E1 and closes it without a write has the port reopened with even parity each time, and the next tool gets the port's format (DEF-SHIM-3)."""
     tab, path = await attach_serial(fake_tab)
 
-    child = await cli_run.start("run", "--", sys.executable, "-c", OPEN_SET_CLOSE, path, stdin=PIPE)
+    child = await cli_run.start("run", "--device", SERIAL_NAME, "--",
+                                sys.executable, "-c", OPEN_SET_CLOSE, path, stdin=PIPE)
     for _ in range(5):
         assert await answer(child, "open") == "closed"
         await tab.until(lambda: tab.settings[SERIAL_NAME] == settings("8N1"))
@@ -301,7 +305,8 @@ async def test_acc_shim_38_descriptors_that_are_no_bridge_device_behave_as_witho
     plain.write_bytes(b"")
 
     bare = await cli_run(plain, path, launch=("-c", OTHER_DESCRIPTORS))
-    shimmed = await cli_run("run", "--", sys.executable, "-c", OTHER_DESCRIPTORS, plain, path)
+    shimmed = await cli_run("run", "--device", SERIAL_NAME, "--", sys.executable, "-c",
+                            OTHER_DESCRIPTORS, plain, path)
 
     assert (bare.status, bare.err, shimmed.status, shimmed.err) == (0, "", 0, "")
     others, bridge = bare.out.decode().splitlines()
@@ -349,8 +354,8 @@ def test_acc_shim_36_another_source_builds_another_library(tmp_path, monkeypatch
     assert calls.read_text() == "call\ncall\n"
 
 
-def test_acc_shim_37_without_a_compiler_the_build_names_profiles(tmp_path, monkeypatch):
-    """ACC-SHIM-37 with no C compiler on PATH the build raises an error that says a profile needs no shim."""
+def test_acc_shim_37_without_a_compiler_the_build_names_the_settings(tmp_path, monkeypatch):
+    """ACC-SHIM-37 with no C compiler on PATH the build raises an error that says the settings need no shim."""
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
@@ -358,12 +363,12 @@ def test_acc_shim_37_without_a_compiler_the_build_names_profiles(tmp_path, monke
         shim_build.build()
 
     assert "no C compiler (cc or gcc) is installed" in str(refused.value)
-    assert "a profile needs no shim" in str(refused.value)
+    assert "the settings need no shim" in str(refused.value)
     assert not (tmp_path / "home").exists()
 
 
-def test_acc_shim_37_a_compiler_that_fails_names_profiles(tmp_path, monkeypatch):
-    """ACC-SHIM-37 when the compiler fails the build raises its message and says a profile needs no shim; no library is left."""
+def test_acc_shim_37_a_compiler_that_fails_names_the_settings(tmp_path, monkeypatch):
+    """ACC-SHIM-37 when the compiler fails the build raises its message and says the settings need no shim; no library is left."""
     (tmp_path / "cc").write_text("#!/bin/sh\necho 'fatal error: no headers' >&2\nexit 1\n")
     (tmp_path / "cc").chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -372,5 +377,5 @@ def test_acc_shim_37_a_compiler_that_fails_names_profiles(tmp_path, monkeypatch)
     with pytest.raises(shim_build.ShimBuildError) as refused:
         shim_build.build()
 
-    assert "fatal error: no headers" in str(refused.value) and "a profile needs no shim" in str(refused.value)
+    assert "fatal error: no headers" in str(refused.value) and "the settings need no shim" in str(refused.value)
     assert os.listdir(tmp_path / "home" / ".cache" / "jupyterlab-device-bridge") == []

@@ -30,12 +30,57 @@ import { DeviceBridgeModel, GrantError } from './model';
 import { DeviceBridgePanel, PANEL_ID, requestedDevice } from './panel';
 import { DeviceBridgeStatus } from './status';
 /* eslint-enable jupyter/prefer-lazy-imports */
+import { HELP_MARKDOWN } from './help';
 import type { IDeviceTable, ISerialDefaults } from './protocol';
 
 const PLUGIN_ID = 'jupyterlab_device_bridge_extension:plugin';
 const STATUS_ID = 'jupyterlab_device_bridge_extension:status';
 const MENU_ID = 'jp-mainmenu-devices';
 const CATEGORY = 'Devices';
+
+/** The id of the help tab in the main area, when the document manager gives none. */
+const HELP_ID = 'device-bridge-help';
+
+/**
+ * The file at the root of the contents that holds the help document. JupyterLab takes
+ * the title of a document tab from the name of its file, so this name is the title of
+ * the help tab. The file has no extension; the command below names the Markdown
+ * Preview, so the lab opens it as Markdown. A name that starts with a dot would hide
+ * the file, but the contents API refuses such a path unless the server allows hidden
+ * files, and the server does not by default.
+ */
+const HELP_PATH = 'Device Bridge Help';
+
+/** The command of the lab that opens a file in its read-only Markdown Preview. */
+const MARKDOWN_VIEWER_OPEN = 'markdownviewer:open';
+
+/** The part of a document widget that names the file it shows. */
+interface IDocumentContent {
+  context?: { path?: string };
+}
+
+/**
+ * The path of the file that a widget of the main area shows.
+ *
+ * @param widget A widget of the main area
+ * @returns The path of its file, or null for a widget that shows none
+ */
+function shownPath(widget: Widget): string | null {
+  const content = (widget as Widget & { content?: IDocumentContent }).content;
+  return content?.context?.path ?? null;
+}
+
+/**
+ * The status of the answer that a call of the contents API failed with.
+ *
+ * @param reason What the call rejected with
+ * @returns The status of the answer, or 0 when the call failed without one
+ */
+function failedStatus(reason: unknown): number {
+  const status = (reason as { response?: { status?: unknown } } | null)
+    ?.response?.status;
+  return typeof status === 'number' ? status : 0;
+}
 
 const CONNECT_SERIAL = 'device-bridge:connect-serial';
 const CONNECT_USB = 'device-bridge:connect-usb';
@@ -88,9 +133,9 @@ const PATH_PLACEHOLDER = '<path>';
 /**
  * The example command lines of the Info dialog, by the name of the tool. Each one is a
  * command line of the README section Working with an AI agent, without
- * `jupyterlab-device run -- ` in front where the README line has it, and with the
- * placeholder where the README has its example path. A Jest test compares them with
- * the README.
+ * `jupyterlab-device run --device <name> -- ` in front where the README line has it,
+ * and with the placeholder where the README has its example path. A Jest test
+ * compares them with the README.
  */
 const EXAMPLES: Array<[tool: string, line: string]> = [
   [
@@ -387,6 +432,73 @@ const plugin: JupyterFrontEndPlugin<void> = {
       });
     };
 
+    /** The open tab of the help document, or undefined when the main area has none. */
+    const openHelp = (): Widget | undefined =>
+      Array.from(shell.widgets('main')).find(
+        widget => shownPath(widget) === HELP_PATH
+      );
+
+    /**
+     * Give the help tab an id when it has none. The document manager gives every tab
+     * it opens an id of its own; this covers a viewer that does not. The tab is
+     * titled by its file name; the plugin does not set another title, because the
+     * lab treats the title of a document tab as the name of its file and renames the
+     * file when the title changes.
+     */
+    const ensureHelpId = (widget: Widget): void => {
+      if (!widget.id) {
+        widget.id = HELP_ID;
+      }
+    };
+
+    /**
+     * Open the help document in the read-only Markdown Preview of the lab. The text
+     * lives in the file `Device Bridge Help` at the root of the contents; the file is
+     * written when it is missing or holds other text. A second click finds the open
+     * tab by the path of its file and activates it, so the main area holds one help tab.
+     */
+    const showHelp = async (): Promise<void> => {
+      const open = openHelp();
+      if (open) {
+        ensureHelpId(open);
+        shell.activateById(open.id);
+        return;
+      }
+      try {
+        let current: unknown;
+        try {
+          const file = await serviceManager.contents.get(HELP_PATH, {
+            content: true
+          });
+          current = file.content;
+        } catch (reason) {
+          // The file is missing at the first use, and the save below makes it.
+          if (failedStatus(reason) !== 404) {
+            throw reason;
+          }
+        }
+        if (current !== HELP_MARKDOWN) {
+          await serviceManager.contents.save(HELP_PATH, {
+            type: 'file',
+            format: 'text',
+            content: HELP_MARKDOWN
+          });
+        }
+        await commands.execute(MARKDOWN_VIEWER_OPEN, { path: HELP_PATH });
+        const widget = openHelp();
+        if (widget) {
+          ensureHelpId(widget);
+        }
+      } catch (reason) {
+        const cause = reason instanceof Error ? reason.message : String(reason);
+        Notification.emit(
+          `The help document could not be opened: ${cause}`,
+          'error',
+          TOAST
+        );
+      }
+    };
+
     // The menu of the plus icon of the panel: the connect command of each interface
     // that the browser has. The interfaces are fixed for the life of the page, so the
     // menu is built once. A menu reads the label of an entry from the registry each
@@ -405,7 +517,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
       grantRequest,
       openTerminal: name => void openTerminal(name),
       startRun: () => void startRun(),
-      showRunInfo
+      showRunInfo,
+      showHelp: () => void showHelp()
     });
 
     // The option showPanel: the panel is in the left sidebar only while it is true.

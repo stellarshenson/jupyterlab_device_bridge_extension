@@ -114,6 +114,112 @@ const lastGrants = (scope: SimScope): unknown => {
   return all[all.length - 1].grants;
 };
 
+// The streams of Node, which jsdom does not offer as globals.
+const web = jest.requireActual('stream/web') as {
+  ReadableStream: typeof ReadableStream;
+  WritableStream: typeof WritableStream;
+};
+
+/**
+ * A serial port that the browser keeps open when `open()` reports a failure, as one
+ * board did. The port tracks its own state: a second `open()` without a `close()` is
+ * refused as the browser refuses it, and `forget()` refuses a port that is open.
+ */
+class StuckSerialPort {
+  forgotten = false;
+  /** Whether the browser holds the port open. */
+  isOpen = false;
+  /** While set, `open()` takes the port and then rejects with it. */
+  failOpen: Error | null = null;
+  /** Every call the port received, in order. */
+  readonly calls: string[] = [];
+  /** Every byte written to the port, in order. */
+  readonly written: number[] = [];
+  private source: ReadableStream<Uint8Array> | null = null;
+  private sink: WritableStream<Uint8Array> | null = null;
+
+  constructor(private readonly info: SerialPortInfo) {}
+
+  getInfo(): SerialPortInfo {
+    return this.info;
+  }
+
+  get readable(): ReadableStream<Uint8Array> | null {
+    if (!this.isOpen) {
+      return null;
+    }
+    if (!this.source) {
+      this.source = new web.ReadableStream<Uint8Array>({
+        cancel: () => this.endRead()
+      });
+    }
+    return this.source;
+  }
+
+  get writable(): WritableStream<Uint8Array> | null {
+    if (!this.isOpen) {
+      return null;
+    }
+    if (!this.sink) {
+      this.sink = new web.WritableStream<Uint8Array>({
+        write: chunk => {
+          this.written.push(...chunk);
+        }
+      });
+    }
+    return this.sink;
+  }
+
+  async open(options: SerialOptions): Promise<void> {
+    this.calls.push('open');
+    if (this.isOpen) {
+      throw new DOMException('The port is already open.', 'InvalidStateError');
+    }
+    this.isOpen = true;
+    if (this.failOpen) {
+      // The browser took the port, then reported that the open failed.
+      throw this.failOpen;
+    }
+  }
+
+  async close(): Promise<void> {
+    this.calls.push('close');
+    if (!this.isOpen) {
+      throw new DOMException(
+        'The port is already closed.',
+        'InvalidStateError'
+      );
+    }
+    if (
+      (this.source && this.source.locked) ||
+      (this.sink && this.sink.locked)
+    ) {
+      throw new TypeError('Cannot cancel a locked stream');
+    }
+    this.isOpen = false;
+    this.endRead();
+    this.sink = null;
+  }
+
+  async forget(): Promise<void> {
+    this.calls.push('forget');
+    if (this.isOpen) {
+      throw new DOMException('The port is open.', 'InvalidStateError');
+    }
+    this.forgotten = true;
+  }
+
+  lose(): void {
+    this.isOpen = false;
+    this.endRead();
+    this.sink = null;
+  }
+
+  private endRead(): void {
+    this.source = null;
+  }
+}
+
 beforeEach(() => {
   jest.useFakeTimers();
 });
@@ -898,6 +1004,75 @@ describe('serial port: ownership', () => {
     await tick();
     expect(server.sent('claim')).toHaveLength(1);
   });
+
+  it('DEF-SERIAL-26 forget closes a port the browser still holds open, and a later scan and attach open it and pass bytes', async () => {
+    const port = new StuckSerialPort(UNO);
+    const server = new SimServer();
+    // The fake stands where SimSerialPort stands: the simulation reads getPorts()
+    // and the grant list, and the fake provides both through the granted list.
+    const serial = new SimSerial(port as unknown as SimSerialPort);
+    const scope = new SimScope(server, serial);
+    workerMain(scope);
+    scope.post({ type: 'start', url: WS_URL });
+    await tick();
+    expect(port.isOpen).toBe(true);
+
+    // A settings change reopens the port. The browser takes the port and then reports
+    // that the open failed, so the worker holds no open port while the browser does.
+    port.failOpen = new DOMException(
+      'Failed to open serial port.',
+      'NetworkError'
+    );
+    const configure = server.command({
+      type: 'serial-configure',
+      name: UNO_NAME,
+      settings: { ...SETTINGS, baudRate: 57600 }
+    });
+    await tick();
+    expect(server.ack(configure)).toEqual({
+      type: 'ack',
+      seq: configure,
+      ok: false,
+      error: { name: 'NetworkError', message: 'Failed to open serial port.' }
+    });
+    expect(port.isOpen).toBe(true);
+
+    // Forget closes the port that the browser still holds, then revokes the grant.
+    scope.post({ type: 'forget', name: UNO_NAME, keys: [UNO_KEY] });
+    await tick();
+    expect(port.isOpen).toBe(false);
+    expect(port.forgotten).toBe(true);
+    expect(port.calls.filter(call => call === 'close')).toHaveLength(2);
+    expect(server.sent('release')).toEqual([
+      { type: 'release', name: UNO_NAME, reason: 'forget' }
+    ]);
+    expect(lastGrants(scope)).toEqual([]);
+
+    // The cause ends, the user grants the port again, and a scan and an attach open it.
+    port.failOpen = null;
+    port.forgotten = false;
+    scope.post({ type: 'rescan' });
+    scope.post({ type: 'attach', keys: [UNO_KEY] });
+    await tick();
+
+    const claimed = server.sent('claim');
+    expect(claimed).toHaveLength(2);
+    expect(claimed[1]).toMatchObject({ key: UNO_KEY });
+    expect(port.isOpen).toBe(true);
+    const state = server.sent('serial-state').pop();
+    expect(state).toMatchObject({ type: 'serial-state', state: 'open' });
+    expect(state?.error).toBeUndefined();
+
+    // Every byte reaches the port of the grant that the browser opened again.
+    const write = server.command({
+      type: 'serial-write',
+      name: UNO_NAME,
+      data: toBase64([1, 2, 3])
+    });
+    await tick();
+    expect(server.ack(write)).toEqual(okAck(write));
+    expect(port.written).toEqual([1, 2, 3]);
+  });
 });
 
 describe('WebSocket', () => {
@@ -1140,6 +1315,34 @@ describe('USB device', () => {
         }
       }
     ]);
+  });
+
+  it('DEF-USB-25 a USB string descriptor is claimed and described without its trailing NUL', async () => {
+    const all = rig(
+      [],
+      [
+        new SimUsbDevice({
+          productName: 'USB JTAG/serial debug unit\0',
+          manufacturerName: 'Espressif\0',
+          serialNumber: 'SIM0001\0'
+        })
+      ]
+    );
+    await connect(all);
+
+    const [claim] = all.server.sent('claim');
+    expect(claim.info).toEqual({
+      vendorId: 0x0d28,
+      productId: 0x0204,
+      serialNumber: 'SIM0001',
+      productName: 'USB JTAG/serial debug unit',
+      manufacturerName: 'Espressif'
+    });
+    expect(all.server.sent('usb-descriptors')[0].descriptors).toMatchObject({
+      serialNumber: 'SIM0001',
+      productName: 'USB JTAG/serial debug unit',
+      manufacturerName: 'Espressif'
+    });
   });
 
   it('ACC-USB-46 USB devices without a serial number are claimed with numbered keys', async () => {

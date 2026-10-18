@@ -32,7 +32,7 @@
     "defaultBaudRate": {
       "type": "integer",
       "title": "Default baud rate",
-      "description": "The baud rate a serial port gets when it is added. A port that is already in the Devices panel keeps its baud rate. A profile chosen later for the port replaces this value.",
+      "description": "The baud rate a serial port gets when it is added. A port that is already in the Devices panel keeps its baud rate. The Settings dialog of the port replaces this value.",
       "minimum": 1,
       "maximum": 4294967295,
       "default": 115200
@@ -40,7 +40,7 @@
     "defaultDataBits": {
       "type": "integer",
       "title": "Default data bits",
-      "description": "The number of data bits a serial port gets when it is added. A port that is already in the Devices panel keeps its value. A profile chosen later for the port replaces this value.",
+      "description": "The number of data bits a serial port gets when it is added. A port that is already in the Devices panel keeps its value. The Settings dialog of the port replaces this value.",
       "oneOf": [
         {
           "const": 7,
@@ -56,7 +56,7 @@
     "defaultParity": {
       "type": "string",
       "title": "Default parity",
-      "description": "The parity a serial port gets when it is added. A port that is already in the Devices panel keeps its value. A profile chosen later for the port replaces this value.",
+      "description": "The parity a serial port gets when it is added. A port that is already in the Devices panel keeps its value. The Settings dialog of the port replaces this value.",
       "oneOf": [
         {
           "const": "none",
@@ -76,7 +76,7 @@
     "defaultStopBits": {
       "type": "integer",
       "title": "Default stop bits",
-      "description": "The number of stop bits a serial port gets when it is added. A port that is already in the Devices panel keeps its value. A profile chosen later for the port replaces this value.",
+      "description": "The number of stop bits a serial port gets when it is added. A port that is already in the Devices panel keeps its value. The Settings dialog of the port replaces this value.",
       "oneOf": [
         {
           "const": 1,
@@ -92,7 +92,7 @@
     "defaultOnOpen": {
       "type": "string",
       "title": "Default action when a program opens the port",
-      "description": "The action that runs on a serial port each time a program opens its virtual device, set when the port is added. A port that is already in the Devices panel keeps its action. A profile chosen later for the port replaces this value.",
+      "description": "The action that runs on a serial port each time a program opens its virtual device, set when the port is added. A port that is already in the Devices panel keeps its action. The Settings dialog of the port replaces this value.",
       "oneOf": [
         {
           "const": "none",

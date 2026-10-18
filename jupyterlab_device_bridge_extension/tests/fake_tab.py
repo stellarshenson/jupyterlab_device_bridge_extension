@@ -166,7 +166,7 @@ class FakeTab:
                 serial settings of the lab, as the worker sends them.
 
         Returns:
-            The server's `claimed` message: `ok`, `name`, `sid`, `settings`, `profile`, or `heldBy`.
+            The server's `claimed` message: `ok`, `name`, `sid`, `settings`, or `heldBy`.
         """
         ids = key.split(":")[1:-1]  # two USB ids, or `port` for a port without them
         info = dict(zip(("usbVendorId", "usbProductId"), (int(part, 16) for part in ids))) if len(ids) == 2 else {}

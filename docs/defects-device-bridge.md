@@ -69,6 +69,13 @@ The byte path between a tool, the virtual serial device and the port in the brow
   - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: seen on hardware: miniterm pid 3919 still held tty-1a86-7523 after its terminal was gone; the agent stopped it with SIGTERM to free the port
   - log: 2026-10-16T06:08:56Z @kj fix decided by the Star Colonel: basic-terminal:launch gets an optional argument shutdownOnClose, default false, that ends the terminal session when its tab closes; the device bridge launches the serial terminal with it true
   - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
+- [x] `DEF-SERIAL-26` **Forget leaves the serial port open** - MAJOR; after Forget the row stays attached and the next attach fails `The port is already open.`; cause: closePort returns early when `entry.opened` is false, so the browser port stays open; fix: Forget closes and releases the port whatever the state, stops the read loop, clears the row and the server device; `src/worker.ts`
+  - evidence: Jest 'DEF-SERIAL-26 forget closes a port the browser still holds open, and a later scan and attach open it and pass bytes' and Galata 'DEF-SERIAL-26 Forget closes the serial port the browser still holds open, and the port attaches and moves bytes again in the same page' passed (logs/verify-followup-jest-named.log, logs/galata-followup.log); make test 1.0.22: Jest 271, Galata 88; red with the early return
+  - repro: attach the ESP32-C3 serial port, click Forget while its row shows an open error, reconnect the board and Attach; the row stays attached and open fails with `The port is already open.`
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-10-17T22:38:12Z @kj closePort returns before `device.close()` when `entry.opened` is false, so a port the browser still holds open is dropped without closing
+  - log: 2026-10-17T22:38:12Z @kj added; reason: the body carries the symptom, the cause, the required cleanup and the file
+  - log: 2026-10-17T23:35:58Z @kj closed; reason: the evidence names both regression tests and their run logs
 
 ## Preload shim `SHIM`
 
@@ -182,6 +189,13 @@ The jupyterlab-device command, its help texts, the README and the agent skill
   - root-cause: 2026-10-16T10:28:16Z @kj cmd_terminal starts the Textual app without checking for a terminal; Textual then waits for input that never comes
   - log: 2026-10-16T10:28:16Z @kj added
   - log: 2026-10-16T11:16:56Z @kj closed; reason: cmd_terminal checks for a terminal on stdin and stderr after the device lookup and the holder check, before the app starts
+- [x] `DEF-CLI-24` **The client talks to the first listed Jupyter server, not the lab's own** - MAJOR; In a lab terminal with another Jupyter server listed first, jupyterlab-device reports no device, registers its run there, and jupyterlab-device shell starts that server's shell. On 2026-10-17 port 8899 reported /bin/bash --rcfile, so the device shell was bash.
+  - evidence: test_client.py 16 passed incl. ACC-CLI-200; make test pytest 542 passed; live list shows tty-303a-1001 while the 8899 test server is listed
+  - repro: Run jupyterlab-device list in a lab terminal while another Jupyter server is listed before the lab: it prints 'no device is attached' although a port is attached.
+  - test-tags: UNIT
+  - root-cause: 2026-10-17T15:08:41Z @kj DeviceBridgeClient._server_list() takes the first line of jupyter server list --json and ignores JUPYTERHUB_SERVICE_PREFIX and JUPYTERHUB_SERVICE_URL, which name the lab's own server.
+  - log: 2026-10-17T15:08:41Z @kj added
+  - log: 2026-10-17T15:47:27Z @kj closed: fixed in client._server_list per the notifications extension rule
 
 ## Continuous integration `CI`
 
@@ -211,4 +225,17 @@ GitHub Actions workflows, and tests that fail only on a runner
   - log: 2026-10-16T12:08:52Z @kj edited test-tags added "CI"
   - log: 2026-10-16T12:19:09Z @kj root-cause overridden; reason: the first record named a split read as the cause; the second CI run and a local 80-column run showed the wrapped line
   - log: 2026-10-16T12:33:42Z @kj closed
+
+## USB devices `USB`
+
+USB descriptors and the operations on a USB device
+
+- [x] `DEF-USB-25` **USB text has the string descriptor's trailing NUL** - MINOR; the panel and usb describe show a replacement glyph after the manufacturer and product names, for example Espressif� USB JTAG/serial debug unit�; Chrome returns the USB string descriptors with a trailing NUL
+  - evidence: Jest worker DEF-USB-25 passed; Galata 85 passed incl. DEF-USB-25 panel test at tests/panel.spec.ts:455 showing 'Espressif USB JTAG/serial debug unit' with no NUL
+  - repro: attach an ESP32-C3 USB JTAG/serial device and open the Devices panel; both names end with a box glyph
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-10-17T16:24:58Z @kj navigator.usb productName, manufacturerName and serialNumber carry the NUL terminator of the USB string descriptor; the worker copies them unchanged into the claim info and the descriptor reply
+  - log: 2026-10-17T16:24:58Z @kj added
+  - log: 2026-10-17T16:41:34Z @kj edited test-tags "UNIT" -> "UNIT, FUNCTIONAL"
+  - log: 2026-10-17T16:49:30Z @kj closed
 

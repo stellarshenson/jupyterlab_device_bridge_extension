@@ -25,7 +25,8 @@ Wire shapes of docs/design.md that this client uses, as the server and this clie
 - `POST requests` answers the request record with `id`; `GET requests/<id>` answers
   it with `state` (`pending`, `granted`, `denied` or `expired`), `name` once granted
   and `error` once denied
-- `GET profiles` answers `{profiles: [...]}`
+- `GET settings-configs` answers `{configs: [...]}`: the system configs, then the user-saved ones;
+  `POST settings-configs` saves one, `DELETE settings-configs/<token>` removes one
 """
 
 import base64
@@ -33,12 +34,22 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 NAMESPACE = "jupyterlab-device-bridge-extension"
 
+# How long `jupyter server list --json` may take, and how often the client asks it.
+# A failure that is not the command's answer is tried again: a spike of load, or a
+# package install rewriting the shared environment, makes it fail once and succeed the
+# next time. A failure that stays is reported with its reason, never taken for a list
+# with no server, because the fallback address then hides the reason and dials a port
+# where nothing listens.
+SERVER_LIST_TIMEOUT_S = 5
+SERVER_LIST_ATTEMPTS = 3
+SERVER_LIST_PAUSE_S = 1.0
 # How long the server waits for the tab when the caller names no timeout (docs/design.md).
 SERVER_TIMEOUT_S = 5.0
 # What the HTTP call waits on top of the time the server may take.
@@ -72,25 +83,134 @@ class DeviceBridgeError(Exception):
         self.code = code
 
 
-def _server_list() -> dict:
-    """The running server's own record: port, base_url, and its token."""
+def _server_list_once() -> tuple[list[dict] | None, str | None]:
+    """What `jupyter server list --json` prints, or None and the reason it failed.
+
+    An empty list is an answer: the command worked and no server is listed. A timeout,
+    a missing command, a status other than 0 and a line that is not a record are not
+    an answer, and the caller must not read them as a list with no server.
+    """
     try:
         out = subprocess.run(
             ["jupyter", "server", "list", "--json"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=SERVER_LIST_TIMEOUT_S,
         )
-        if out.returncode == 0 and out.stdout.strip():
-            return json.loads(out.stdout.strip().split("\n")[0])
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
-        pass
+    except subprocess.TimeoutExpired:
+        return None, f"`jupyter server list --json` did not finish in {SERVER_LIST_TIMEOUT_S} s"
+    except FileNotFoundError:
+        return None, "`jupyter` is not on PATH"
+    except OSError as error:
+        return None, f"`jupyter server list --json` could not start ({error})"
+    if out.returncode != 0:
+        last = (out.stderr.strip().splitlines() or [""])[-1]
+        return None, (f"`jupyter server list --json` exited {out.returncode}"
+                      + (f": {last}" if last else ""))
+    records = []
+    for line in out.stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            return None, f"`jupyter server list --json` printed no server record: {line.strip()}"
+    return records, None
+
+
+def _listed_servers() -> list[dict]:
+    """The records of the running servers: port, base_url and token.
+
+    A failed command is tried again. A failure that stays is raised: a list nobody
+    could read is not a list without the server, and the fallback address would hide
+    the reason and dial a port where nothing listens.
+
+    Raises:
+        DeviceBridgeError: Every attempt failed; the message holds the last reason.
+    """
+    for attempt in range(SERVER_LIST_ATTEMPTS):
+        if attempt:
+            time.sleep(SERVER_LIST_PAUSE_S)
+        records, reason = _server_list_once()
+        if records is not None:
+            return records
+    raise DeviceBridgeError(
+        None,
+        f"{reason} - run `jupyter server list --json` in this shell to see the cause",
+    )
+
+
+def _ancestor_pids() -> set[int]:
+    """The process ids on the parent chain of this process.
+
+    The parent process id is field 4 of `/proc/<pid>/stat`, after the program name in
+    parentheses and field 3, the state. The program name can hold spaces and brackets,
+    so the fields are read after its last close parenthesis. The walk stops at 0 or 1
+    and at an entry that cannot be read. Without `/proc` the set is empty, so the
+    caller uses its other rules.
+    """
+    pids: set[int] = set()
+    pid = os.getpid()
+    while True:
+        try:
+            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as stat:
+                # Field 2, the program name, can hold spaces and brackets. Field 4, the
+                # parent process id, follows field 3, the state, after its last bracket.
+                fields = stat.read().rpartition(")")[2].split()
+            pid = int(fields[1])
+        except (OSError, IndexError, ValueError):
+            break
+        if pid <= 1:
+            break
+        pids.add(pid)
+    return pids
+
+
+def _server_list() -> dict:
+    """The record of the server this program belongs to.
+
+    The server that hosts this process is in its parent chain: a lab terminal and the
+    programs started in it run below that server, while the runtime directory keeps
+    records of other and older servers. That record wins over the listing order and
+    the prefix. Without one, `jupyter server list` walks the runtime directory with
+    os.listdir, so its order carries no meaning and the first entry is not a choice.
+    `JUPYTERHUB_SERVICE_PREFIX` names this process's server. Without that variable one
+    listed server is unambiguous; with it, a record the prefix disowns is not used.
+    Several with no match are not: guessing lands the devices, the run and the shell
+    command in another lab, so the caller gets the list instead.
+    """
+    records = _listed_servers()
+    ancestors = _ancestor_pids()
+    for record in records:
+        try:
+            if int(record.get("pid")) in ancestors:
+                return record
+        except (TypeError, ValueError):
+            # A record without a pid, or with a pid that is no number, names no
+            # process, so it cannot host this one.
+            continue
+    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX")
+    if prefix:
+        wanted = prefix.rstrip("/") + "/"
+        for record in records:
+            if record.get("base_url", "/") == wanted:
+                return record
+    if len(records) == 1 and not prefix:
+        return records[0]
+    if len(records) > 1:
+        listed = ", ".join(f"{record.get('port')}{record.get('base_url', '/')}" for record in records)
+        raise DeviceBridgeError(
+            None,
+            f"{len(records)} Jupyter servers are listed and none is this lab's: {listed} - "
+            "remove the stale records, or set JUPYTERHUB_SERVICE_PREFIX to the lab's base path",
+        )
     return {}
 
 
 def _base_url(info: dict) -> str:
     """Where the server answers, always on loopback."""
     if info:
-        return f"http://127.0.0.1:{info.get('port', 8888)}{info.get('base_url', '/').rstrip('/')}"
-    port = os.environ.get("JUPYTER_PORT", "8888")
+        scheme = "https" if info.get("secure") else "http"
+        return f"{scheme}://127.0.0.1:{info.get('port', 8888)}{info.get('base_url', '/').rstrip('/')}"
+    port = os.environ.get("JUPYTER_PORT") or "8888"
     return f"http://127.0.0.1:{port}{os.environ.get('JUPYTERHUB_SERVICE_PREFIX', '').rstrip('/')}"
 
 
@@ -174,7 +294,9 @@ class DeviceBridgeClient:
             # read phase raises bare.
             reason = getattr(error, "reason", error)
             raise DeviceBridgeError(
-                None, f"cannot reach the Jupyter server at {self.base_url} ({reason})"
+                None,
+                f"cannot reach the Jupyter server at {self.base_url} ({reason})"
+                " - start JupyterLab, or run this command in a terminal of the lab",
             ) from None
 
     def status(self) -> dict:
@@ -185,9 +307,17 @@ class DeviceBridgeClient:
         """The device table: `{serial: [record, ...], usb: [record, ...]}`."""
         return self.call("GET", "devices")
 
-    def profiles(self) -> list[dict]:
-        """The built-in serial profiles."""
-        return self.call("GET", "profiles")["profiles"]
+    def configs(self) -> list[dict]:
+        """The serial settings configs: the system configs and the user-saved ones."""
+        return self.call("GET", "settings-configs")["configs"]
+
+    def save_config(self, name: str, values: dict) -> dict:
+        """Save five settings under a user name; returns the saved config."""
+        return self.call("POST", "settings-configs", {"name": name, **values})
+
+    def delete_config(self, token: str) -> dict:
+        """Delete a user-saved config; a system config is refused."""
+        return self.call("DELETE", f"settings-configs/{urllib.parse.quote(token, safe='')}")
 
     def serial(self, name: str) -> "SerialDevice":
         """The serial device with this name, for example `tty-2341-0043`."""
@@ -233,7 +363,7 @@ class SerialDevice:
         self._path = f"serial/{urllib.parse.quote(name, safe='')}"
 
     def record(self) -> dict:
-        """The device record: `path`, `state`, `holder`, `settings`, `profile` and the rest.
+        """The device record: `path`, `state`, `holder`, `settings`, `configured` and the rest.
 
         Raises:
             DeviceBridgeError: Status 404 when the bridge lists no such serial device.
@@ -243,13 +373,13 @@ class SerialDevice:
                 return record
         raise DeviceBridgeError(404, f"no serial device named {self.name}", code="unknown-device")
 
-    def set_profile(self, **change: object) -> dict:
-        """Set `profile` (an id) and single fields: `baudRate`, `dataBits`, `parity`, `stopBits`, `onOpen`.
+    def set_settings(self, **change: object) -> dict:
+        """Apply a saved config (`config`) or single fields: `baudRate`, `dataBits`, `parity`, `stopBits`, `onOpen`.
 
         Returns:
             The device record after the change.
         """
-        return self._client.call("PUT", f"{self._path}/profile", change)
+        return self._client.call("PUT", f"{self._path}/settings", change)
 
     def monitor(self, since: int = 0, wait: float = 0.0) -> dict:
         """Bytes the port sent, from the server's buffer.

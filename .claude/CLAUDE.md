@@ -61,17 +61,19 @@ architecture changes.
 **Architecture**:
 
 - **Server** (Python, `jupyterlab_device_bridge_extension/`)
-  - `__init__.py` - the settings `DeviceBridge.device_dir` and `DeviceBridge.monitor_bytes`, one
-    `DeviceManager` per server, handler registration, release of the devices when the server ends
+  - `__init__.py` - the settings `DeviceBridge.device_dir`, `DeviceBridge.monitor_bytes` and
+    `DeviceBridge.settings_file`, one `DeviceManager` per server, handler registration, release of
+    the devices when the server ends
   - `manager.py` - `DeviceManager`: tabs, claims and ownership, device names, commands to the tab
     with `seq` and ack, device requests, the runs (programs started through `jupyterlab-device run`)
-    and their watch, the table broadcast; `SerialDevice` joins the profile, the pty, the shim socket
-    and the monitor buffer of one port
+    and their watch, the table broadcast, the system configs and the saved configs; `SerialDevice`
+    joins the settings record, the pty, the shim socket and the monitor buffer of one port
   - `vserial.py` - `VirtualSerial`: the pty, its symlink in the device directory, tool open and
     close, the holder, the baud rate, the queue to the tool; the choice of the default device
     directory (`/run/devices`, else `/tmp/jupyterlab-device-<uid>`); Linux only
   - `monitor.py` - `MonitorBuffer`, the ring buffer of the bytes a port sent
-  - `profiles.py` - the five built-in profiles, the actions, the check of a profile change
+  - `serial_settings.py` - the built-in values, the six system configs, the actions, the check of a
+    settings change and the file of the user-saved configs
   - `usb.py` - the USB record and the plan of one USB operation
   - `shim.py` - the Unix socket of one pty that the preload shim talks to
   - `routes.py` - the WebSocket of the lab tabs (`@ws_authenticated`) and the REST API
@@ -124,15 +126,18 @@ architecture changes.
 - **Agent skill** (`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`) - tells an agent
   to read `jupyterlab-device --help` first; the wheel installs it under `share/jupyter/agents/skills/`
 - **Resources** (`resources/envs/`) - copies of the three firmware environment installers and of
-  `firmware_env.py`, the module they import; the originals are in `~/.local/lab-utils/envs/`, no
-  code of the extension uses the copies; the wheel installs them in `envs/` beside the agent skill,
-  and one rule of the skill names them
+  `firmware_env.py`, the module they import; the source of truth is the template of the copier
+  embedded project at `~/workspace/private/copier-projects/copier-embedded-project/template/resources/envs`,
+  and `make build` refreshes the copies; no code of the extension uses them; the wheel installs
+  them in `envs/` beside the agent skill, and one rule of the skill names them
 - **CI/CD** - GitHub Actions plus jupyter-releaser under `.github/workflows/`
 
 **Terms**: a **grant** is the user's permission for one device in Chrome's dialog; **attached**
-means the tab holds the device and the server exposes it to container programs; a **profile** is
-the serial settings (parity, data bits, stop bits) plus the action on open; the **shim** is the
-`LD_PRELOAD` library that passes a tool's DTR, RTS and parity calls to the bridge.
+means the tab holds the device and the server exposes it to container programs; a **config** is a
+named serial settings record (baud rate, parity, data bits, stop bits) plus the action on open; a
+**system config** is one of the six the system delivers, read-only; a **saved config** is a config
+the user saved under a name; the **shim** is the `LD_PRELOAD` library that passes a tool's DTR, RTS
+and parity calls to the bridge.
 
 ## Build Lifecycle - Makefile Only
 
@@ -250,7 +255,7 @@ A command-line tool the extension ships (an entry point under `[project.scripts]
   `make test` runs it
 - **Never state that anything works with hardware** - no test here uses a physical board; a claim
   about a board needs the user's `MANUAL` test behind it
-- **No apt installs** - a firmware conda environment (`~/.local/lab-utils/envs/firmware-*.py`) is
+- **No apt installs** - a firmware conda environment (`resources/envs/firmware-*.py`) is
   installed only when a test needs its tool
 - **Unprivileged container** - the design may not need sudo, a kernel module or a device node
 - **Styling through JupyterLab CSS variables only** - no literal colours; follow the Extension

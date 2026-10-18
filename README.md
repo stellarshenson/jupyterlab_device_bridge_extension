@@ -31,7 +31,7 @@ The panel while the simulated port sends bytes. The RX lamp is lit, and the sect
 
 - **Serial ports in the container** - a port granted in the browser has a virtual serial device at a stable path, which a serial tool opens as it opens a serial port
 - **Baud rate of the tool** - the baud rate a tool sets on the virtual device is the baud rate the browser opens the port with
-- **Port profiles** - parity, data bits, stop bits and the action on open, with built-in profiles for Arduino, STM32 and ESP boards
+- **Serial settings** - parity, data bits, stop bits and the action on open, with system configs for Arduino, STM32 and ESP boards and named configs the user saves
 - **Preload shim** - a tool started with `jupyterlab-device run` has its own DTR, RTS, break and parity calls passed to the port. The panel opens a device shell, a terminal in which every tool has the shim, lists every program that runs with the shim and stops one. A device shell can start in a conda environment or a `.venv` that holds an upload tool
 - **Monitor for agents** - the server keeps the most recent bytes received from each port, so a short command-line call reads output that arrived before the call
 - **Serial terminal** - a full-screen terminal app of this extension in a JupyterLab terminal, on the virtual device, with keys for the control lines, the reset actions and the serial settings
@@ -56,7 +56,7 @@ The path of the bytes and of the settings:
 - **Tool to board** - a tool writes to the virtual device → the server reads the pty → a binary WebSocket frame → the worker writes the bytes to the port
 - **Board to tool** - the worker reads the port → a binary WebSocket frame → the server appends the bytes to the monitor buffer and, while a tool holds the virtual device, writes them to the pty
 - **Baud rate** - the server reads the baud rate the tool set on the pty and sends it to the worker; the worker closes the port and opens it again with that baud rate. Before it closes the port it closes the port's writable stream, which by the Web Serial specification waits until the bytes the tool wrote before the change are transmitted; this is not tested with a board. Bytes the tool writes after the change reach the port after the reopen
-- **Tool open and close** - the server detects both; on open it applies the profile's settings at the tool's baud rate and runs the profile's action, on close the port returns to the profile's own settings
+- **Tool open and close** - the server detects both; on open it applies the port's settings at the tool's baud rate and runs the port's action, on close the port returns to its own settings
 - **USB operation** - one call of a program is one HTTP request to the server, one message to the worker and one WebUSB call; the answer goes back through the same parts
 
 ## Using it in the lab
@@ -77,12 +77,13 @@ The choice is stored with the settings of the lab and holds after a page load. W
 The panel has:
 
 - **Plus icon** - in the header of the panel. A click opens a menu with **Connect Serial Port** and **Connect USB Device**; each opens the browser's dialog, and the device the user chooses is attached. A device granted earlier is attached again when the page loads, without a click
-- **Section Serial and USB** - one row per device: kind, name, state (`attached`, `detached`, `removed` or `held by another tab`) and the byte counters `RX <n>, TX <n> bytes`; for a serial port also the baud rate, the profile and the program that holds the virtual device; for a USB device the product name, `Opened: yes` or `Opened: no`, and the name of the program that has it open. With no device the section reads `No device attached`
-- **TX and RX lamps** - on every device row; a lit TX lamp has the brand colour of the theme and a lit RX lamp is yellow. They follow the traffic as the LEDs of a USB serial adapter do: a lamp is lit for 80 ms after each 50 ms period in which bytes passed in its direction. So sparse traffic gives single flashes, and steady traffic gives a steady light. For a device that another lab tab holds, a lamp flashes once when its byte counter grew, and the counters arrive once a second
+- **Section Serial and USB** - one row per device: kind, name, state (`attached`, `detached`, `removed` or `held by another tab`) and the byte counters `RX <bytes>, TX <bytes>`, each a count with its unit: `byte` or `bytes` below 10 KB, `KB` with one decimal from 10 KB, `MB` with one decimal from 1 MB, so 999999 reads `1.0 MB`; the kind chip has a pale blue or pink tint, and its border and text take the same hue in the shade the theme needs; for a serial port also the baud rate, the config (or `custom`), the action on open and the program that holds the virtual device; for a USB device the product name, `Opened: yes` or `Opened: no`, and the name of the program that has it open. With no device the section reads `No device attached`
+- **TX and RX lamps** - on every device row; a lit TX lamp is red and a lit RX lamp is green, both JupyterLab CSS variables. They follow the traffic as the LEDs of a USB serial adapter do: a lamp is lit for 200 ms after each event. So sparse traffic gives single flashes, and steady traffic gives a steady light. For a device that another lab tab holds, a lamp flashes once when its byte counter grew, and the counters arrive once a second
 - **Terminal** - on an attached serial port; opens the serial terminal
 - **Detach** - closes the device. The browser keeps the grant, and **Attach** opens the device again without a dialog
 - **Forget** - closes the device, removes it from the list and revokes the browser's grant. The first click changes the button to **Confirm forget**, in the error colour of the theme, the second click acts
-- **Settings** - on a serial port; opens the dialog `Serial settings of <name>` with the profile, baud rate, data bits, parity, stop bits and the action when a program opens the port. Choosing another profile fills the other fields with its values. **Save** applies the changed fields at once, **Cancel** changes nothing
+- **Settings** - on a serial port; opens the dialog `Serial settings of <name>` with the config, baud rate, data bits, parity, stop bits and the action when a program opens the port. The settings are a table with one row per setting and alternating shaded rows; the baud rate is one editable field that lists the standard rates and shows `Custom` when the value is not standard. Choosing a config fills the other fields with its values; changing a field selects `Custom`. **Save** applies the choice at once, **Save as...** stores the five values under a name, **Delete config** removes the user-saved config the port uses, **Cancel** changes nothing
+- **Help** - the `help` button at the far right of the Serial and USB header opens the file `Device Bridge Help` in the lab's read-only Markdown Preview; the document explains the panel options, the connections, the tools and the connection configs
 - **Section Requests** - each pending device request with the program, the device it asks for, the reason and a **Grant** button. The lab also raises a notification with that button
 - **Section Device shells** - one row per program that was started through `jupyterlab-device run` or `jupyterlab-device shell`, in any terminal, also by an agent: the program, its process id, its command line and the device. **Stop** ends the program: the first click changes the button to **Confirm stop**, in the error colour of the theme, the second click acts. **Start** opens a device shell, a lab terminal in which every tool has the preload shim; see [Preload shim](#preload-shim). **Info** is there while a program runs. It shows the path of each attached device and example command lines for avrdude, stm32flash, esptool and pio. With no program the section reads `No device shell opened`
 - **Round trip** - the last line, `Round trip: <ms> ms`, shows the measured round trip between browser and server, or `Round trip: not connected`
@@ -106,7 +107,7 @@ The setting **Show the Devices menu** (`showMenu`, default off) adds a **Devices
 
 ### Settings
 
-The settings are in **Settings → Settings Editor → Device Bridge**. A change takes effect without a reload. The page offers the parity and the action by the names the Devices panel uses; the value in backticks is what the lab stores and what `jupyterlab-device profile` takes.
+The settings are in **Settings → Settings Editor → Device Bridge**. A change takes effect without a reload. The page offers the parity and the action by the names the Devices panel uses; the value in backticks is what the lab stores and what `jupyterlab-device settings set` takes.
 
 | Setting                                      | Id                | Default             | Does                                                                                                                                                                                                                           |
 | -------------------------------------------- | ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -118,21 +119,21 @@ The settings are in **Settings → Settings Editor → Device Bridge**. A change
 | Default stop bits                            | `defaultStopBits` | 1                   | 1 or 2                                                                                                                                                                                                                         |
 | Default action when a program opens the port | `defaultOnOpen`   | Do nothing (`none`) | the action that runs when a program opens the virtual device: Do nothing (`none`), Pulse DTR (`pulse-dtr`), Pulse RTS (`pulse-rts`), Enter the ESP bootloader (`esp-bootloader`) or Open at 1200 baud and close (`touch-1200`) |
 
-- The five default settings apply to a serial port at the moment it is added: the port gets the profile `monitor` with these values
+- The five default settings apply to a serial port at the moment it is added: the port gets these values and the system config whose five values equal them, so with the installed defaults it reads `Default`; defaults that match no system config leave it `custom`
 - A port that is already in the Devices panel keeps its values when a default changes. That holds after a detach and a page load too, for as long as the Jupyter server runs. A port that was removed with **Forget** gets the defaults when it is added again
-- A profile chosen later for the port, in the Settings dialog of the panel or with `jupyterlab-device profile <device> <id>`, replaces these values
-- A port whose action on open is not the action of its profile has `on open <action>` after the profile in its line of `jupyterlab-device list`
+- A config applied later to the port, in the Settings dialog of the panel or with `jupyterlab-device settings apply <device> <config>`, replaces these values
+- A port shows its action on open and its config, or `custom`, in its line of `jupyterlab-device list`
 - With the defaults as they are installed, a port is added with 115200 baud, 8 data bits, no parity, 1 stop bit and no action on open
 
 ### Serial terminal
 
-The serial terminal is a full-screen app of this extension. The command starts `jupyterlab-device terminal <name>` in a new lab terminal, which runs the app on the virtual device with the baud rate of the profile. That terminal runs this one program, with no shell prompt. Its tab closes when the app ends, and closing the tab ends the app, so the port is free again.
+The serial terminal is a full-screen app of this extension. The command starts `jupyterlab-device terminal <name>` in a new lab terminal, which runs the app on the virtual device with the baud rate of the port. That terminal runs this one program, with no shell prompt. Its tab closes when the app ends, and closing the tab ends the app, so the port is free again.
 
 - The top row names the device, its path, the serial settings, the DTR and RTS lines and the bytes received and sent. Below it each line the port sends and each block that is sent has its own line with the time, received bytes in amber and sent bytes in cyan, as text or as hex digits
 - Enter sends the typed line, as text with a line ending (LF unless the settings say otherwise) or as hex digits
 - Ctrl+Q or Esc quits; Ctrl+O opens the settings: baud rate, data bits, parity, stop bits, the line ending and text or hex. The bottom row lists every key, and Ctrl+Y opens a list of every key with what it does
 - Keys set DTR and RTS, send a break, run the actions `pulse-dtr`, `pulse-rts`, `esp-bootloader` and `touch-1200`, and Ctrl+C sends the byte 0x03 to the board
-- The app opens the virtual device as every tool does: the panel shows it as the holding program, and the action on open of the profile runs
+- The app opens the virtual device as every tool does: the panel shows it as the holding program, and the port's action on open runs
 - A port that is detached or removed leaves the app open with the state `removed`, and nothing is sent until the port is attached again; after Forget, or when the device path failed, it stays removed until it is started again
 - The app follows a dark or a light terminal background
 - When the command line ends with an error less than 5 seconds after its start, for example because another program holds the port, the terminal stays open with the message until Enter is pressed
@@ -152,21 +153,24 @@ Each serial port has one virtual serial device in the container: a pty that a to
 - **Two boards of one model** - Web Serial gives a port no serial number, so the bridge cannot tell two ports with the same ids apart. After a page load, or in a second lab tab, a name can lead to the other board. Attach one such board at a time when a name must lead to a known board
 - **Device directory** - `c.DeviceBridge.device_dir` in the Jupyter server config file names it, and nothing else does. Without the setting it is `/run/devices` when the server's user owns that directory or can make it, else `/tmp/jupyterlab-device-<uid>`; the server log names the directory in use. An image makes `/run/devices` at its start as root, for example with `install -d -m 0700 -o <user> /run/devices`
 - **Monitor buffer** - the server keeps the last 262144 bytes each port sent. The server setting `c.DeviceBridge.monitor_bytes` sets another size
-- **What the virtual device carries** - data bytes in both directions and the baud rate. A pty refuses the DTR and RTS calls of a tool and holds no parity; these come from the profile of the port or from the preload shim
+- **What the virtual device carries** - data bytes in both directions and the baud rate. A pty refuses the DTR and RTS calls of a tool and holds no parity; these come from the port's settings or from the preload shim
 - **Detached port** - the path still opens, and the bytes a tool writes reach no board
 - **Killed server** - a server that is killed (SIGKILL, out of memory) leaves its links and sockets in the device directory. The next server that starts on the directory removes them, unless another running server holds the directory. Until then a left link can lead to another pty. A path is valid only for a device that `jupyterlab-device list` prints
 
-### Profiles
+### Serial settings
 
-A profile is the settings the browser opens the port with, and the action it runs on the port when a program opens the virtual device. It is set in the Settings dialog of the panel, in the serial terminal or with `jupyterlab-device profile <device> <id>`, and single fields can be overridden. A port that is added gets the profile `monitor`, with the default serial settings of the lab as overrides where they differ from that profile; see Settings.
+A port has one settings record: the baud rate, data bits, parity and stop bits the browser opens the port with, and the action it runs when a program opens the virtual device. The Settings dialog of the panel, the serial terminal and `jupyterlab-device settings` change it.
 
-| Profile            | Settings   | Action on open   | For                                                      |
-| ------------------ | ---------- | ---------------- | -------------------------------------------------------- |
-| `monitor`          | 115200 8N1 | `none`           | reading a board's output; the default                    |
-| `arduino-upload`   | 115200 8N1 | `pulse-dtr`      | Arduino Uno, Nano and Mega through the serial bootloader |
-| `arduino-isp`      | 19200 8N1  | `none`           | an Arduino used as ISP programmer; no action on open     |
-| `stm32-bootloader` | 115200 8E1 | `none`           | STM32 serial bootloader                                  |
-| `esp-upload`       | 115200 8N1 | `esp-bootloader` | ESP32 and ESP8266                                        |
+The system delivers six read-only configs. The first, Default, holds the built-in values, so a port can always return to them. A user can save the current values of a port under a name, in the Settings dialog or with `jupyterlab-device settings save`; a saved config survives a server restart.
+
+| System config    | Settings   | Action on open   | For                                                      |
+| ---------------- | ---------- | ---------------- | -------------------------------------------------------- |
+| Default          | 115200 8N1 | `none`           | the built-in values; a port with these values names it   |
+| Monitor          | 115200 8N1 | `none`           | reading a board's output                                 |
+| Arduino upload   | 115200 8N1 | `pulse-dtr`      | Arduino Uno, Nano and Mega through the serial bootloader |
+| Arduino as ISP   | 19200 8N1  | `none`           | an Arduino used as ISP programmer; no action on open     |
+| STM32 bootloader | 115200 8E1 | `none`           | STM32 serial bootloader                                  |
+| ESP upload       | 115200 8N1 | `esp-bootloader` | ESP32 and ESP8266                                        |
 
 | Action           | Steps on the port                                                                                                                                        |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -176,20 +180,23 @@ A profile is the settings the browser opens the port with, and the action it run
 | `esp-bootloader` | DTR off and RTS on, 100 ms, DTR on and RTS off, 50 ms, both off                                                                                          |
 | `touch-1200`     | the port is closed, opened at 1200 baud, DTR is set off, the port is closed and, after 500 ms, opened again with the earlier settings if it still exists |
 
-- While a tool holds the virtual device, the baud rate is the one the tool sets. Data bits, parity and stop bits are the profile's, unless the tool runs with the preload shim
-- While no tool holds it, the port is open with the profile's own settings, and the monitor buffer records what the board sends
+- A system config cannot be changed or deleted. To make your own, apply a system config to a port, change the fields, then **Save as...**: the values are stored under your name and the system config stays as it was
+- The saved configs live in `serial-settings.json` in the Jupyter data directory, under `jupyterlab-device-bridge`, mode `0600`. A name of 1 to 64 characters; a name or id of a system config or of another saved config is refused. Deleting a saved config that a port uses leaves the port with its values and makes it custom
+- Applying a config copies its five values onto the port and names the config; changing one field makes the port custom
+- While a tool holds the virtual device, the baud rate is the one the tool sets. Data bits, parity and stop bits are the port's, unless the tool runs with the preload shim
+- While no tool holds it, the port is open with its own settings, and the monitor buffer records what the board sends
 - The action on open runs each time a program opens the virtual device, the serial terminal included. `monitor read` and `monitor write` do not open the virtual device and run no action
-- A profile is enough for a tool that continues after the virtual device refused its DTR or RTS call. It is not enough for a tool that sets parity or 7 data bits itself: on the virtual device such a tool gets an error from its settings call or reads back 8N1, and needs the preload shim
+- A config is enough for a tool that continues after the virtual device refused its DTR or RTS call. It is not enough for a tool that sets parity or 7 data bits itself: on the virtual device such a tool gets an error from its settings call or reads back 8N1, and needs the preload shim
 
 ### Preload shim
 
-`jupyterlab-device run -- CMD` starts a tool with a small library (`LD_PRELOAD`) that passes the tool's own DTR and RTS calls, its break, and its parity, data bits and stop bits to the port.
+`jupyterlab-device run --device <name> -- CMD` starts a tool with a small library (`LD_PRELOAD`) that passes the tool's own DTR and RTS calls, its break, and its parity, data bits and stop bits to the port.
 
 - **Packaging** - the wheel carries the C source of the library and stays pure Python. `jupyterlab-device run` builds the library on first use with the system C compiler (`cc` or `gcc`) into `~/.cache/jupyterlab-device-bridge/` and uses that file again afterwards
-- **No C compiler** - `run` stops with exit status 1 and a message that names a profile as the way that needs no shim
-- **Statically linked tool** - a statically linked tool does not load the shim, so only a profile serves it
+- **No C compiler** - `run` stops with exit status 1 and a message that names the port's settings as the way that needs no shim
+- **Statically linked tool** - a statically linked tool does not load the shim, so only the port's settings serve it
 - **Order** - a DTR, RTS or break call returns to the tool after the lab tab applied it, or after 1 s
-- **Device shell** - `jupyterlab-device shell` starts the shell of the lab's terminals with the shim: the shell command that the Jupyter server starts in a terminal, whichever shell that is. Every tool started in that shell has the shim, without `jupyterlab-device run --` in front. The shell first prints a banner, 75% of the terminal's width, that opens with DEVICE BRIDGE in block letters. Its sections name the environment and the upload tools that are installed, of avrdude, stm32flash, esptool and pio, or say to install one; list each attached device, a serial port by its path with its settings and profile and a USB device by its name with its ids; say where the agent skill is and whether an agent finds it; and name five commands. Its colours follow the dark or light background of the terminal; with the variable `NO_COLOR` set it has no colour
+- **Device shell** - `jupyterlab-device shell` starts the shell of the lab's terminals with the shim: the shell command that the Jupyter server starts in a terminal, whichever shell that is. Every tool started in that shell has the shim, without `jupyterlab-device run --device <name> --` in front. The shell first prints a banner, 75% of the terminal's width, that opens with DEVICE BRIDGE in block letters. Its sections name the environment and the upload tools that are installed, of avrdude, stm32flash, esptool and pio, or say to install one; list each attached device, a serial port by its path with its settings and action on open and a USB device by its name with its ids; say where the agent skill is and whether an agent finds it; and name five commands. Its colours follow the dark or light background of the terminal; with the variable `NO_COLOR` set it has no colour
 - **Environment of the device shell** - when a conda environment, or the `.venv` of the folder the shell starts in, holds an upload tool, `jupyterlab-device shell` on a terminal first shows a list of the environments with their tools. Enter starts the shell in the highlighted environment, with its `bin` first on `PATH` and the variables its activation sets, as a line under the question says; Esc keeps the current environment. The banner then names the chosen environment with its tools
 - **Device shell from the panel** - the **Start** button of the panel and the command **Device Shell** run `jupyterlab-device shell` in a new lab terminal, in the folder of the file browser. `exit`, or **Stop** in the panel, ends the shell, and the tab of the terminal closes. When the shell cannot start, for example because the container has no C compiler, the terminal stays open with the message until Enter is pressed
 - **Shown in the panel** - `run` reports the program to the server before it starts it, so the panel lists the program while it lives, also one that an agent started. **Stop** sends the program `SIGHUP`, and `SIGKILL` 3 s later when it still lives. A shell ends on `SIGHUP` together with the tool that runs in it
@@ -234,7 +241,7 @@ answer = probe.transfer_in(1, 64, timeout_ms=1000)
 
 - `UsbDevice` has one method per operation: `describe`, `open`, `close`, `reset`, `select_configuration`, `claim_interface`, `release_interface`, `select_alternate`, `clear_halt`, `control_in`, `control_out`, `control`, `transfer_in`, `transfer_out`
 - A failure raises `DeviceBridgeError` with `status`, `message`, and for a refusal of the browser its error `name`
-- `bridge.serial(name)` gives the serial side: `record`, `set_profile`, `monitor`, `write`, `signals`, `action`
+- `bridge.serial(name)` gives the serial side: `record`, `set_settings`, `monitor`, `write`, `signals`, `action`
 
 ### pyusb backend
 
@@ -290,43 +297,43 @@ For every board:
 
 - `jupyterlab-device list` prints the name, the state and the path of each device. The names and the paths below are examples
 - No program can grant a device. With no device in the list, `jupyterlab-device request serial --reason "<why>"` shows a request in the lab and waits until the user presses Grant
-- Upload only to a device in the state `attached` whose line shows no `error:`. A line of an attached port that ends with `error: <reason>` means the port failed in the browser, for example the browser could not open it, and the browser does not open it again by itself: tell the user the reason and, when the cause is gone, set the profile of the board again with `jupyterlab-device profile <device> <id>`, which asks the browser to open the port again, then run `jupyterlab-device list` again
-- Set the profile of the board before the upload, and the profile `monitor` before the serial terminal is opened: the action on open runs at every open
+- Upload only to a device in the state `attached` whose line shows no `error:`. A line of an attached port that ends with `error: <reason>` means the port failed in the browser, for example the browser could not open it, and the browser does not open it again by itself: tell the user the reason and, when the cause is gone, apply a config again with `jupyterlab-device settings apply <device> <config>`, which asks the browser to open the port again, then run `jupyterlab-device list` again
+- Apply the config of the board before the upload, and the Monitor config before the serial terminal is opened: the action on open runs at every open
 - `monitor read` prints what the port sent, also before the call, and does not open the virtual device. The buffer also holds the bytes the bootloader sent during the upload: `--lines 0 --follow --timeout <seconds>` prints only new output, `--lines <n>` the last lines of the buffer
-- `monitor read` shows readable text only when the port is open at the baud rate of the firmware. While no tool holds the device that is the profile's baud rate, and `jupyterlab-device profile <device> --baud <n>` sets it
+- `monitor read` shows readable text only when the port is open at the baud rate of the firmware. While no tool holds the device that is the port's baud rate, and `jupyterlab-device settings set <device> --baud <n>` sets it
 - `jupyterlab-device terminal` needs a person at a terminal. An agent reads with `monitor read` and writes with `monitor write`, never with `terminal`
 
 ### Installers of the firmware tools
 
 The folder `resources/envs/` of the repository holds three proposed installers. Each one creates one conda environment with the tools that build firmware and upload it:
 
-- `firmware-avr.py` - environment `firmware-avr`: nightly Rust with its source, avr-gcc, avrdude, PlatformIO with the Arduino AVR core, simavr, pytest
-- `firmware-stm32.py` - environment `firmware-stm32`: Rust with six Cortex-M targets, cargo-binutils, stm32flash
-- `firmware-esp.py` - environment `firmware-esp`: Rust for the ESP32 chips, espflash, esptool, PlatformIO with the ESP8266 core
+- `firmware-avr.py` - environment `firmware-avr`: nightly Rust with its source, avr-gcc, avrdude, PlatformIO with the Arduino AVR core, simavr, ngspice, pytest
+- `firmware-stm32.py` - environment `firmware-stm32`: Rust with six Cortex-M targets, cargo-binutils, PlatformIO 6.2.0 with the ststm32 platform, STM32Cube HAL and Arduino, QEMU with an STM32F405 machine, stm32flash, ngspice
+- `firmware-esp.py` - environment `firmware-esp`: Rust for the ESP32 chips, espflash, esptool, PlatformIO with the ESP8266 core, ngspice
 
-The three import `firmware_env.py`, so the four files must be in one folder. An installer is a `uv` script and runs as a program, for example `resources/envs/firmware-avr.py`. It needs `uv`, x86-64 Linux, access to the internet, and conda at `/opt/conda/bin/conda` or at the path in the variable `CONDA_CMD`. The wheel installs the four files in `envs/` beside the agent skill, at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/envs/`. No test of this extension ran an installer.
+The three import `firmware_env.py`, so the four files must be in one folder. An installer is a `uv` script and runs as a program, for example `resources/envs/firmware-avr.py`. It needs `uv`, x86-64 Linux, access to the internet, and conda at `/opt/conda/bin/conda` or at the path in the variable `CONDA_CMD`. The copies come from the template of the copier embedded project at `~/workspace/private/copier-projects/copier-embedded-project/template/resources/envs`, and `make build` refreshes them, so the wheel carries the latest. The wheel installs the four files in `envs/` beside the agent skill, at `<sys.prefix>/share/jupyter/agents/skills/jupyterlab-device-bridge-extension/envs/`. No test of this extension ran an installer.
 
 ### AVR boards with avrdude
 
-The profile `arduino-upload` pulses DTR when avrdude opens the virtual device. The virtual device refuses avrdude's own DTR call; avrdude prints a warning and continues (from knowledge).
+The config `Arduino upload` pulses DTR when avrdude opens the virtual device. The virtual device refuses avrdude's own DTR call; avrdude prints a warning and continues (from knowledge).
 
 ```bash
-jupyterlab-device profile tty-2341-0043 arduino-upload
+jupyterlab-device settings apply tty-2341-0043 "Arduino upload"
 avrdude -c arduino -p atmega328p -b 115200 -P /run/devices/tty-2341-0043 -U flash:w:firmware.hex:i
 jupyterlab-device monitor read tty-2341-0043 --lines 0 --follow --timeout 10
 ```
 
-| Board                              | avrdude options                                                             | Profile          |
-| ---------------------------------- | --------------------------------------------------------------------------- | ---------------- |
-| Arduino Uno                        | `-c arduino -p atmega328p -b 115200`                                        | `arduino-upload` |
-| Arduino Nano                       | `-c arduino -p atmega328p -b 115200`, or `-b 57600` with the old bootloader | `arduino-upload` |
-| Arduino Mega 2560                  | `-c wiring -p atmega2560 -b 115200`                                         | `arduino-upload` |
-| ATtiny85 through an Arduino as ISP | `-c stk500v1 -p attiny85 -b 19200`                                          | `arduino-isp`    |
+| Board                              | avrdude options                                                             | Config         |
+| ---------------------------------- | --------------------------------------------------------------------------- | -------------- |
+| Arduino Uno                        | `-c arduino -p atmega328p -b 115200`                                        | Arduino upload |
+| Arduino Nano                       | `-c arduino -p atmega328p -b 115200`, or `-b 57600` with the old bootloader | Arduino upload |
+| Arduino Mega 2560                  | `-c wiring -p atmega2560 -b 115200`                                         | Arduino upload |
+| ATtiny85 through an Arduino as ISP | `-c stk500v1 -p attiny85 -b 19200`                                          | Arduino as ISP |
 
-An ATtiny is programmed through an Arduino that runs the ArduinoISP sketch. The profile `arduino-isp` runs no action on open and has the 19200 baud of that sketch, so the bridge changes no control line and does not reopen the port when avrdude opens the virtual device.
+An ATtiny is programmed through an Arduino that runs the ArduinoISP sketch. The config `Arduino as ISP` runs no action on open and has the 19200 baud of that sketch, so the bridge changes no control line and does not reopen the port when avrdude opens the virtual device.
 
 ```bash
-jupyterlab-device profile tty-2341-0043 arduino-isp
+jupyterlab-device settings apply tty-2341-0043 "Arduino as ISP"
 avrdude -c stk500v1 -p attiny85 -b 19200 -P /run/devices/tty-2341-0043 -U flash:w:firmware.hex:i
 ```
 
@@ -335,9 +342,9 @@ avrdude -c stk500v1 -p attiny85 -b 19200 -P /run/devices/tty-2341-0043 -U flash:
 **stm32flash** writes through the serial bootloader of the chip, over a USB to serial adapter. The board must be in its serial bootloader before the upload; the bridge does not put it there. stm32flash sets even parity itself and reads its settings back (from knowledge), so it runs with the preload shim.
 
 ```bash
-jupyterlab-device profile tty-0403-6001 stm32-bootloader
-jupyterlab-device run -- stm32flash -b 115200 -w firmware.bin -v -g 0x0 /run/devices/tty-0403-6001
-jupyterlab-device profile tty-0403-6001 monitor
+jupyterlab-device settings apply tty-0403-6001 "STM32 bootloader"
+jupyterlab-device run --device tty-0403-6001 -- stm32flash -b 115200 -w firmware.bin -v -g 0x0 /run/devices/tty-0403-6001
+jupyterlab-device settings apply tty-0403-6001 Monitor
 jupyterlab-device monitor read tty-0403-6001 --lines 0 --follow --timeout 10
 ```
 
@@ -354,12 +361,12 @@ The serial output of the board comes through a serial port and is read with `mon
 
 esptool resets the chip with DTR and RTS itself. The virtual device refuses these calls unless esptool runs with the preload shim, so there are two ways.
 
-**On a profile, without the shim** - the profile `esp-upload` runs the bootloader entry sequence when esptool opens the virtual device, and `--before no-reset --after no-reset` tell esptool to make no reset of its own.
+**On a config, without the shim** - the config `ESP upload` runs the bootloader entry sequence when esptool opens the virtual device, and `--before no-reset --after no-reset` tell esptool to make no reset of its own.
 
 ```bash
-jupyterlab-device profile tty-10c4-ea60 esp-upload
+jupyterlab-device settings apply tty-10c4-ea60 "ESP upload"
 esptool --port /run/devices/tty-10c4-ea60 --before no-reset --after no-reset write-flash 0x0 firmware.bin
-jupyterlab-device profile tty-10c4-ea60 monitor
+jupyterlab-device settings apply tty-10c4-ea60 Monitor
 jupyterlab-device signals tty-10c4-ea60 --rts 1
 jupyterlab-device signals tty-10c4-ea60 --rts 0
 jupyterlab-device monitor read tty-10c4-ea60 --lines 20
@@ -367,11 +374,11 @@ jupyterlab-device monitor read tty-10c4-ea60 --lines 20
 
 - From knowledge: after `--after no-reset` the chip stays in its bootloader, and RTS on, then off, is the reset pulse of the usual reset circuit of ESP development boards. The two `signals` commands send that pulse
 
-**With the shim, with esptool's own reset** - the profile `monitor` runs no action on open, so only esptool's own DTR and RTS sequence reaches the port.
+**With the shim, with esptool's own reset** - the config `Monitor` runs no action on open, so only esptool's own DTR and RTS sequence reaches the port.
 
 ```bash
-jupyterlab-device profile tty-10c4-ea60 monitor
-jupyterlab-device run -- esptool --port /run/devices/tty-10c4-ea60 write-flash 0x0 firmware.bin
+jupyterlab-device settings apply tty-10c4-ea60 Monitor
+jupyterlab-device run --device tty-10c4-ea60 -- esptool --port /run/devices/tty-10c4-ea60 write-flash 0x0 firmware.bin
 jupyterlab-device monitor read tty-10c4-ea60 --lines 20
 ```
 
@@ -382,8 +389,8 @@ jupyterlab-device monitor read tty-10c4-ea60 --lines 20
 pio does not find the virtual device by itself: name its path with --upload-port for an upload and with --port for pio device monitor, or set upload_port and monitor_port in platformio.ini. The upload runs under `jupyterlab-device run`, because the upload tool that pio starts, for example avrdude or esptool, sets DTR and RTS itself. `pio device monitor` is an interactive terminal for a person; an agent reads with `monitor read`.
 
 ```bash
-jupyterlab-device profile tty-2341-0043 monitor
-jupyterlab-device run -- pio run -t upload --upload-port /run/devices/tty-2341-0043
+jupyterlab-device settings apply tty-2341-0043 Monitor
+jupyterlab-device run --device tty-2341-0043 -- pio run -t upload --upload-port /run/devices/tty-2341-0043
 pio device monitor --port /run/devices/tty-2341-0043 --baud 115200
 jupyterlab-device monitor read tty-2341-0043 --lines 0 --follow --timeout 10
 ```
@@ -418,36 +425,40 @@ ln -s "$PWD/.agents/skills/jupyterlab-device-bridge-extension" ~/.claude/skills/
 
 `jupyterlab-device` is the one command. It runs in a terminal of the lab, finds the running Jupyter server and its token itself, and talks to the server on the loopback address without a proxy. `jupyterlab-device --help` and `jupyterlab-device <command> --help` hold the full reference with examples. `jupyterlab-device help` and `jupyterlab-device help <command>` print the same, and `jupyterlab-device --version` prints the version.
 
-| Command                                                                                              | Does                                                                                                |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `list [--json]`                                                                                      | lists the devices with path, state, holder and settings                                             |
-| `status [--json]`                                                                                    | shows the server, its lab tabs, the browser interfaces and the round trip                           |
-| `profiles [--json]`                                                                                  | lists the built-in serial profiles                                                                  |
-| `profile <device> [<id>] [--baud N] [--data-bits N] [--parity P] [--stop-bits N] [--on-open ACTION]` | shows or sets the profile of a serial port                                                          |
-| `monitor read <device> [--lines N] [--follow] [--timeout S] [--raw]`                                 | prints the buffered output of a serial port; with `--follow` also new output until the timeout ends |
-| `monitor write <device> [TEXT] [--hex] [--newline]`                                                  | sends bytes to a serial port; standard input when no text is given                                  |
-| `terminal <device> [--baud N]`                                                                       | opens the serial terminal app on a serial port, for a person at a terminal                          |
-| `signals <device> [--dtr N] [--rts N]`                                                               | sets the DTR and RTS lines of a serial port, 1 or 0                                                 |
-| `action <device> <action>`                                                                           | runs one action on a serial port                                                                    |
-| `run [--device D] -- CMD [ARG ...]`                                                                  | starts a tool with the preload shim                                                                 |
-| `shell`                                                                                              | starts a device shell: the shell of the lab's terminals with the preload shim                       |
-| `help [COMMAND ...]`                                                                                 | prints the help of the tool or of one command, as `--help` does                                     |
-| `request {serial,usb} [--vid HEX] [--pid HEX] --reason TEXT [--timeout S]`                           | asks the user to grant a device                                                                     |
-| `usb list`                                                                                           | lists the USB devices                                                                               |
-| `usb describe <device>`                                                                              | prints the descriptors of a USB device as JSON                                                      |
-| `usb open <device>`, `usb close <device>`, `usb reset <device>`                                      | opens, closes or resets the device in the browser                                                   |
-| `usb claim <device> <interface>`, `usb release <device> <interface>`                                 | claims or releases an interface                                                                     |
-| `usb configuration <device> <value>`                                                                 | selects a configuration                                                                             |
-| `usb alternate <device> <interface> <setting>`                                                       | selects an alternate setting of an interface                                                        |
-| `usb clear-halt <device> <endpoint>`                                                                 | clears the halt of an endpoint                                                                      |
-| `usb control <device> REQUEST_TYPE REQUEST VALUE INDEX [--length N] [--data HEX] [--timeout MS]`     | runs one control transfer; bit 7 of REQUEST_TYPE gives the direction                                |
-| `usb transfer <device> ENDPOINT [--length N] [--data HEX] [--timeout MS]`                            | runs one bulk or interrupt transfer; bit 7 of ENDPOINT gives the direction                          |
+| Command                                                                                            | Does                                                                                                |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `list [--json]`                                                                                    | lists the devices with path, state, holder and settings                                             |
+| `status [--json]`                                                                                  | shows the server, its lab tabs, the browser interfaces and the round trip                           |
+| `settings list [--json]`                                                                           | lists the system and the saved serial settings configs                                              |
+| `settings show <device> [--json]`                                                                  | prints the config, the settings and the action on open of a serial port                             |
+| `settings apply <device> <config>`                                                                 | applies a system or saved config to a serial port                                                   |
+| `settings set <device> [--baud N] [--data-bits N] [--parity P] [--stop-bits N] [--on-open ACTION]` | changes single fields of a serial port; the port becomes custom                                     |
+| `settings save <device> <name>`                                                                    | saves the current settings of a serial port under a name                                            |
+| `settings delete <config>`                                                                         | deletes a user-saved config                                                                         |
+| `monitor read <device> [--lines N] [--follow] [--timeout S] [--raw]`                               | prints the buffered output of a serial port; with `--follow` also new output until the timeout ends |
+| `monitor write <device> [TEXT] [--hex] [--newline]`                                                | sends bytes to a serial port; standard input when no text is given                                  |
+| `terminal <device> [--baud N]`                                                                     | opens the serial terminal app on a serial port, for a person at a terminal                          |
+| `signals <device> [--dtr N] [--rts N]`                                                             | sets the DTR and RTS lines of a serial port, 1 or 0                                                 |
+| `action <device> <action>`                                                                         | runs one action on a serial port                                                                    |
+| `run --device D -- CMD [ARG ...]`                                                                  | starts a tool with the preload shim                                                                 |
+| `shell`                                                                                            | starts a device shell: the shell of the lab's terminals with the preload shim                       |
+| `help [COMMAND ...]`                                                                               | prints the help of the tool or of one command, as `--help` does                                     |
+| `request {serial,usb} [--vid HEX] [--pid HEX] --reason TEXT [--timeout S]`                         | asks the user to grant a device                                                                     |
+| `usb list`                                                                                         | lists the USB devices                                                                               |
+| `usb describe <device>`                                                                            | prints the descriptors of a USB device as JSON                                                      |
+| `usb open <device>`, `usb close <device>`, `usb reset <device>`                                    | opens, closes or resets the device in the browser                                                   |
+| `usb claim <device> <interface>`, `usb release <device> <interface>`                               | claims or releases an interface                                                                     |
+| `usb configuration <device> <value>`                                                               | selects a configuration                                                                             |
+| `usb alternate <device> <interface> <setting>`                                                     | selects an alternate setting of an interface                                                        |
+| `usb clear-halt <device> <endpoint>`                                                               | clears the halt of an endpoint                                                                      |
+| `usb control <device> REQUEST_TYPE REQUEST VALUE INDEX [--length N] [--data HEX] [--timeout MS]`   | runs one control transfer; bit 7 of REQUEST_TYPE gives the direction                                |
+| `usb transfer <device> ENDPOINT [--length N] [--data HEX] [--timeout MS]`                          | runs one bulk or interrupt transfer; bit 7 of ENDPOINT gives the direction                          |
 
 - Results go to stdout and messages to stderr. Bytes of a USB transfer are printed and given as hexadecimal digits
 - `jupyterlab-device --help` ends with one example command line for each upload tool that is installed: it looks for avrdude, stm32flash, esptool and pio on `PATH` at that moment and shows the lines of the section [Working with an AI agent](#working-with-an-ai-agent) for the ones it finds. So the help shows more after a conda environment with such a tool was activated. The path in an example is the placeholder `<path>`; `jupyterlab-device list` prints the real path
 - Exit status 0: done. 1: not done, and one line on stderr names the reason and the next step. 2: wrong arguments, and for `request` nobody answered in time. 130: stopped with Ctrl+C
 - `run` and `shell` exit with the status of the program they started, and with 127 when it cannot be started. `terminal` exits 0 after Ctrl+Q or Esc, 1 when another program holds the device or its path cannot be opened, and 2 without a terminal
-- The server is the first one that `jupyter server list` reports. The token is `JUPYTERHUB_API_TOKEN` or `JPY_API_TOKEN` when one is set, else the token of the listed server, else `JUPYTER_TOKEN`
+- The server is the one this lab names: the record whose base URL is `JUPYTERHUB_SERVICE_PREFIX`, or, when the variable is unset, the only listed server. Several servers with no match are refused. With no matching record the address is `127.0.0.1` on `JUPYTER_PORT` (default 8888) under the prefix. The token is `JUPYTERHUB_API_TOKEN` or `JPY_API_TOKEN` when one is set, else the token of the listed server, else `JUPYTER_TOKEN`
 
 ## Security
 

@@ -43,29 +43,24 @@ export interface ISerialSignals {
   brk?: boolean;
 }
 
-/**
- * The default serial settings of the lab: the settings and the action on open that a
- * serial port gets when the server has no record of it.
- */
-export interface ISerialDefaults extends ISerialSettings {
+/** The five serial settings a port uses: the four settings and the action on open. */
+export interface ISerialConfig extends ISerialSettings {
   onOpen: SerialAction;
 }
 
-/** A named set of serial settings with the action to run when a tool opens the device. */
-export interface IProfile extends ISerialSettings {
+/** The default serial settings of the lab: what a serial port gets when the server has no record. */
+export type ISerialDefaults = ISerialConfig;
+
+/** A named serial settings config: a system config or one the user saved. */
+export interface ISettingsConfig extends ISerialConfig {
   id: string;
-  label: string;
-  onOpen: SerialAction;
+  name: string;
+  system: boolean;
 }
 
-/** Single profile fields that a device overrides. */
-export interface IProfileOverrides extends Partial<ISerialSettings> {
-  onOpen?: SerialAction;
-}
-
-/** Body of `PUT serial/<name>/profile`. */
-export interface IProfileChange extends IProfileOverrides {
-  profile?: string;
+/** Body of `PUT serial/<name>/settings`: a saved config, or single fields. */
+export interface ISerialSettingsChange extends Partial<ISerialConfig> {
+  config?: string;
 }
 
 /** Name and message of a browser error, unchanged. */
@@ -89,8 +84,9 @@ export interface ISerialRecord {
   tab: string | null;
   holder: IHolder | null;
   settings: ISerialSettings;
-  profile: string;
-  overrides: IProfileOverrides;
+  configured: ISerialConfig;
+  config: string | null;
+  configName: string | null;
   signals: ISerialSignals;
   rx: number;
   tx: number;
@@ -376,7 +372,7 @@ export type TabMessage =
 export interface IWelcomeMessage {
   type: 'welcome';
   tabId: string;
-  profiles: IProfile[];
+  configs: ISettingsConfig[];
   deviceDir: string;
 }
 

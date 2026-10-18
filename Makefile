@@ -150,7 +150,7 @@
 # author: Stellars Henson <konrad.jelen+github@gmail.com>
 # License: MIT Open Source License
 
-.PHONY: build install clean uninstall publish dependencies mrproper increment_version install_dependencies check_dependencies upgrade help test
+.PHONY: build install clean uninstall publish dependencies mrproper increment_version install_dependencies check_dependencies upgrade help test sync-envs
 .DEFAULT_GOAL := help
 
 # Project-local node environment - keeps node/npm/yarn pinned per project and out of
@@ -195,13 +195,28 @@ increment_version: check_dependencies
 	fi; \
 	echo "New version: $$NEW_VERSION"
 
+# Project-specific: the firmware installers in resources/envs are copies. Their source of
+# truth is the template of the copier embedded project on this workstation; build refreshes
+# them, so the wheel always carries the latest. A tree without that repository (CI) builds
+# from the committed copies.
+COPIER_ENVS ?= /home/lab/workspace/private/copier-projects/copier-embedded-project/template/resources/envs
+
+## refresh the firmware installers from the copier embedded project, when it is present
+sync-envs:
+	@if [ -d "$(COPIER_ENVS)" ]; then \
+		cp -f "$(COPIER_ENVS)"/*.py resources/envs/; \
+		echo "sync-envs: installers copied from $(COPIER_ENVS)"; \
+	else \
+		echo "sync-envs: $(COPIER_ENVS) absent - using the committed copies"; \
+	fi
+
 # `python -m build` is the whole build. Its hatch-jupyter-builder hook runs the
 # `build_cmd` from pyproject.toml (build:prod = tsc + labextension) and then emits the
 # sdist and wheel into dist/, which install and publish both read. Do not swap in a
 # bare `jupyter-builder build`: it emits no distribution at all, and after `clean` it
 # aborts with "Cannot find module lib/index.js" because it never runs tsc.
 ## build packages
-build: clean check_dependencies
+build: clean check_dependencies sync-envs
 	jlpm install
 	jlpm prettier
 	python -m build

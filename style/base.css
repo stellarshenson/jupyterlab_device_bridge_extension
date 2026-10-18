@@ -195,6 +195,19 @@
   margin-left: 6px;
 }
 
+/* the help of the Serial and USB header: an accented link at the far right */
+.jp-DeviceBridgePanel-help {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--jp-brand-color1);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .jp-DeviceBridgePanel-list {
   display: flex;
   flex-direction: column;
@@ -230,16 +243,60 @@
   line-height: 24px;
 }
 
-/* serial or USB: an outlined tag */
+/* serial or USB: an outlined tag with a translucent tint of its own */
 .jp-DeviceBridgePanel-kind {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   flex: 0 0 auto;
   padding: 0 4px;
   border: 1px solid var(--jp-border-color1);
   border-radius: var(--jp-border-radius);
-  color: var(--jp-ui-font-color2);
+  color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size0);
   line-height: 1.4;
   text-transform: uppercase;
+}
+
+/* the tint sits behind the text: blue for a serial port, pink for a USB device */
+.jp-DeviceBridgePanel-kind::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.12;
+}
+
+[data-kind='serial'] .jp-DeviceBridgePanel-kind::before {
+  background: var(--md-blue-600);
+}
+
+[data-kind='usb'] .jp-DeviceBridgePanel-kind::before {
+  background: var(--md-pink-400);
+}
+
+/* the hue of each kind, strong enough on the light theme */
+[data-kind='serial'] .jp-DeviceBridgePanel-kind {
+  border-color: var(--md-blue-800);
+  color: var(--md-blue-800);
+}
+
+[data-kind='usb'] .jp-DeviceBridgePanel-kind {
+  border-color: var(--md-pink-800);
+  color: var(--md-pink-800);
+}
+
+/* the dark theme needs the lighter shades: brighter, and for pink less saturated */
+body[data-jp-theme-light='false']
+  [data-kind='serial']
+  .jp-DeviceBridgePanel-kind {
+  border-color: var(--md-blue-300);
+  color: var(--md-blue-300);
+}
+
+body[data-jp-theme-light='false'] [data-kind='usb'] .jp-DeviceBridgePanel-kind {
+  border-color: var(--md-pink-200);
+  color: var(--md-pink-200);
 }
 
 /* the name programs use: an identifier, so in the code font */
@@ -321,16 +378,16 @@
   background: var(--jp-layout-color3);
 }
 
-/* lit for 80 ms from each report of traffic: single flashes for sparse
-   traffic, a steady light for steady traffic. TX is blue, RX is yellow */
+/* lit for 200 ms from each report of traffic: single flashes for sparse
+   traffic, a steady light for steady traffic. TX is red, RX is green */
 .jp-DeviceBridgePanel-lamp[data-lamp='tx'][data-lit]::before {
-  border-color: var(--jp-brand-color1);
-  background: var(--jp-brand-color1);
+  border-color: var(--jp-error-color1);
+  background: var(--jp-error-color1);
 }
 
 .jp-DeviceBridgePanel-lamp[data-lamp='rx'][data-lit]::before {
-  border-color: var(--md-yellow-600);
-  background: var(--md-yellow-600);
+  border-color: var(--jp-success-color1);
+  background: var(--jp-success-color1);
 }
 
 /* a line of a row: the fixed words dim, the values in the text colour */
@@ -364,22 +421,42 @@
 
 /* Settings dialog of a serial port: one labelled field per line. The dialog
    is no child of the panel, so its body has its own class name */
+
+/* The Settings dialogs take the visual language of the Manage Sessions popup in
+   jupyterlab_ai_code_assistants_extension: a token layer over --jp-* variables so
+   a theme flip restyles the dialog, 6px control radius, and an accent focus ring. */
 .jp-DeviceBridgeSettings {
-  min-width: 300px;
+  --db-radius-sm: 4px;
+  --db-radius: 6px;
+  --db-radius-lg: 8px;
+  --db-surface: var(--jp-layout-color1);
+  --db-surface-hover: var(--jp-layout-color2);
+  --db-border: var(--jp-border-color2);
+  --db-border-subtle: var(--jp-border-color3);
+  --db-text: var(--jp-ui-font-color1);
+  --db-text-subtle: var(--jp-ui-font-color2);
+  --db-accent: var(--jp-brand-color1);
+  --db-accent-soft: color-mix(in srgb, var(--jp-brand-color1) 14%, transparent);
+
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: min(320px, 90vw);
+  color: var(--db-text);
   font-size: var(--jp-ui-font-size1);
 }
 
 .jp-DeviceBridgePanel-field {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding-top: 4px;
+  gap: 8px;
 }
 
 .jp-DeviceBridgePanel-fieldLabel {
   flex: 1 1 50%;
   min-width: 0;
-  color: var(--jp-ui-font-color2);
+  color: var(--db-text-subtle);
+  font-size: var(--jp-ui-font-size0);
 }
 
 /* an input keeps its intrinsic width as a flex item; min-width 0 lets it
@@ -388,28 +465,122 @@
   flex: 1 1 50%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 2px 6px;
-  border: 1px solid var(--jp-border-color2);
-  border-radius: var(--jp-border-radius);
-  background: var(--jp-input-background, var(--jp-layout-color1));
-  color: var(--jp-ui-font-color1);
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--db-border);
+  border-radius: var(--db-radius-sm);
+  background: var(--jp-input-background, var(--db-surface));
+  color: var(--db-text);
   font-family: var(--jp-ui-font-family);
   font-size: var(--jp-ui-font-size0);
   outline: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .jp-DeviceBridgePanel-input:focus {
-  border-color: var(--jp-brand-color1);
+  border-color: var(--db-accent);
+  box-shadow: 0 0 0 2px var(--db-accent-soft);
 }
 
-/* Footer: the round trip between the browser and the server */
+/* The Settings dialog is no child of the panel and needs its own rule for an
+   element that is not offered. */
+.jp-DeviceBridgeSettings [hidden] {
+  display: none;
+}
+
+/* The body of the Settings dialog is a table: one setting per row, the label in the
+   row head and the control in the value cell. Rows alternate through the token
+   layer, so a theme flip restyles them. */
+.jp-DeviceBridgeSettings-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.jp-DeviceBridgeSettings-table tbody tr:nth-child(odd) {
+  background: var(--db-surface);
+}
+
+.jp-DeviceBridgeSettings-table tbody tr:nth-child(even) {
+  background: var(--db-surface-hover);
+}
+
+.jp-DeviceBridgeSettings-table th,
+.jp-DeviceBridgeSettings-table td {
+  padding: 4px 8px;
+  border: none;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.jp-DeviceBridgeSettings-table th {
+  width: 42%;
+  font-weight: 400;
+}
+
+.jp-DeviceBridgeSettings-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* one control per value cell, filling its cell */
+.jp-DeviceBridgeSettings-cell .jp-DeviceBridgePanel-input {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+/* the Custom badge of a baud rate that is no standard rate */
+.jp-DeviceBridgeSettings-badge {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: var(--db-radius-sm);
+  background: var(--db-accent-soft);
+  color: var(--db-accent);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 20px;
+}
+
+/* The four buttons of the Settings dialog are slim, 8px apart in the footer.
+   The element and the second class raise the rule over the lab's own
+   button.jp-mod-styled height of 32px. */
+button.jp-Dialog-button.jp-DeviceBridgeSettings-button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 12px;
+  line-height: 28px;
+  font-size: 12.5px;
+}
+
+.jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button) {
+  gap: 8px;
+}
+
+.jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button)
+  .jp-Dialog-footerButtons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button) button.jp-Dialog-button {
+  margin-right: 0;
+}
+
+/* Footer: the round trip between the browser and the server, on the panel's own
+   background: no background of its own and no separator line above it */
 .jp-DeviceBridgePanel-footer {
   flex: 0 0 auto;
   padding: 4px 8px;
-  border-top: 1px solid var(--jp-border-color2);
-  background: var(--jp-layout-color2);
   color: var(--jp-ui-font-color2);
   font-size: var(--jp-ui-font-size0);
+}
+
+/* The value class colours a value in the text colour; the round trip is as muted
+   as its label */
+.jp-DeviceBridgePanel-footer [data-field='round-trip'] {
+  color: var(--jp-ui-font-color2);
 }
 
 /* Info dialog of the runs: the attached devices and the example command lines.

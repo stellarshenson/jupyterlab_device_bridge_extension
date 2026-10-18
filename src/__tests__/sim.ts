@@ -15,11 +15,11 @@ import type {
   IClaimMessage,
   IDeviceRequest,
   IDeviceTable,
-  IProfile,
   IRunRecord,
   ISerialClaimInfo,
   ISerialRecord,
   ISerialSettings,
+  ISettingsConfig,
   IUsbClaimInfo,
   IUsbRecord,
   PageToWorker,
@@ -818,9 +818,45 @@ export class SimServer {
   answerClaims = true;
   /** Milliseconds between a ping and its pong. */
   pongDelay = 0;
-  /** The profiles sent with `welcome`. */
-  readonly profiles: IProfile[] = [
-    { id: 'monitor', label: 'Monitor', ...this.settings, onOpen: 'none' }
+  /** The serial settings configs sent with `welcome`: the system configs. */
+  readonly configs: ISettingsConfig[] = [
+    {
+      id: 'monitor',
+      name: 'Monitor',
+      system: true,
+      ...this.settings,
+      onOpen: 'none'
+    },
+    {
+      id: 'arduino-upload',
+      name: 'Arduino upload',
+      system: true,
+      ...this.settings,
+      onOpen: 'pulse-dtr'
+    },
+    {
+      id: 'arduino-isp',
+      name: 'Arduino as ISP',
+      system: true,
+      ...this.settings,
+      baudRate: 19200,
+      onOpen: 'none'
+    },
+    {
+      id: 'stm32-bootloader',
+      name: 'STM32 bootloader',
+      system: true,
+      ...this.settings,
+      parity: 'even',
+      onOpen: 'none'
+    },
+    {
+      id: 'esp-upload',
+      name: 'ESP upload',
+      system: true,
+      ...this.settings,
+      onOpen: 'esp-bootloader'
+    }
   ];
   /** The device table, sent to the tab on every change. */
   readonly table: IDeviceTable = { serial: [], usb: [] };
@@ -924,7 +960,7 @@ export class SimServer {
         this.send({
           type: 'welcome',
           tabId: message.tabId,
-          profiles: this.profiles,
+          configs: this.configs,
           deviceDir: DEVICE_DIR
         });
         this.push();
@@ -1048,8 +1084,9 @@ export class SimServer {
           portState: 'closed',
           holder: null,
           settings: this.settings,
-          profile: 'monitor',
-          overrides: {},
+          configured: { ...this.settings, onOpen: 'none' },
+          config: null,
+          configName: null,
           signals: {},
           vendorId: usbVendorId ?? null,
           productId: usbProductId ?? null
@@ -1061,8 +1098,7 @@ export class SimServer {
         ok: true,
         name,
         sid: this.sids.get(name),
-        settings: this.settings,
-        profile: 'monitor'
+        settings: this.settings
       });
     } else {
       const usb = info as IUsbClaimInfo;

@@ -27,14 +27,20 @@ def device_dir():
 
 
 @pytest.fixture
-def jp_server_config(jp_server_config, device_dir):
+def settings_file(device_dir):
+    """The file of the user-saved serial settings of one test server, beside its device directory."""
+    return os.path.join(os.path.dirname(device_dir), "serial-settings.json")
+
+
+@pytest.fixture
+def jp_server_config(jp_server_config, device_dir, settings_file):
     return {
         "ServerApp": {
             "jpserver_extensions": {"jupyterlab_device_bridge_extension": True},
             # Test against a server which requires authentication on all endpoints
             "allow_unauthenticated_access": False,
         },
-        "DeviceBridge": {"device_dir": device_dir},
+        "DeviceBridge": {"device_dir": device_dir, "settings_file": settings_file},
     }
 
 

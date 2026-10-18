@@ -25,11 +25,11 @@ FENCE = re.compile(r"^```(\w*)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 PROGRAM = f"{cli.PROG} "
 
 # Board family, as its subsection of "Working with an AI agent" names it, and what the
-# command lines of that subsection must hold: the upload tools and the profiles.
+# command lines of that subsection must hold: the upload tools and the saved configs.
 FAMILIES = {
-    "AVR": ("avrdude", "arduino-upload", "arduino-isp"),
-    "STM32": ("stm32flash", "pyocd", "stm32-bootloader"),
-    "ESP": ("esptool", "esp-upload", "--before no-reset", f"{PROGRAM}run -- esptool"),
+    "AVR": ("avrdude", "Arduino upload", "Arduino as ISP"),
+    "STM32": ("stm32flash", "pyocd", "STM32 bootloader"),
+    "ESP": ("esptool", "ESP upload", "--before no-reset", f"{PROGRAM}run --device tty-10c4-ea60 -- esptool"),
 }
 # One phrase of each item of docs/brief.md, "Not in the first version".
 LIMITS = ("libusb", "WebHID", "USB/IP", "inside the browser", "Isochronous", "probe-rs")
@@ -162,7 +162,7 @@ def test_acc_term_174_the_skill_tells_an_agent_to_use_monitor_read_and_monitor_w
 
 # What the README and the skill must show of PlatformIO: the upload under `run`, the monitor,
 # and the two keys of platformio.ini.
-PIO_UPLOAD = f"{PROGRAM}run -- pio run -t upload --upload-port /run/devices/tty-2341-0043"
+PIO_UPLOAD = f"{PROGRAM}run --device tty-2341-0043 -- pio run -t upload --upload-port /run/devices/tty-2341-0043"
 PIO_MONITOR = "pio device monitor --port /run/devices/tty-2341-0043 --baud 115200"
 PIO_FINDS_NOTHING = ("pio does not find the virtual device by itself: name its path with --upload-port for "
                      "an upload and with --port for pio device monitor, or set upload_port and monitor_port "
@@ -186,12 +186,13 @@ def test_acc_cli_184_the_readme_shows_pio_upload_and_monitor_and_how_pio_finds_t
 
 
 def test_acc_cli_184_the_skill_shows_pio_upload_and_monitor_and_names_the_path_options():
-    """ACC-CLI-184 one rule of the agent skill names pio, shows the upload under `run --` with --upload-port and the monitor with --port, and names upload_port and monitor_port of platformio.ini."""
+    """ACC-CLI-184 one rule of the agent skill names pio, shows the upload under `run --device <name> --` with --upload-port and the monitor with --port, and names upload_port and monitor_port of platformio.ini."""
     rules = [rule for rule in skill_rules() if "--upload-port" in rule]
 
     assert len(rules) == 1, f"{len(rules)} rules of the skill name --upload-port"
     (rule,) = rules
     for phrase in ("pio does not find the virtual device by itself",
-                   "`run -- pio run -t upload --upload-port <path>`", "`pio device monitor --port <path>`",
+                   "`run --device <name> -- pio run -t upload --upload-port <path>`",
+                   "`pio device monitor --port <path>`",
                    "`upload_port` and `monitor_port` in `platformio.ini`"):
         assert phrase in rule, f"the pio rule of the skill lacks `{phrase}`"

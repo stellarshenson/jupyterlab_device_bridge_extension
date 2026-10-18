@@ -210,6 +210,14 @@ export function workerMain(scope: IWorkerScope): void {
 
   const hex = (id: number): string => id.toString(16).padStart(4, '0');
 
+  /** A USB string descriptor without the NUL that Chrome leaves at its end. */
+  const descriptorText = (
+    value: string | null | undefined
+  ): string | undefined => {
+    const text = value?.replace(/\0+$/, '');
+    return text || undefined;
+  };
+
   const sleep = (ms: number): Promise<void> =>
     new Promise(resolve => {
       scope.setTimeout(resolve, ms);
@@ -400,6 +408,42 @@ export function workerMain(scope: IWorkerScope): void {
     entry.readDone = readLoop(entry);
     entry.state = 'open';
     report(entry);
+  };
+
+  /**
+   * Close everything the browser still holds of a serial port, then revoke its grant.
+   *
+   * Forget must not trust `opened`: `open()` can report a failure after the browser
+   * took the port, so the entry says closed while the browser holds the port. Every
+   * step tolerates its own failure, because a port the browser no longer holds rejects
+   * the close and a port that refuses the forget must still leave the table.
+   */
+  const forgetPort = async (entry: ISerialEntry): Promise<void> => {
+    if (entry.writer) {
+      const writer = entry.writer;
+      entry.writer = null;
+      await writer.close().catch(() => undefined);
+      try {
+        writer.releaseLock();
+      } catch {
+        // A writer whose stream failed holds no lock.
+      }
+    }
+    entry.reading = false;
+    if (entry.reader) {
+      // A stream that already failed rejects the cancel; the read loop ends either way.
+      await entry.reader.cancel().catch(() => undefined);
+    }
+    await entry.readDone.catch(() => undefined);
+    entry.opened = false;
+    watchActivity();
+    entry.state = 'closed';
+    entry.error = null;
+    entry.signals = {};
+    // The browser rejects the close of a port it does not hold with InvalidStateError,
+    // and it rejects the forget of a port it still holds. The entry is dropped anyway.
+    await entry.device.close().catch(() => undefined);
+    await entry.device.forget().catch(() => undefined);
   };
 
   const closePort = async (entry: ISerialEntry): Promise<void> => {
@@ -603,6 +647,9 @@ export function workerMain(scope: IWorkerScope): void {
         'serialNumber',
         'opened'
       ]),
+      manufacturerName: descriptorText(device.manufacturerName) ?? null,
+      productName: descriptorText(device.productName) ?? null,
+      serialNumber: descriptorText(device.serialNumber) ?? null,
       configurationValue: device.configuration
         ? device.configuration.configurationValue
         : null,
@@ -882,7 +929,7 @@ export function workerMain(scope: IWorkerScope): void {
 
   const addUsb = (device: USBDevice): void => {
     const { vendorId, productId } = device;
-    const serialNumber = device.serialNumber || undefined;
+    const serialNumber = descriptorText(device.serialNumber);
     const family = `u:${hex(vendorId)}:${hex(productId)}:`;
     // Two devices with one serial number exist; the second takes a numbered key.
     const key =
@@ -897,8 +944,8 @@ export function workerMain(scope: IWorkerScope): void {
         vendorId,
         productId,
         serialNumber,
-        productName: device.productName || undefined,
-        manufacturerName: device.manufacturerName || undefined
+        productName: descriptorText(device.productName),
+        manufacturerName: descriptorText(device.manufacturerName)
       },
       kept: new Map()
     });
@@ -1229,19 +1276,32 @@ export function workerMain(scope: IWorkerScope): void {
         }
         postGrants();
         return;
-      case 'forget':
+      case 'forget': {
+        const revoke: Array<Promise<void>> = [];
         for (const key of message.keys) {
           const entry = entries.get(key);
           if (entry) {
             entries.delete(key);
             entry.claim = 'none';
-            const forgetGrant = (): Promise<void> => entry.device.forget();
-            void closeDevice(entry).then(forgetGrant, forgetGrant);
+            if (entry.kind === 'serial') {
+              revoke.push(enqueue(entry, () => forgetPort(entry)));
+            } else {
+              const forgetGrant = (): Promise<void> => entry.device.forget();
+              revoke.push(closeDevice(entry).then(forgetGrant, forgetGrant));
+            }
           }
         }
-        send({ type: 'release', name: message.name, reason: 'forget' });
-        postGrants();
+        // The server removes the device and its row only after the browser gave the
+        // device up. A close or a forget that the browser refuses changes nothing
+        // here, and no rejection leaves this message handler.
+        void Promise.all(revoke)
+          .catch(() => undefined)
+          .then(() => {
+            send({ type: 'release', name: message.name, reason: 'forget' });
+            postGrants();
+          });
         return;
+      }
       case 'request-result':
         send(message);
         return;

@@ -155,34 +155,38 @@ Attach a port, its virtual serial device, bytes both ways, baud rate, tool open 
   - log: 2026-10-13T10:15:29Z @kj added
   - log: 2026-10-13T10:18:07Z @kj closed
 
-## Port profiles `PROF`
+## Serial settings `PROF`
 
-Serial settings and the action on open, built-in profiles
+Serial settings, the action on open and the named configs
 
-- [x] `ACC-PROF-22` **Built-in profiles** - HIGH; five built-in profiles exist: monitor, arduino-upload (pulse-dtr), arduino-isp (no action), stm32-bootloader (8E1), esp-upload (esp-bootloader)
-  - evidence: verify round 1: pytest test_profiles.py::test_acc_prof_22_five_built_in_profiles passed in make test; red under 'the profile stm32-bootloader has no parity' (pytest)
+- [-] `ACC-PROF-22` **Built-in profiles** - HIGH; five built-in profiles exist: monitor, arduino-upload (pulse-dtr), arduino-isp (no action), stm32-bootloader (8E1), esp-upload (esp-bootloader)
+  - overridden-by: ACC-PROF-203
   - test: pytest test_profiles.py: assert the five ids and those fields
   - test-tags: UNIT
   - log: 2026-10-12T00:27:42Z @kj added
   - log: 2026-10-12T07:49:03Z @kj closed: verified
-- [x] `ACC-PROF-23` **Profile set from the panel** - HIGH; parity, data bits, stop bits and the action on open of a serial port are set in the panel
-  - evidence: verify round 1: galata panel.spec.ts ACC-PROF-23 passed in the Galata suite; red under 'the profile stm32-bootloader has no parity' (galata)
+  - log: 2026-10-17T17:15:29Z @kj rejected: replaced by ACC-PROF-203: the built-in profiles are the read-only system sets; evidence retired: verify round 1: pytest test_profiles.py::test_acc_prof_22_five_built_in_profiles passed in make test; red under 'the profile stm32-bootloader has no parity' (pytest)
+- [-] `ACC-PROF-23` **Profile set from the panel** - HIGH; parity, data bits, stop bits and the action on open of a serial port are set in the panel
+  - overridden-by: ACC-PROF-207
   - test: galata panel.spec.ts: choose stm32-bootloader in the row, assert the device record and the simulated port show even parity
   - test-tags: FUNCTIONAL
   - log: 2026-10-12T00:27:42Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
-- [x] `ACC-PROF-24` **Profile set from the CLI** - HIGH; the profile command sets a device's profile and single fields
-  - evidence: verify round 1: pytest test_cli.py::test_acc_prof_24_profile_sets_the_profile_and_single_fields; galata cli.spec.ts ACC-PROF-24 passed in make test and the Galata suite; red under 'the profile command does not send --parity' (pytest, galata)
+  - log: 2026-10-17T17:15:28Z @kj rejected: replaced by ACC-PROF-207: the Settings dialog edits one settings record and saved sets, not a profile id; evidence retired: verify round 1: galata panel.spec.ts ACC-PROF-23 passed in the Galata suite; red under 'the profile stm32-bootloader has no parity' (galata)
+- [-] `ACC-PROF-24` **Profile set from the CLI** - HIGH; the profile command sets a device's profile and single fields
+  - overridden-by: ACC-PROF-208
   - test: pytest test_cli.py: run profile with an id and --parity, assert the device record; galata cli.spec.ts: same against the real server
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-12T00:27:42Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
-- [x] `ACC-PROF-25` **Profile settings reach the port** - HIGH; the profile's parity, data bits and stop bits are what the port is opened with
-  - evidence: verify round 1: jest worker.spec.ts 'ACC-PROF-25 a port claimed with ...' passed in make test; red under 'the port is always opened without parity' (jest)
+  - log: 2026-10-17T17:15:29Z @kj rejected: replaced by ACC-PROF-208: the CLI has settings subcommands, not profile; evidence retired: verify round 1: pytest test_cli.py::test_acc_prof_24_profile_sets_the_profile_and_single_fields; galata cli.spec.ts ACC-PROF-24 passed in make test and the Galata suite; red under 'the profile command does not send --parity' (pytest, galata)
+- [-] `ACC-PROF-25` **Profile settings reach the port** - HIGH; the profile's parity, data bits and stop bits are what the port is opened with
+  - overridden-by: ACC-PROF-204
   - test: jest worker.spec.ts: claimed with 8E1, assert the simulated port opened with even parity
   - test-tags: UNIT
   - log: 2026-10-12T00:27:42Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
+  - log: 2026-10-17T17:15:29Z @kj rejected: replaced by ACC-PROF-204: applying a set copies its five values onto the port; evidence retired: verify round 1: jest worker.spec.ts 'ACC-PROF-25 a port claimed with ...' passed in make test; red under 'the port is always opened without parity' (jest)
 - [x] `ACC-PROF-26` **Action pulse-dtr** - HIGH; on tool open with pulse-dtr the port sees DTR false, then DTR true
   - evidence: verify round 1: pytest test_manager.py::test_acc_prof_26_pulse_dtr_is_run_when_a_tool_opens_the_device; jest worker.spec.ts 'ACC-PROF-26 pulse-dtr sets DTR false, ...' passed in make test; red under 'no action is sent when a tool opens the device' (pytest); 'pulse-dtr sets DTR true, then false' (jest)
   - test: jest worker.spec.ts: run pulse-dtr, assert the recorded signal order; pytest test_manager.py: assert serial-action pulse-dtr on tool open
@@ -207,54 +211,156 @@ Serial settings and the action on open, built-in profiles
   - test-tags: UNIT
   - log: 2026-10-12T00:27:43Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
-- [x] `ACC-PROF-30` **No action on open** - HIGH; with arduino-isp or monitor a tool open changes no control line
+- [x] `ACC-PROF-30` **No action on open** - HIGH; with the Arduino as ISP or the Monitor config a tool open changes no control line
   - evidence: verify round 1: pytest test_manager.py::test_acc_prof_30_no_action_and_no_signal_with_on_open_none; jest worker.spec.ts 'ACC-PROF-30 a claim, a reconfigure ...' passed in make test; red under 'an action is sent on tool open also when the profile says none' (pytest); 'the action none sets DTR' (jest)
   - test: jest worker.spec.ts and pytest test_manager.py: tool open with onOpen none, assert no signal call and no serial-action
   - test-tags: UNIT
   - log: 2026-10-12T00:27:43Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
+  - log: 2026-10-17T17:15:49Z @kj edited text "with arduino-isp or monitor a tool open changes no control line" -> "HIGH; with the Arduino as ISP or the Monitor set a tool open changes no control line"
+  - log: 2026-10-17T20:18:20Z @kj amended text "with the Arduino as ISP or the Monitor set a tool open changes no control line" -> "with the Arduino as ISP or the Monitor config a tool open changes no control line"
 - [x] `ACC-PROF-31` **Usable with profiles alone** - HIGH; a tool whose DTR call is refused still exchanges bytes with the port and gets the profile's action, with no shim
   - evidence: verify round 1: galata serial.spec.ts ACC-PROF-31 passed in the Galata suite; red under 'no action is sent when a tool opens the device' (galata)
   - test: galata serial.spec.ts: python tool without shim opens the path with arduino-upload, assert the DTR pulse was recorded and the echo returns
   - test-tags: FUNCTIONAL
   - log: 2026-10-12T00:27:43Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
-- [x] `ACC-PROF-32` **Edge: invalid profile input** - MEDIUM; an unknown profile id, action, parity or bit count is refused with status 400 and a message naming the field
+- [x] `ACC-PROF-32` **Edge: invalid settings input** - MEDIUM; an unknown action, parity or bit count is refused with status 400 and a message naming the field
   - evidence: verify round 1: pytest test_routes.py -k test_acc_prof_32_invalid_profile_input_is_400_and_names_the_field passed in make test; red under 'the parity `mark` is accepted' (pytest)
   - test: pytest test_routes.py: PUT each bad value, assert 400 and the field name
   - test-tags: UNIT
   - log: 2026-10-12T00:27:43Z @kj added
   - log: 2026-10-12T07:49:04Z @kj closed: verified
-- [x] `ACC-PROF-118` **Default serial settings** - HIGH; settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record lists the values that differ from profile monitor as overrides
+  - log: 2026-10-17T17:15:49Z @kj edited title "Edge: invalid profile input" -> "Edge: invalid settings input"; text "an unknown profile id, action, parity or bit count is refused with status 400 and a message naming the field" -> "MEDIUM; an unknown action, parity or bit count is refused with status 400 and a message naming the field"
+- [x] `ACC-PROF-118` **Default serial settings** - HIGH; settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record carries them as configured, with no config
   - evidence: pytest test_manager.py and test_profiles.py 'acc_prof_118', jest worker, model and index specs, galata serial.spec.ts 'ACC-PROF-118' pass (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red when the server ignores the defaults, the worker drops them, or a USB claim carries them (checks 1-3, 15-20, 41-44, 47, 65)
   - test: pytest test_manager.py: first claim with defaults, assert settings and overrides; jest worker.spec.ts: the claim carries the defaults; galata serial.spec.ts: set 9600 7 even 2 pulse-dtr, add a port, assert the open options and the row
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-12T14:06:46Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
+  - log: 2026-10-17T17:15:49Z @kj edited text "settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record lists the values that differ from profile monitor as overrides" -> "HIGH; settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record carries them as configured, with no set"
+  - log: 2026-10-17T20:18:20Z @kj amended text "settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record carries them as configured, with no set" -> "settings defaultBaudRate 115200, defaultDataBits 8, defaultParity none, defaultStopBits 1, defaultOnOpen none; a serial port the server has no record of is opened with them; its record carries them as configured, with no config"
 - [x] `ACC-PROF-119` **Defaults apply to new ports only** - HIGH; a changed default changes no existing record; a port added after the change gets the new values without a reload
   - evidence: pytest test_acc_prof_119_a_later_claim_with_other_defaults_keeps_the_record, jest worker, model and index specs, galata serial.spec.ts 'ACC-PROF-119' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red when a later claim applies its defaults or a change does not reach the model (checks 4-6, 18, 21, 45, 48, 66)
   - test: pytest test_manager.py: a second claim of a key with other defaults keeps the record; galata serial.spec.ts: change defaultBaudRate, add a second port, assert its baud rate and the first port unchanged
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-12T14:06:46Z @kj added
   - log: 2026-10-12T16:43:49Z @kj closed
-- [x] `ACC-PROF-120` **Edge: refused defaults** - MEDIUM; a claim whose defaults hold an unknown field, a profile id or a value outside the profile choices is refused and makes no record
+- [x] `ACC-PROF-120` **Edge: refused defaults** - MEDIUM; a claim whose defaults hold an unknown field or a value outside the choices is refused and makes no record
   - evidence: pytest test_manager.py 13 cases and test_profiles.py 8 cases 'acc_prof_120' pass (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red when a profile id is accepted, values are not checked, or the check runs after the key got its name (checks 7-10)
   - test: pytest test_manager.py: claims with baudRate 0, parity mark, a field profile and an unknown field, assert claimed ok false and an empty table
   - test-tags: UNIT
   - log: 2026-10-12T14:06:46Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
-- [x] `ACC-PROF-121` **Settings schema matches the server** - MEDIUM; the defaults and choices of the five default settings in schema/plugin.json equal profile monitor and the choices of profiles.py
+  - log: 2026-10-17T17:15:49Z @kj edited text "a claim whose defaults hold an unknown field, a profile id or a value outside the profile choices is refused and makes no record" -> "MEDIUM; a claim whose defaults hold an unknown field or a value outside the choices is refused and makes no record"
+- [x] `ACC-PROF-121` **Settings schema matches the server** - MEDIUM; the defaults and choices of the five default settings in schema/plugin.json equal the built-in values and the choices of serial_settings.py
   - evidence: pytest test_acc_prof_121_the_default_settings_of_the_schema_equal_profile_monitor_and_the_choices_of_the_server passes (build 0.6.16, logs/review-r6-fix-make-test.log and logs/review-r6-fix-galata.log); red with schema default 9600, parity mark, a sixth action (checks 11-13) and with the baud maximum removed from the schema
-  - test: pytest test_profiles.py: read schema/plugin.json, compare the defaults with profile monitor and the enums with the choices
+  - test: pytest test_serial_settings.py: read schema/plugin.json, compare the defaults with the Monitor config and the enums with the choices
   - test-tags: UNIT
   - log: 2026-10-12T14:06:46Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
+  - log: 2026-10-17T17:15:49Z @kj edited text "the defaults and choices of the five default settings in schema/plugin.json equal profile monitor and the choices of profiles.py" -> "MEDIUM; the defaults and choices of the five default settings in schema/plugin.json equal the built-in values and the choices of serial_settings.py"
+  - log: 2026-10-17T18:48:32Z @kj edited test "pytest test_profiles.py: read schema/plugin.json, compare the defaults with profile monitor and the enums with the choices" -> "pytest test_serial_settings.py: read schema/plugin.json, compare the defaults with the Monitor set and the enums with the choices"
+  - log: 2026-10-17T22:05:38Z @kj edited test "pytest test_serial_settings.py: read schema/plugin.json, compare the defaults with the Monitor set and the enums with the choices" -> "pytest test_serial_settings.py: read schema/plugin.json, compare the defaults with the Monitor config and the enums with the choices"
 - [x] `ACC-PROF-123` **Settings choices carry the panel's labels** - MEDIUM; the choices of the four default settings with fixed values are oneOf entries with const and title; the titles of default parity and default action on open equal the labels the panel shows for the same values
   - evidence: jest panel.spec.ts, pytest test_acc_prof_123_each_choice_of_the_schema_is_a_value_of_the_server_with_a_title, galata serial.spec.ts 'ACC-PROF-123' pass (build 0.6.15, logs/review-r6-make-test.log and logs/review-r6-galata.log); red with an enum, a raw value as title, a title that stores another value (checks 101-103, 111-113, 125-127)
-  - test: jest panel.spec.ts: read schema/plugin.json, compare the titles of defaultParity and defaultOnOpen with the option labels of the profile editor; pytest test_profiles.py: the const values equal the choices
+  - test: jest panel.spec.ts: read schema/plugin.json, compare the titles of defaultParity and defaultOnOpen with the option labels of the settings dialog; pytest test_serial_settings.py: the const values equal the choices
   - test-tags: UNIT
   - log: 2026-10-12T15:18:24Z @kj added
   - log: 2026-10-12T16:43:49Z @kj closed
+  - log: 2026-10-17T18:48:32Z @kj edited test "jest panel.spec.ts: read schema/plugin.json, compare the titles of defaultParity and defaultOnOpen with the option labels of the profile editor; pytest test_profiles.py: the const values equal the choices" -> "jest panel.spec.ts: read schema/plugin.json, compare the titles of defaultParity and defaultOnOpen with the option labels of the settings dialog; pytest test_serial_settings.py: the const values equal the choices"
+- [x] `ACC-PROF-203` **One serial settings record per port** - HIGH; a serial port has one settings record: baudRate, dataBits, parity, stopBits and onOpen; no profile id and no overrides; a new port starts with the lab defaults or the built-in defaults
+  - evidence: make test 1.0.11 (logs/saved-settings-gate-2.log): Jest 269, pytest 561 passed 1 skipped, incl. test_serial_settings.py::test_acc_prof_203_the_system_sets and ::test_acc_prof_203_the_defaults_of_the_lab_fill_a_new_port and test_manager.py::test_acc_prof_203_a_claim_without_defaults_gets_the_built_in_values; Galata 86 passed (logs/saved-settings-galata-2.log) incl. ACC-PANEL-64 reading the row
+  - overrides: ACC-PROF-22
+  - test: pytest asserts the record fields and the values of a new port with and without lab defaults; Galata reads the row
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T22:05:44Z @kj SerialDevice stores the five values and the applied config id; record() sends configured and config
+  - log: 2026-10-17T16:52:14Z @kj added
+  - log: 2026-10-17T18:10:06Z @kj closed
+  - log: 2026-10-17T22:05:44Z @kj mechanism updated "2026-10-17T16:52:14Z @kj SerialDevice stores the five values and the applied set id; record() sends configured and set" -> "SerialDevice stores the five values and the applied config id; record() sends configured and config"
+- [x] `ACC-PROF-204` **Apply a saved config to a port** - HIGH; applying a system or user config copies its five values to the port and names the config; changing any field makes the port custom, with no config
+  - evidence: make test 1.0.11 (logs/saved-settings-gate-2.log): pytest 561 passed 1 skipped, incl. test_settings_sets.py::test_acc_prof_204_apply_a_system_set_then_change_one_field, the three test_routes.py ACC-PROF-204 cases and test_cli.py::test_acc_prof_204_settings_apply_and_set_the_port; red under 'set_fields keeps the set id' (pytest, logs/saved-settings-mutants.log)
+  - overrides: ACC-PROF-25
+  - test: pytest applies a system config and a saved config, then changes one field
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T22:05:44Z @kj manager copies the config values and SerialDevice.set_values clears the config id when a single field changes
+  - log: 2026-10-17T16:52:20Z @kj added
+  - log: 2026-10-17T18:02:40Z @kj closed
+  - log: 2026-10-17T20:18:22Z @kj amended title "Apply a saved set to a port" -> "Apply a saved config to a port"; text "applying a system or user set copies its five values to the port and names the set; changing any field makes the port custom, with no set" -> "applying a system or user config copies its five values to the port and names the config; changing any field makes the port custom, with no config"
+  - log: 2026-10-17T22:05:41Z @kj edited test "pytest applies a system set and a saved set, then changes one field" -> "pytest applies a system config and a saved config, then changes one field"
+  - log: 2026-10-17T22:05:44Z @kj mechanism updated "2026-10-17T16:52:20Z @kj manager copies the set values and SerialDevice.set_values clears the set id when a single field changes" -> "manager copies the config values and SerialDevice.set_values clears the config id when a single field changes"
+- [x] `ACC-PROF-205` **Save the current settings under a name** - HIGH; the user saves the five current values of a port under a name of 1 to 64 characters; the config survives a server restart; a duplicate name or id, a system name or id, or a control character is refused
+  - evidence: make test 1.0.11 (logs/saved-settings-gate-2.log): pytest 561 passed 1 skipped, incl. the two test_serial_settings.py ACC-PROF-205 cases, test_settings_sets.py::test_acc_prof_205_a_saved_set_is_written_and_read_back and test_cli.py::test_acc_prof_205_settings_save_lists_and_deletes_a_set; red under 'validate_name accepts any text' and 'save_saved writes 0644' (pytest, logs/saved-settings-mutants.log)
+  - test: pytest saves a config, builds a new manager over the same file and reads it; each refusal raises
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T22:05:44Z @kj save_config validates name and values, appends to the saved list and writes serial-settings.json mode 0600 in the Jupyter data directory
+  - log: 2026-10-17T16:52:20Z @kj added
+  - log: 2026-10-17T18:02:41Z @kj closed
+  - log: 2026-10-17T20:18:22Z @kj amended text "the user saves the five current values of a port under a name of 1 to 64 characters; the set survives a server restart; a duplicate name, a system name or a control character is refused" -> "the user saves the five current values of a port under a name of 1 to 64 characters; the config survives a server restart; a duplicate name, a system name or a control character is refused"
+  - log: 2026-10-17T22:05:41Z @kj edited test "pytest saves a set, builds a new manager over the same file and reads it; each refusal raises" -> "pytest saves a config, builds a new manager over the same file and reads it; each refusal raises"
+  - log: 2026-10-17T22:05:44Z @kj mechanism updated "2026-10-17T16:52:20Z @kj save_set validates name and values, appends to the saved list and writes serial-settings.json mode 0600 in the Jupyter data directory" -> "save_config validates name and values, appends to the saved list and writes serial-settings.json mode 0600 in the Jupyter data directory"
+  - log: 2026-10-18T04:14:18Z @kj edited text "the user saves the five current values of a port under a name of 1 to 64 characters; the config survives a server restart; a duplicate name, a system name or a control character is refused" -> "HIGH; the user saves the five current values of a port under a name of 1 to 64 characters; the config survives a server restart; a duplicate name or id, a system name or id, or a control character is refused"
+- [x] `ACC-PROF-206` **List and delete saved configs** - MEDIUM; the list shows the five system configs first and then the user configs; deleting a user config removes it from the file and the list; a system config is refused; deleting a config a port uses leaves the port values and makes the port custom
+  - evidence: make test 1.0.11 (logs/saved-settings-gate-2.log): pytest 561 passed 1 skipped, incl. test_settings_sets.py::test_acc_prof_206_the_list_holds_the_system_sets_first and ::test_acc_prof_206_delete_a_saved_set_keeps_the_port_values and test_routes.py::test_acc_prof_206_the_settings_sets_route_lists_the_system_sets; red under 'delete_set allows a system set' (pytest, logs/saved-settings-mutants.log)
+  - test: pytest lists, deletes a saved config, deletes an applied config, and is refused for a system config
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T22:05:44Z @kj delete_config refuses a system config and rewrites the file; the port keeps its values and loses the config id
+  - log: 2026-10-17T16:52:28Z @kj added
+  - log: 2026-10-17T18:02:41Z @kj closed
+  - log: 2026-10-17T20:18:25Z @kj amended title "List and delete saved sets" -> "List and delete saved configs"; text "the list shows the five system sets first and then the user sets; deleting a user set removes it from the file and the list; a system set is refused; deleting a set a port uses leaves the port values and makes the port custom" -> "the list shows the five system configs first and then the user configs; deleting a user config removes it from the file and the list; a system config is refused; deleting a config a port uses leaves the port values and makes the port custom"
+  - log: 2026-10-17T22:05:41Z @kj edited test "pytest lists, deletes a saved set, deletes an applied set, and is refused for a system set" -> "pytest lists, deletes a saved config, deletes an applied config, and is refused for a system config"
+  - log: 2026-10-17T22:05:44Z @kj mechanism updated "2026-10-17T16:52:28Z @kj delete_set refuses a system set and rewrites the file; the port keeps its values and loses the set id" -> "delete_config refuses a system config and rewrites the file; the port keeps its values and loses the config id"
+- [x] `ACC-PROF-207` **Settings dialog and header help** - MEDIUM; the Settings dialog offers the configs, edits the five fields, saves the current values as a named config and deletes a user config; the Serial and USB header has an accented help link that explains the configs and the actions
+  - evidence: make test 1.0.11: Jest 269 passed incl. the seven panel.spec.ts ACC-PROF-207 cases; Galata 86 passed (logs/saved-settings-galata-2.log) incl. the dialog, arrow-key and help-link ACC-PROF-207 tests; pytest 561 passed 1 skipped
+  - overrides: ACC-PROF-23
+  - test: Jest asserts the help link and the dialog controls; Galata opens the help and the dialog
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T22:05:45Z @kj the dialog fills from configured and sends changed fields; Save as creates a config; the help renders the system configs
+  - log: 2026-10-17T16:52:28Z @kj added
+  - log: 2026-10-17T18:10:06Z @kj closed
+  - log: 2026-10-17T20:18:25Z @kj amended text "the Settings dialog offers the sets, edits the five fields, saves the current values as a named set and deletes a user set; the Serial and USB header has an accented help link that explains the sets and the actions" -> "the Settings dialog offers the configs, edits the five fields, saves the current values as a named config and deletes a user config; the Serial and USB header has an accented help link that explains the configs and the actions"
+  - log: 2026-10-17T22:05:45Z @kj mechanism updated "2026-10-17T16:52:28Z @kj the dialog fills from configured and sends changed fields; Save as creates a set; the help renders the system sets" -> "the dialog fills from configured and sends changed fields; Save as creates a config; the help renders the system configs"
+- [x] `ACC-PROF-208` **CLI settings commands** - HIGH; jupyterlab-device settings list, show, apply, set, save and delete; the banner and the list show the config name or custom, with the settings and the action on open
+  - evidence: make test 1.0.11: pytest 561 passed 1 skipped incl. test_cli.py::test_acc_prof_204_settings_apply_and_set_the_port and ::test_acc_prof_205_settings_save_lists_and_deletes_a_set; Galata 86 passed (logs/saved-settings-galata-2.log) incl. cli.spec.ts ACC-PROF-208
+  - overrides: ACC-PROF-24
+  - test: pytest runs each subcommand and the banner; Galata runs the installed CLI
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T22:05:45Z @kj the subcommands call the settings-configs endpoints and the port settings PUT; the banner reads configured.onOpen and the config name
+  - log: 2026-10-17T16:52:29Z @kj added
+  - log: 2026-10-17T18:10:06Z @kj closed
+  - log: 2026-10-17T20:18:28Z @kj amended text "jupyterlab-device settings list, show, apply, set, save and delete; the banner and the list show the set name or custom, with the settings and the action on open" -> "jupyterlab-device settings list, show, apply, set, save and delete; the banner and the list show the config name or custom, with the settings and the action on open"
+  - log: 2026-10-17T22:05:45Z @kj mechanism updated "2026-10-17T16:52:29Z @kj the subcommands call the settings-sets endpoints and the port settings PUT; the banner reads configured.onOpen and the set name" -> "the subcommands call the settings-configs endpoints and the port settings PUT; the banner reads configured.onOpen and the config name"
+- [x] `ACC-PROF-209` **A system config is copied, never changed** - MEDIUM; a system config cannot be changed or deleted; the user copies one by applying it to a port, editing the fields and saving the values under a new name, which makes a user-saved config; the system config stays as it was
+  - evidence: make test 1.0.11: pytest 561 passed 1 skipped incl. test_settings_sets.py::test_acc_prof_209_a_system_set_is_copied_never_changed; Jest 269 passed incl. panel.spec.ts Save as... and Delete set; Galata 86 passed (logs/saved-settings-galata-2.log) incl. the dialog test that applies a system set
+  - test: pytest applies a system config, changes a field and saves the port values under a name; the system config is unchanged
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T22:05:45Z @kj Save as sends the five current values in POST settings-configs; a system config is never written
+  - log: 2026-10-17T17:14:51Z @kj added
+  - log: 2026-10-17T18:10:06Z @kj closed
+  - log: 2026-10-17T20:18:28Z @kj amended title "A system set is copied, never changed" -> "A system config is copied, never changed"; text "a system set cannot be changed or deleted; the user copies one by applying it to a port, editing the fields and saving the values under a new name, which makes a user-saved set; the system set stays as it was" -> "a system config cannot be changed or deleted; the user copies one by applying it to a port, editing the fields and saving the values under a new name, which makes a user-saved config; the system config stays as it was"
+  - log: 2026-10-17T22:05:41Z @kj edited test "pytest applies a system set, changes a field and saves the port values under a name; the system set is unchanged" -> "pytest applies a system config, changes a field and saves the port values under a name; the system config is unchanged"
+  - log: 2026-10-17T22:05:45Z @kj mechanism updated "2026-10-17T17:14:51Z @kj Save as sends the five current values in POST settings-sets; a system set is never written" -> "Save as sends the five current values in POST settings-configs; a system config is never written"
+- [x] `ACC-PROF-217` **Serial settings are configs** - HIGH; a named serial settings bundle is a config in every layer: the record fields config and configName, the settings-configs routes, the welcome field configs, the settings change field config, the Python names SYSTEM_CONFIGS, save_config, delete_config, SettingsConfigsHandler and ConfigNameBody, and the visible text system config, saved config, Config, Delete config and config:; the storage file serial-settings.json and the five system config ids keep their names
+  - evidence: make test 1.0.20 (logs/dev-make-2026-10-17-rename-test.log): Jest 269, pytest 562 passed 1 skipped, auth gate; Galata 86 (logs/galata-2026-10-17-rename.log); settings help and list name config; README, design and skill updated
+  - test: Jest panel.spec.ts and model.spec.ts: the dialog, the welcome, save, delete and help use config, configName, settings-configs and the label Config; all 269 Jest tests pass
+  - test-tags: UNIT
+  - log: 2026-10-17T20:21:18Z @kj added; reason: The rename task states this contract and no criterion records it
+  - log: 2026-10-17T20:42:55Z @kj closed
+- [x] `ACC-PROF-218` **a new port starts on a config** - MEDIUM; a serial record created from a claim carries the id of the system config whose five values equal its initial settings; with the stock defaults that is default, so list and the settings dialog never show Custom on an unchanged port; settings set makes it custom
+  - evidence: make test 1.0.22: pytest test_manager.py::test_acc_prof_218_a_new_port_names_its_config passed (592 passed, 1 skipped, logs/verify-followup-make-test-2.log); a fresh port records config default and configName Default
+  - test: jupyterlab_device_bridge_extension/tests/test_manager.py::test_acc_prof_218_a_new_port_names_its_config
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T22:04:24Z @kj SerialDevice construction matches the initial values against SYSTEM_CONFIGS and stores the matching id
+  - log: 2026-10-17T22:04:24Z @kj added
+  - log: 2026-10-17T23:35:48Z @kj amended text "a serial record created from a claim carries the id of the system config whose five values equal its initial settings; with the stock defaults that is monitor, so list and the settings dialog never show Custom on an unchanged port; settings set makes it custom" -> "a serial record created from a claim carries the id of the system config whose five values equal its initial settings; with the stock defaults that is default, so list and the settings dialog never show Custom on an unchanged port; settings set makes it custom"
+  - log: 2026-10-17T23:35:54Z @kj closed
+- [x] `ACC-PROF-226` **Default config restores the built-in values** - HIGH; a system config Default carries the built-in values, 115200 8N1 with no action on open; it is read-only, listed by settings list and offered by the dialog, and applying it returns a port to those values
+  - evidence: make test 1.0.22: pytest test_settings_configs.py::test_acc_prof_219_the_default_config_restores_the_built_in_values passed (592 passed, 1 skipped, logs/verify-followup-make-test-2.log); Default first, applying it restores 115200 8N1 with onOpen none, DELETE and POST of Default refused
+  - test: jupyterlab_device_bridge_extension/tests/test_settings_configs.py::test_acc_prof_219_the_default_config_restores_the_built_in_values
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T23:35:52Z @kj the sixth system config Default carries DEFAULT_SETTINGS and is read-only like the other system configs
+  - log: 2026-10-17T23:35:52Z @kj added
+  - log: 2026-10-17T23:35:56Z @kj closed
 
 ## Preload shim `SHIM`
 
@@ -420,36 +526,48 @@ A tool's own DTR, RTS and parity calls passed to the bridge
   - test-tags: UNIT
   - log: 2026-10-14T19:09:05Z @kj added
   - log: 2026-10-16T09:24:23Z @kj closed; reason: evidence names the test, the mutation and the gate run
-- [ ] `ACC-SHIM-189` **Banner opens with the DEVICE BRIDGE logo** - HIGH; the banner of the device shell opens with DEVICE and BRIDGE in block letters with a shadow; it is 75% of the terminal's columns wide, at least 45; DEVICE BRIDGE stand on one row when that width holds them, else DEVICE above BRIDGE; under 45 columns no logo
+- [x] `ACC-SHIM-189` **Banner opens with the DEVICE BRIDGE logo** - HIGH; the banner of the device shell opens with DEVICE and BRIDGE in block letters with a shadow; it is 75% of the terminal's columns wide, at least 45; DEVICE BRIDGE stand on one row when that width holds them, else DEVICE above BRIDGE; under 45 columns no logo
+  - evidence: pytest test_cli.py::test_acc_shim_189_the_banner_opens_with_the_logo_at_75_percent_of_the_width (80 columns: DEVICE above BRIDGE, 170 columns: one row, 40 columns: no logo) and test_cli.py::test_acc_shim_189_the_width_comes_from_the_terminal passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 3 code changes of this criterion caught (share 0.8, never one row, logo on a narrow terminal), 22/22 overall; galata panel.spec.ts checks the logo rows in the lab terminal in ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, ACC-PANEL-147 the command Device Shell of the command palette, ACC-PANEL-140 the Devices menu has the entry Device Shell, DEF-PANEL-15 and ACC-PANEL-133 Stop ends the device shell, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-SHIM-136 - the square wave of that banner is replaced by the logo
   - test: pytest test_cli.py on a pty of 80, 170 and 40 columns: two logo rows of words, one row, no logo; rules 60 and 127 columns wide; galata: the logo rows in the lab terminal
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:01:52Z @kj added
-- [ ] `ACC-SHIM-190` **Banner has titled sections** - HIGH; under the logo the name line has the diamond, jupyterlab-device and its version, and ends with device shell at the right edge of the banner; then the sections Environment, Devices, Agent skill and Commands, each opened by a rule with its title, and a rule under the last
+  - log: 2026-10-17T10:35:55Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-SHIM-190` **Banner has titled sections** - HIGH; under the logo the name line has the diamond, jupyterlab-device and its version, and ends with device shell at the right edge of the banner; then the sections Environment, Devices, Agent skill and Commands, each opened by a rule with its title, and a rule under the last
+  - evidence: pytest test_cli.py::test_acc_shim_190_the_name_line_ends_with_device_shell_at_the_edge_of_the_banner[80] and [170] (the name line, the four section rules with their titles, the rule under the last, the whole banner text) passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py); an earlier form of the test without the section rules passed in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 2 code changes of this criterion caught (name line not at the edge, no section rule), 22/22 overall; galata panel.spec.ts checks the name line and the titles Environment, Devices, Agent skill and Commands in the lab terminal in ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, ACC-PANEL-147 the command Device Shell of the command palette, ACC-PANEL-140 the Devices menu has the entry Device Shell, DEF-PANEL-15 and ACC-PANEL-133 Stop ends the device shell, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-PANEL-140 - the name line still ends with device shell
   - test: pytest test_cli.py: the banner text without escape sequences on 80 and 170 columns equals the expected lines; galata: the section titles in the lab terminal
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:01:52Z @kj added
-- [ ] `ACC-SHIM-191` **Banner colours follow roles and the background** - HIGH; the logo has a colour gradient and a darker shadow; the rules are grey; device names, paths and their information have a hue of their own, different from the other text; a light terminal background gives the light palette of the serial terminal; NO_COLOR removes every escape sequence
+  - log: 2026-10-17T10:36:19Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-SHIM-191` **Banner colours follow roles and the background** - HIGH; the logo has a colour gradient and a darker shadow; the rules are grey; device names, paths and their information have a hue of their own, different from the other text; a light terminal background gives the light palette of the serial terminal; NO_COLOR removes every escape sequence
+  - evidence: pytest test_cli.py::test_acc_shim_191_the_banner_colours_follow_their_roles_and_the_background[dark] and [light] and test_cli.py::test_acc_shim_160_the_banner_holds_no_escape_sequence_when_no_color_is_set (NO_COLOR is 1, NO_COLOR is empty, no variable NO_COLOR) passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 4 code changes of this criterion caught (no gradient, device in text colour, info in device colour, light ignored), 22/22 overall; galata panel.spec.ts ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell checks the colour of the device path, of 115200 8N1 and of the diamond in the lab terminal, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-SHIM-160 - pale cyan of that criterion is replaced by the colour roles
   - test: pytest test_cli.py: more than 6 logo colours; the colour of a device path and of its settings differ from the text colour; TEXTUAL_THEME light gives the light values; NO_COLOR=1 no escape byte; galata: the colour of a device path
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:01:52Z @kj added
-- [ ] `ACC-SHIM-192` **Banner lists devices with their information** - MEDIUM; the Devices section lists each device attached without an error, serial first: COM, path, baud rate, framing and profile; USB, name, vendor:product id and product name; the information goes to the next line when the line is wider than the banner; with none it names the Devices panel
+  - log: 2026-10-17T10:36:19Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-SHIM-192` **Banner lists devices with their information** - MEDIUM; the Devices section lists each device attached without an error, serial first: COM, path, baud rate, framing and profile; USB, name, vendor:product id and product name; the information goes to the next line when the line is wider than the banner; with none it names the Devices panel
+  - evidence: pytest test_cli.py::test_acc_shim_192_the_banner_lists_an_attached_serial_port_and_an_attached_usb_device, ::test_acc_shim_192_the_banner_lists_no_detached_device_and_no_device_with_an_error, ::test_acc_shim_192_the_information_of_every_device_goes_to_the_next_line_when_one_device_line_is_too_wide and ::test_acc_shim_192_the_banner_says_that_no_device_is_attached passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py); the three tests other than the next-line test, which was added after it, also passed in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 3 code changes of this criterion caught (any in place of all, detached listed, no panel named), 22/22 overall; galata panel.spec.ts ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell checks the COM and USB device lines in the lab terminal, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-SHIM-139 - its numbered device lines are replaced
   - test: pytest test_cli.py: an attached serial port and USB device, a detached port and a port with an error; narrow and wide terminals; no device; galata: the device line in the lab terminal
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:02:20Z @kj added
-- [ ] `ACC-SHIM-193` **Banner names the environment and its tools** - MEDIUM; the Environment section names the environment the shell starts in, the current environment or the name and scope chosen in the selector, and its upload tools; with none it says that avrdude, stm32flash, esptool and pio are not on PATH and to install one
+  - log: 2026-10-17T10:36:19Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-SHIM-193` **Banner names the environment and its tools** - MEDIUM; the Environment section names the environment the shell starts in, the current environment or the name and scope chosen in the selector, and its upload tools; with none it says that avrdude, stm32flash, esptool and pio are not on PATH and to install one
+  - evidence: pytest test_cli.py::test_acc_shim_193_the_environment_section_names_the_upload_tools_on_path (3 cases, three tools among them), ::test_acc_shim_193_the_banner_says_to_install_a_tool_when_none_is_on_path (2 cases), ::test_acc_shim_193_a_file_that_is_no_program_is_not_named_in_the_environment_section and test_environments.py::test_acc_shim_178_the_shell_runs_in_the_chosen_conda_environment (banner line fake-esp (global) with esptool) passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 2 code changes of this criterion caught (scope dropped, no install line), 22/22 overall; galata panel.spec.ts checks the tool line of the Environment section in the lab terminal in ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, ACC-PANEL-147 the command Device Shell of the command palette, ACC-PANEL-140 the Devices menu has the entry Device Shell, DEF-PANEL-15 and ACC-PANEL-133 Stop ends the device shell, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-SHIM-142 - its tool lines move into the Environment section
   - test: pytest test_cli.py and test_environments.py: three tools, no tool, a chosen conda environment; galata: the tool line in the lab terminal
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:02:20Z @kj added
-- [ ] `ACC-SHIM-199` **Environment selector says what the choice does** - LOW; under its question the environment selector of the device shell says that the shell starts with the bin folder of the chosen environment first on PATH and the variables its activation sets, and that the first entry keeps the current environment
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-SHIM-199` **Environment selector says what the choice does** - LOW; under its question the environment selector of the device shell says that the shell starts with the bin folder of the chosen environment first on PATH and the variables its activation sets, and that the first entry keeps the current environment
+  - evidence: pytest test_environments.py::test_acc_shim_199_the_selector_says_what_the_choice_does (Textual pilot) passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 1 code change of this criterion caught (no line), 22/22 overall; galata env-picker.spec.ts ACC-SHIM-177 Start in a folder whose .venv holds an upload tool shows the list of environments in the lab terminal checks the line under the question in the lab terminal, passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-SHIM-177 - the selector of that criterion
   - test: pytest Textual pilot: the line under the question; galata env-picker.spec.ts: the line in the lab terminal
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:02:20Z @kj added
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
 
 ## Monitor `MON`
 
@@ -754,14 +872,17 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-12T20:13:24Z @kj added
   - log: 2026-10-12T21:42:30Z @kj closed
-- [x] `ACC-PANEL-138` **Lamps follow the rate of the traffic** - MEDIUM; the TX and RX lamps follow the traffic of this tab's devices: a lamp is lit for 80 ms after each 50 ms period with bytes in its direction; sparse traffic gives single flashes and steady traffic a steady light; another tab's device lights a lamp when its counter grew
-  - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log): 24 Jest tests ACC-PANEL-138 and 3 Galata tests pass; measured: a flash lit 80 to 81 ms, off 319 to 320 ms between bursts, one lit period of 1273 to 1281 ms for a 1.2 s stream
+- [x] `ACC-PANEL-138` **Lamps follow the rate of the traffic** - MEDIUM; a lit lamp stays lit at least 200 ms from each report of traffic; bursts spaced more than 200 ms apart give separate flashes; bytes in every 50 ms period give a steady light
+  - evidence: make test 1.0.22 and Galata 88 passed: Jest 'ACC-PANEL-138 bursts 400 ms apart give single flashes: the lamp is lit for 200 ms after each burst and off until the next' and 'ACC-PANEL-138 bytes in every 50 ms period give a steady light: the lamp stays lit until 200 ms after the last period with bytes' green (24 ACC-PANEL-138 tests, logs/verify-followup-jest-named.log); Galata 'ACC-PANEL-138 bursts of bytes from the port 400 ms apart flash the RX lamp once each, bytes to the port flash the TX lamp, and a larger counter in the device table lights no lamp of a port this tab holds' and 'ACC-PANEL-138 a steady stream of bytes from the port keeps the RX lamp lit without a break until the stream ends' green (logs/galata-followup.log)
   - overrides: ACC-PANEL-137
   - test: jest worker.spec.ts: an activity message only for a period with bytes; panel.spec.ts with fake timers: single flashes, a steady light, a device of another tab; galata: bursts 400 ms apart give separate flashes, a steady stream keeps the RX lamp lit
   - test-tags: UNIT, FUNCTIONAL
   - mechanism: 2026-10-13T07:42:20Z @kj the worker posts an activity message to the page every 50 ms that names the devices that moved bytes; no round trip to the server
   - log: 2026-10-13T07:42:20Z @kj added
   - log: 2026-10-13T09:44:06Z @kj closed
+  - log: 2026-10-17T23:35:32Z @kj reopened; evidence retired: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log): 24 Jest tests ACC-PANEL-138 and 3 Galata tests pass; measured: a flash lit 80 to 81 ms, off 319 to 320 ms between bursts, one lit period of 1273 to 1281 ms for a 1.2 s stream
+  - log: 2026-10-17T23:35:36Z @kj amended text "the TX and RX lamps follow the traffic of this tab's devices: a lamp is lit for 80 ms after each 50 ms period with bytes in its direction; sparse traffic gives single flashes and steady traffic a steady light; another tab's device lights a lamp when its counter grew" -> "a lit lamp stays lit at least 200 ms from each report of traffic; bursts spaced more than 200 ms apart give separate flashes; bytes in every 50 ms period give a steady light"
+  - log: 2026-10-17T23:35:43Z @kj closed; reason: the evidence names the updated Jest and Galata tests and their run logs
 - [x] `ACC-PANEL-140` **Panel and banner say device shell** - MEDIUM; no text of the Devices panel, of the lab commands, of the Info dialog and of the banner holds the word shim; the section is titled Device shell and tools, the command is labelled Device Shell, and the name line of the banner ends with device shell
   - evidence: build 0.6.24: Jest 243 pass (logs/launch-make-test-2.log), Galata 70 pass (logs/launch-galata-1.log), pytest 439 pass: 5 Jest tests, 1 pytest test and 1 Galata test ACC-PANEL-140 pass; with the old label, the old name line, or the word shim allowed, each failed
   - related: ACC-PANEL-132 - the command of that criterion is now labelled Device Shell; ACC-SHIM-136 - the banner of that criterion now names a device shell
@@ -824,13 +945,17 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - test-tags: UNIT
   - log: 2026-10-13T12:48:12Z @kj added
   - log: 2026-10-13T13:22:17Z @kj closed
-- [x] `ACC-PANEL-163` **TX lamp blue, RX lamp yellow** - MEDIUM; a lit TX lamp is blue and a lit RX lamp is yellow; a lamp that is off keeps its outlined circle; both colours are JupyterLab CSS variables, so ACC-PANEL-73 holds
-  - evidence: jest and galata ACC-PANEL-163 pass: lit TX --jp-brand-color1, lit RX --md-yellow-600; red with RX blue; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
-  - test: jest: style/base.css gives the lit tx lamp --jp-brand-color1 and the lit rx lamp --md-yellow-600; galata: computed background of each lit lamp
+- [x] `ACC-PANEL-163` **TX lamp red, RX lamp green** - MEDIUM; a lit TX lamp is --jp-error-color1 (red) and a lit RX lamp is --jp-success-color1 (green), fill and border; an unlit lamp keeps its outlined circle
+  - evidence: make test 1.0.22 and Galata 88 passed: Jest 'ACC-PANEL-163 a lit TX lamp is --jp-error-color1 and a lit RX lamp --jp-success-color1, fill and border; a lamp that is off keeps its outlined circle; no rule lights both lamps' green (logs/verify-followup-jest-named.log); Galata 'ACC-PANEL-163 a lit TX lamp has the colour of --jp-error-color1 and a lit RX lamp the colour of --jp-success-color1, and a lamp that goes off has the colour of an unlit lamp again' green (logs/galata-followup.log)
+  - test: jest: style/base.css gives the lit tx lamp --jp-error-color1 and the lit rx lamp --jp-success-color1; galata: computed background of each lit lamp
   - test-tags: UNIT, FUNCTIONAL
   - mechanism: 2026-10-14T17:58:13Z @kj two rules on [data-lamp=tx][data-lit] and [data-lamp=rx][data-lit] replace the one rule that lights both lamps with --jp-brand-color1
   - log: 2026-10-14T17:58:13Z @kj added
   - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
+  - log: 2026-10-17T23:35:34Z @kj reopened; evidence retired: jest and galata ACC-PANEL-163 pass: lit TX --jp-brand-color1, lit RX --md-yellow-600; red with RX blue; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
+  - log: 2026-10-17T23:35:38Z @kj amended title "TX lamp blue, RX lamp yellow" -> "TX lamp red, RX lamp green"; text "a lit TX lamp is blue and a lit RX lamp is yellow; a lamp that is off keeps its outlined circle; both colours are JupyterLab CSS variables, so ACC-PANEL-73 holds" -> "a lit TX lamp is --jp-error-color1 (red) and a lit RX lamp is --jp-success-color1 (green), fill and border; an unlit lamp keeps its outlined circle"
+  - log: 2026-10-17T23:35:45Z @kj closed; reason: the evidence names the updated Jest and Galata tests and their run logs
+  - log: 2026-10-17T23:36:12Z @kj edited test "jest: style/base.css gives the lit tx lamp --jp-brand-color1 and the lit rx lamp --md-yellow-600; galata: computed background of each lit lamp" -> "jest: style/base.css gives the lit tx lamp --jp-error-color1 and the lit rx lamp --jp-success-color1; galata: computed background of each lit lamp"
 - [x] `ACC-PANEL-164` **Settings button opens the serial settings** - HIGH; a serial row has a button Settings; it opens a lab dialog with profile, baud rate, data bits, parity, stop bits and action on open, filled with the port's values; Save sends them, Cancel changes nothing; the folded Profile settings section of the row is removed
   - evidence: jest ACC-PANEL-164 (6) and galata pass: Settings dialog, Save sends changed fields, port reopened at 9600, Cancel keeps 115200; red without setProfile; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
   - related: ACC-PROF-23
@@ -847,6 +972,127 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-14T18:10:49Z @kj added; reason: lists every replaced text so the build has no guess
   - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
+- [x] `ACC-PANEL-201` **Serial and USB chips have their own tint** - MEDIUM; the kind chip in a device row keeps its current shape and text, with a translucent blue background for SERIAL and a translucent pink one for USB
+  - overridden-by: ACC-PANEL-202
+  - evidence: Jest panel 73 passed incl. the two tint rules; Galata 84 passed incl. the computed chip backgrounds on a serial and a USB row
+  - test: Jest asserts the two chip background rules; Galata reads the computed background of a serial row chip and a USB row chip
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T15:34:43Z @kj the chip background is a translucent tint token per kind over the row background; the text colour and border stay as they are
+  - log: 2026-10-17T15:34:43Z @kj added
+  - log: 2026-10-17T15:47:28Z @kj closed: verified
+- [x] `ACC-PANEL-202` **Kind chip has a pale tint, a hued border and readable text** - MEDIUM; the SERIAL/USB chip has a pale blue or pink background tint; its border and text take the same hue in a shade that reads at 4.5:1 or better in both themes
+  - evidence: Jest 266 passed incl. the per-kind light and dark rules; Galata 85 passed incl. the chip contrast test at tests/panel.spec.ts:346 in both themes
+  - overrides: ACC-PANEL-201
+  - test: Jest asserts the tint layer, its opacity and the per-kind border and text shades for both themes; Galata measures the contrast of the text on the composite tint in both themes
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T16:23:10Z @kj a ::before layer of the hue at low opacity paints the pale background; the chip's border and text take the hue, blue-800 and pink-800 on the light theme, blue-300 and pink-200 on the dark theme
+  - log: 2026-10-17T15:48:21Z @kj added
+  - log: 2026-10-17T16:02:00Z @kj closed: verified
+  - log: 2026-10-17T16:22:09Z @kj edited title "Kind chip has a pale tint with a saturated stroke and text" -> "Kind chip has a pale tint, a hued border and readable text"; text "the SERIAL/USB chip has a pale blue or pink background tint, and its border and text take the same hue at full saturation" -> "MEDIUM; the SERIAL/USB chip has a pale blue or pink background tint and a border of the same, more saturated hue; its text is the theme's UI font colour and reads at 4.5:1 or better in both themes"; test "Jest asserts the tint layer and the per-kind border-color and color rules; Galata reads the chip border, text and pseudo-element background on a serial and a USB row" -> "Jest asserts the tint layer, the base font colour and the per-kind border-color; Galata measures the contrast of the text on the composite tint in both themes"
+  - log: 2026-10-17T16:23:10Z @kj edited text "the SERIAL/USB chip has a pale blue or pink background tint and a border of the same, more saturated hue; its text is the theme's UI font colour and reads at 4.5:1 or better in both themes" -> "MEDIUM; the SERIAL/USB chip has a pale blue or pink background tint; its border and text take the same hue in a shade that reads at 4.5:1 or better in both themes"; test "Jest asserts the tint layer, the base font colour and the per-kind border-color; Galata measures the contrast of the text on the composite tint in both themes" -> "Jest asserts the tint layer, its opacity and the per-kind border and text shades for both themes; Galata measures the contrast of the text on the composite tint in both themes"
+  - log: 2026-10-17T16:23:10Z @kj mechanism updated "2026-10-17T15:48:21Z @kj a ::before layer of the hue at low opacity paints the pale background; the chip's color and border-color are the same hue at full strength" -> "a ::before layer of the hue at low opacity paints the pale background; the chip's border and text take the hue, blue-800 and pink-800 on the light theme, blue-300 and pink-200 on the dark theme"
+  - log: 2026-10-17T16:49:30Z @kj edited evidence "Jest panel 73 passed incl. the per-kind border-color and color rules; Galata 84 passed incl. the computed tint, border and text on a serial and a USB row" -> "Jest 266 passed incl. the per-kind light and dark rules; Galata 85 passed incl. the chip contrast test at tests/panel.spec.ts:346 in both themes"; reason: the gate reran at 1.0.9 and the evidence names its counts
+- [x] `ACC-PANEL-216` **Copy button on a run row** - MEDIUM; a run row in the Devices panel has a Copy button that copies the command line the row shows
+  - evidence: Jest 270 includes ACC-PANEL-216; Galata 87/87 includes panel.spec.ts:1442 ACC-PANEL-216
+  - test: jest panel.spec.ts: a click copies the command line; galata panel.spec.ts: the button copies the command of a run
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-17T20:16:51Z @kj added
+  - log: 2026-10-17T22:53:11Z @kj closed: Copy button proven at 1.0.21
+- [x] `ACC-PANEL-219` **round-trip footer on the panel background** - LOW; the devices panel footer that shows Round trip sets no background of its own and no separator line above it; the label and the round-trip value both use the same muted colour, and the text is small
+  - evidence: jest panel.spec.ts stylesheet tests and galata panel.spec.ts:1019 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts: the footer rule declares no background and no border, and the round-trip value carries the footer's muted colour
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T23:16:04Z @kj the .jp-DeviceBridgePanel-footer rule leaves background unset and the panel background shows through
+  - log: 2026-10-17T23:16:04Z @kj added
+  - log: 2026-10-17T23:16:12Z @kj amended text "the setting dialog footer that shows Round trip sets no background of its own, so the text sits on the panel's background; it keeps its top separator, muted colour and small size" -> "the devices panel footer that shows Round trip sets no background of its own, so the text sits on the panel's background; it keeps its top separator, muted colour and small size"
+  - log: 2026-10-18T00:27:19Z @kj edited text "the devices panel footer that shows Round trip sets no background of its own, so the text sits on the panel's background; it keeps its top separator, muted colour and small size" -> "the devices panel footer that shows Round trip sets no background of its own and no separator line above it, so the text sits on the panel's background; it keeps its muted colour and small size"; test "jupyterlab/device-bridge: jest panel.spec.ts, the footer rule declares no background" -> "jest panel.spec.ts: the footer rule declares no background and no border"
+  - log: 2026-10-18T00:27:25Z @kj edited text "the devices panel footer that shows Round trip sets no background of its own and no separator line above it, so the text sits on the panel's background; it keeps its muted colour and small size" -> "the devices panel footer that shows Round trip sets no background of its own and no separator line above it; the label and the round-trip value both use the same muted colour, and the text is small"; test "jest panel.spec.ts: the footer rule declares no background and no border" -> "jest panel.spec.ts: the footer rule declares no background and no border, and the round-trip value carries the footer's muted colour"
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-220` **compact settings dialog controls** - LOW; the serial settings dialog main controls are compact: inputs 24px high, 8px side padding, 4px radius, 11px font; field gap 8px; form gap 6px; labels 11px; the bottom action buttons keep their own size
+  - evidence: make test 1.0.22: Jest 271 passed, including the extended ACC-PANEL-73 stylesheet assertion (24px input height, 11px font, 6px form gap, 8px field gap)
+  - test: jest panel.spec.ts ACC-PANEL-73: the settings input is 24px high with an 11px font
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T23:16:04Z @kj the settings dialog sets its own compact scale in style/base.css, separate from the dialog footer
+  - log: 2026-10-17T23:16:04Z @kj added
+  - log: 2026-10-17T23:53:06Z @kj closed: compact settings controls proven at 1.0.22
+- [x] `ACC-PANEL-221` **baud rate select with a custom value** - MEDIUM; baud rate is a select of standard values from 300 to 921600 with a Custom entry that reveals a text input; choosing a standard writes that value; Custom accepts a typed value the server allows; a change marks the dialog changed as the other fields do
+  - overridden-by: ACC-PANEL-232
+  - evidence: jest panel.spec.ts:1648 and galata panel.spec.ts:874 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts: a standard value and a typed Custom value reach the request; galata panel.spec.ts: 250000 typed as Custom is saved
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T23:16:04Z @kj the baud control is a select of standard rates plus Custom; Custom reveals the text input for an arbitrary value
+  - log: 2026-10-17T23:16:04Z @kj added
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-222` **primary and secondary dialog buttons** - LOW; the settings dialog has one primary button, Save, carrying jp-mod-accept; Delete config is destructive with jp-mod-warn; Cancel and Save as are secondary with no accent; one accent button per view
+  - evidence: jest panel.spec.ts:1698 and galata panel.spec.ts:944 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts: Save carries jp-mod-accept and Delete config jp-mod-warn; galata panel.spec.ts: the rendered dialog has one accent button
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T23:16:04Z @kj Dialog.okButton for Save and Dialog.warnButton for Delete config; the other footer buttons stay secondary
+  - log: 2026-10-17T23:16:04Z @kj added
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-223` **Copy gives visible feedback** - MEDIUM; clicking Copy on a run row or a device shell row shows visible feedback that the command line was copied; the feedback appears once the copy call has returned and returns to the normal label after a moment
+  - evidence: jest panel.spec.ts:2502 and galata panel.spec.ts:1646 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts: a click changes the button to Copied and back; galata panel.spec.ts: the Copied feedback appears
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-18T00:42:22Z @kj the button swaps its label to Copied after Clipboard.copyToSystem returns (the installed apputils 4.7.4 call is synchronous) and restores it on a timer
+  - log: 2026-10-17T23:20:28Z @kj added
+  - log: 2026-10-18T00:42:22Z @kj amended text "clicking Copy on a run row or a device shell row shows visible feedback that the command line was copied; the feedback appears when the copy resolves and returns to the normal label after a moment" -> "MEDIUM; clicking Copy on a run row or a device shell row shows visible feedback that the command line was copied; the feedback appears once the copy call has returned and returns to the normal label after a moment"
+  - log: 2026-10-18T00:42:22Z @kj mechanism updated "2026-10-17T23:20:28Z @kj the button swaps its label to Copied after Clipboard.copyToSystem resolves and restores it on a timer" -> "the button swaps its label to Copied after Clipboard.copyToSystem returns (the installed apputils 4.7.4 call is synchronous) and restores it on a timer"
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-224` **a short run stays visible 3 seconds** - MEDIUM; a run that ends within 3 seconds of appearing stays in the Device shells section until 3 seconds have passed and then leaves; a run that lasts longer leaves when the server drops it; the row keeps the state it showed when it ended
+  - evidence: jest panel.spec.ts:2520 and galata panel.spec.ts:1666 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts with fake timers: a run removed 0.5 s after it appeared stays until 3 s; galata panel.spec.ts: a quick command row stays about 3 s
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T23:24:48Z @kj the panel keeps a run row until at least 3 seconds after its first appearance, then applies the server's removal
+  - log: 2026-10-17T23:24:48Z @kj added
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-225` **a stopped run disables Stop** - MEDIUM; when a run ends, its lingering row shows the run as stopped and its Stop button is disabled; Copy and Info stay usable until the row leaves the section
+  - evidence: jest panel.spec.ts:2548 and galata panel.spec.ts:1687 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts: a run removed from the server table keeps a disabled Stop on its lingering row; galata panel.spec.ts: a quick run shows a disabled Stop
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-17T23:24:54Z @kj the row renders Stop disabled once the server no longer lists the run, while the row lingers
+  - log: 2026-10-17T23:24:54Z @kj added
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-227` **help opens a documentation tab** - MEDIUM; the panel help button opens JupyterLab's read-only Markdown Preview through markdownviewer:open over the file Device Bridge Help at the root of the contents, written when missing or stale; the tab is titled Device Bridge Help, no dialog opens, and a second click activates it instead of a new tab
+  - evidence: jest index.spec.ts ACC-PANEL-227 tests and galata panel.spec.ts:310 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest index.spec.ts: the write when missing, no rewrite when unchanged, markdownviewer:open with the path, the title and one tab; galata panel.spec.ts: .jp-MarkdownViewer shows the four headings and a second click reuses the tab
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-18T01:24:04Z @kj the help button ensures the file Device Bridge Help at the contents root holds HELP_MARKDOWN through the contents API, then runs markdownviewer:open on its path; the tab title is the file name, and a second click finds the tab by its context path and activates it
+  - log: 2026-10-18T00:27:11Z @kj added
+  - log: 2026-10-18T01:10:13Z @kj edited text "the help button of the Devices panel opens a tab in the main area, not a dialog; the tab is titled Device Bridge Help and holds rendered Markdown; a second click activates the open tab instead of a second one" -> "MEDIUM; the panel help button opens JupyterLab's Markdown Preview through markdownviewer:open over the hidden help file .jupyterlab-device-bridge-help.md, written when missing or stale; the tab is titled Device Bridge Help, no dialog opens, and a second click activates it instead of a new tab"; test "jest panel.spec.ts: the help click opens one tab and a second click reuses it; galata panel.spec.ts: the tab renders its headings" -> "jest index.spec.ts: the help click writes the file when missing and runs markdownviewer:open with its path, one tab; galata panel.spec.ts: the click opens .jp-MarkdownViewer with the rendered headings and the tab title"
+  - log: 2026-10-18T01:10:13Z @kj mechanism updated "2026-10-18T00:27:11Z @kj a command builds a MainAreaWidget whose body renders the help Markdown through the rendermime registry; the panel help button runs it; the widget id lets a second run activate it" -> "the help button ensures the hidden help file holds the current HELP_MARKDOWN through the contents API, then runs markdownviewer:open on its path; the widget is found by its context path and retitled, so a second click activates it"
+  - log: 2026-10-18T01:24:04Z @kj edited text "the panel help button opens JupyterLab's Markdown Preview through markdownviewer:open over the hidden help file .jupyterlab-device-bridge-help.md, written when missing or stale; the tab is titled Device Bridge Help, no dialog opens, and a second click activates it instead of a new tab" -> "MEDIUM; the panel help button opens JupyterLab's read-only Markdown Preview through markdownviewer:open over the file Device Bridge Help at the root of the contents, written when missing or stale; the tab is titled Device Bridge Help, no dialog opens, and a second click activates it instead of a new tab"; test "jest index.spec.ts: the help click writes the file when missing and runs markdownviewer:open with its path, one tab; galata panel.spec.ts: the click opens .jp-MarkdownViewer with the rendered headings and the tab title" -> "jest index.spec.ts: the write when missing, no rewrite when unchanged, markdownviewer:open with the path, the title and one tab; galata panel.spec.ts: .jp-MarkdownViewer shows the four headings and a second click reuses the tab"
+  - log: 2026-10-18T01:24:04Z @kj mechanism updated "2026-10-18T01:10:13Z @kj the help button ensures the hidden help file holds the current HELP_MARKDOWN through the contents API, then runs markdownviewer:open on its path; the widget is found by its context path and retitled, so a second click activates it" -> "the help button ensures the file Device Bridge Help at the contents root holds HELP_MARKDOWN through the contents API, then runs markdownviewer:open on its path; the tab title is the file name, and a second click finds the tab by its context path and activates it"
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-228` **help document covers options, connections, tools and configs** - MEDIUM; the help document explains the panel options, how serial and USB devices are attached and granted, the tools (serial terminal, device shell, runs and the CLI), and the serial settings configs with their on-open actions
+  - evidence: jest panel.spec.ts ACC-PANEL-228 tests and galata panel.spec.ts:342 passed in the 1.0.30 gate; Jest 287 and Galata 95/95 green, logs/galata-1.0.30.log
+  - test: jest panel.spec.ts: the document holds the four sections in that order; galata panel.spec.ts: the four headings render in the help tab
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-18T00:27:11Z @kj added
+  - log: 2026-10-18T03:19:24Z @kj closed
+- [x] `ACC-PANEL-229` **byte counters switch units** - LOW; the RX and TX counters show a number and its unit: byte or bytes below 10 KB, KB with one decimal from 10 KB to under 1 MB, MB with one decimal from 1 MB; 1000 KB reads as 1 MB; KB and MB are uppercase after a space
+  - evidence: jest panel.spec.ts ACC-PANEL-229 tests and galata panel.spec.ts:574 passed in the 1.0.31 gate; Jest 292 passed, Galata 96/96 green, logs/galata-1.0.31.log
+  - test: jest panel.spec.ts: counters at 9999, 10000 and 1000000 bytes read 9999 bytes, 10.0 KB and 1.0 MB; galata panel.spec.ts: a stream past 10 KB shows KB
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-18T00:29:10Z @kj a formatter picks the unit by the byte count: below 10000 bytes, from 10000 to 999999 kilobytes, from 1000000 megabytes; the rx and tx hooks carry the number and a unit span carries the unit
+  - log: 2026-10-18T00:29:10Z @kj added
+  - log: 2026-10-18T00:29:31Z @kj edited text "the RX and TX byte counters show whole bytes below 10 KB, kilobytes with one decimal from 10 KB to under 1 MB, and megabytes with one decimal from 1 MB; 1000 KB reads as 1 MB" -> "the RX and TX counters show a number and its unit: byte or bytes below 10 KB, KB with one decimal from 10 KB to under 1 MB, MB with one decimal from 1 MB; 1000 KB reads as 1 MB; KB and MB are uppercase after a space"; test "jest panel.spec.ts: counters at 9999, 10000 and 1000000 bytes read bytes, KB and MB; galata panel.spec.ts: a stream past 10 KB shows KB" -> "jest panel.spec.ts: counters at 9999, 10000 and 1000000 bytes read 9999 bytes, 10.0 KB and 1.0 MB; galata panel.spec.ts: a stream past 10 KB shows KB"
+  - log: 2026-10-18T03:56:27Z @kj closed
+- [x] `ACC-PANEL-232` **Settings dialog as a shaded table with one editable baud control** - MEDIUM; the settings dialog is a table with alternating shaded rows, one setting per row; each value cell holds one control of one width and height; baud rate is one editable field listing the standard rates 300 to 921600, accepting a typed value and marking it Custom when not standard
+  - evidence: jest panel.spec.ts ACC-PANEL-232 tests and galata panel.spec.ts:702 passed in the 1.0.34 gate; Jest 295 and Galata 98/98 green, logs/galata-1.0.34.log
+  - overrides: ACC-PANEL-221
+  - test: jest panel.spec.ts: the settings body is a table with six rows and one control per row, the baud field lists the standard rates and shows Custom for 123456; galata panel.spec.ts: the dialog renders the table and typing 123456 shows Custom
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-18T13:04:11Z @kj the settings body builds a tr per setting with th and td; the baud input carries a datalist of standard rates and a Custom badge; an edit sets the config selection to Custom
+  - log: 2026-10-18T13:04:11Z @kj added
+  - log: 2026-10-18T13:46:08Z @kj closed
+- [x] `ACC-PANEL-233` **Slim dialog buttons** - LOW; the four buttons of the settings dialog are slim: 28 px high with 12 px side padding and 12.5 px text, 8 px apart in the footer
+  - evidence: jest panel.spec.ts ACC-PANEL-233 test and galata panel.spec.ts:720 passed in the 1.0.34 gate; Jest 295 and Galata 98/98 green, logs/galata-1.0.34.log
+  - test: jest panel.spec.ts: the stylesheet gives the dialog buttons 28 px height and 12 px padding; galata panel.spec.ts: each button bounding box is at most 30 px high
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-18T13:04:12Z @kj the dialog buttons carry a jp-DeviceBridgeSettings-button class; the stylesheet sets height 28px, padding 0 12px, font-size 12.5px and the footer gap 8px
+  - log: 2026-10-18T13:04:12Z @kj added
+  - log: 2026-10-18T13:46:08Z @kj closed
 
 ## Serial terminal `TERM`
 
@@ -993,12 +1239,14 @@ A terminal in the lab on one attached port
   - test-tags: UNIT
   - log: 2026-10-14T19:09:06Z @kj added
   - log: 2026-10-16T09:24:23Z @kj closed; reason: evidence names the test, the mutation and the gate run
-- [ ] `ACC-TERM-198` **Key help of the serial terminal** - MEDIUM; Ctrl+Y in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+Y closes it and the terminal goes on; the key line names ^y; F1 and Ctrl+/ stay unused: the browser takes F1, and the terminal of the lab sends no byte for Ctrl+/
+- [x] `ACC-TERM-198` **Key help of the serial terminal** - MEDIUM; Ctrl+Y in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+Y closes it and the terminal goes on; the key line names ^y; F1 and Ctrl+/ stay unused: the browser takes F1, and the terminal of the lab sends no byte for Ctrl+/
+  - evidence: pytest test_terminal_app.py::test_acc_term_198_ctrl_y_opens_the_key_help_with_every_key (Textual pilot: the key line names ^y keys, Ctrl+Y opens the list of every binding, F2 does nothing under it, Esc and Ctrl+Y close it) passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 2 code changes of this criterion caught (no key, keys act under the help), 22/22 overall; galata terminal-app.spec.ts:102 ACC-TERM-198 in a lab terminal Ctrl+Y opens the key help of the serial terminal app passed in logs/banner-galata-2.log (3 passed in 25.2 s); the earlier full run logs/banner-galata-1.log failed this test under the earlier key Ctrl+/, which the lab terminal does not send; no physical board used
   - test: pytest Textual pilot: ctrl+y opens the screen with every binding, Esc closes it; galata: Control+y in the lab terminal shows the screen
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:02:20Z @kj added
   - log: 2026-10-17T09:29:28Z @kj amended text "Ctrl+/ in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+/ closes it and the terminal goes on; the key line names ^/; F1 stays unused, because the browser takes it" -> "Ctrl+Y in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+Y closes it and the terminal goes on; the key line names ^y; F1 and Ctrl+/ stay unused: the browser takes F1, and the terminal of the lab sends no byte for Ctrl+/"; reason: Ctrl+/ was filed first; xterm.js of the lab sends no byte for it, so the key moves to Ctrl+Y, the one free control letter
   - log: 2026-10-17T09:29:28Z @kj edited test "pytest Textual pilot: ctrl+underscore opens the screen with every binding, Esc closes it; galata: Control+/ in the lab terminal shows the screen" -> "pytest Textual pilot: ctrl+y opens the screen with every binding, Esc closes it; galata: Control+y in the lab terminal shows the screen"
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
 
 ## Command line and agent documents `CLI`
 
@@ -1151,14 +1399,15 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-14T19:09:05Z @kj added
   - log: 2026-10-16T09:24:23Z @kj closed; reason: evidence names the test, the mutation and the gate run
-- [x] `ACC-CLI-187` **Installer copies match the originals** - MEDIUM; the four files of resources/envs equal their originals in ~/.local/lab-utils/envs, now with firmware-avr.py installing PlatformIO 6.2.0 and atmelavr 5.3.0; the README line of firmware-avr names PlatformIO with the Arduino AVR core; the folder's README.md of lab-utils is not copied
+- [x] `ACC-CLI-187` **Installer copies match the originals** - MEDIUM; the four files of resources/envs equal their sources in the template of the copier embedded project, now with firmware-avr.py installing PlatformIO 6.2.0 and atmelavr 5.3.0; the README line of firmware-avr names PlatformIO with the Arduino AVR core; the folder's README.md is not copied
   - evidence: pytest pass: four resources/envs copies equal the originals, README names PlatformIO for firmware-avr; red with a changed version; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
   - related: ACC-CLI-126 - the wheel ships these copies beside the skill
   - related: ACC-SHIM-178 - the selector must carry PLATFORMIO_CORE_DIR, a conda env var of firmware-avr
-  - test: pytest test_agent_skill.py: each copy byte-equal to its original when ~/.local/lab-utils/envs exists, skipped otherwise; README names PlatformIO for firmware-avr
+  - test: pytest test_agent_skill.py: each copy byte-equal to its source when the copier embedded project template exists, skipped otherwise; README names PlatformIO for firmware-avr
   - test-tags: UNIT
   - log: 2026-10-14T19:11:07Z @kj added
   - log: 2026-10-16T09:24:23Z @kj closed; reason: evidence names the test, the mutation and the gate run
+  - log: 2026-10-18T00:48:42Z @kj edited text "the four files of resources/envs equal their originals in ~/.local/lab-utils/envs, now with firmware-avr.py installing PlatformIO 6.2.0 and atmelavr 5.3.0; the README line of firmware-avr names PlatformIO with the Arduino AVR core; the folder's README.md of lab-utils is not copied" -> "MEDIUM; the four files of resources/envs equal their sources in the template of the copier embedded project, now with firmware-avr.py installing PlatformIO 6.2.0 and atmelavr 5.3.0; the README line of firmware-avr names PlatformIO with the Arduino AVR core; the folder's README.md is not copied"; test "pytest test_agent_skill.py: each copy byte-equal to its original when ~/.local/lab-utils/envs exists, skipped otherwise; README names PlatformIO for firmware-avr" -> "pytest test_agent_skill.py: each copy byte-equal to its source when the copier embedded project template exists, skipped otherwise; README names PlatformIO for firmware-avr"
 - [x] `ACC-CLI-188` **Wheel requires the terminal extension 1.0.9** - HIGH; pyproject.toml lists jupyterlab-basic-terminal-extension>=1.0.9,<2, the first release whose launch option shutdownOnClose ends the program when its tab closes; with an older release a closed serial terminal tab keeps holding the port
   - evidence: pytest test_acc_cli_188 passes, red with >=1.0.8; gates on 0.6.38 with terminal extension 1.0.9 from PyPI: Jest 264, pytest 525 passed 1 skipped, auth gate, lint 0 errors, Galata 82 incl. DEF-SERIAL-20 close-tab test (logs/final0630-r6-*.log)
   - overrides: ACC-CLI-162
@@ -1167,25 +1416,97 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-16T11:43:51Z @kj added
   - log: 2026-10-16T11:56:28Z @kj closed
-- [ ] `ACC-CLI-194` **Banner names the agent skill** - HIGH; the Agent skill section names the skill jupyterlab-device-bridge-extension and the path of its SKILL.md under the Python prefix, and says how an agent finds it: linked in ~/.agents/skills or ~/.claude/skills, or listed by a skill there that names the path; else that no link exists and jupyterlab-device help shows the link commands
+- [x] `ACC-CLI-194` **Banner names the agent skill** - HIGH; the Agent skill section names the skill jupyterlab-device-bridge-extension and the path of its SKILL.md under the Python prefix, and says how an agent finds it: linked in ~/.agents/skills or ~/.claude/skills, or listed by a skill there that names the path; else that no link exists and jupyterlab-device help shows the link commands
+  - evidence: pytest test_cli.py::test_acc_cli_194_skill_state_says_how_an_agent_finds_the_skill (no SKILL.md under the prefix, no link, a link in ~/.agents/skills, a link in ~/.claude/skills, a skill there that names the path) and test_cli.py::test_acc_cli_194_the_banner_says_where_an_agent_finds_the_skill passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 2 code changes of this criterion caught (listed not looked for, claude folder ignored), 22/22 overall; galata panel.spec.ts also checks the Agent skill section in the lab terminal in ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, ACC-PANEL-147 the command Device Shell of the command palette, ACC-PANEL-140 the Devices menu has the entry Device Shell, DEF-PANEL-15 and ACC-PANEL-133 Stop ends the device shell, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - test: pytest test_cli.py with a private HOME: no link, a link in ~/.agents/skills, a link in ~/.claude/skills, a skill there that names the path, no SKILL.md under the prefix
   - test-tags: UNIT
   - log: 2026-10-17T09:02:20Z @kj added; reason: the four states of the section must each be stated, or a test cannot tell them apart
-- [ ] `ACC-CLI-195` **Banner lists commands with what they do** - MEDIUM; the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-CLI-195` **Banner lists commands with what they do** - MEDIUM; the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line
+  - evidence: pytest test_cli.py::test_acc_cli_195_the_commands_section_lists_five_commands_with_what_they_do (80 columns) and test_cli.py::test_acc_cli_195_a_description_that_does_not_fit_goes_under_its_command (60 columns) passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 1 code change of this criterion caught (help left out), 22/22 overall; galata panel.spec.ts checks the line jupyterlab-device help of the Commands section in the lab terminal in ACC-PANEL-147 Start opens a terminal tab whose first text is the banner of a device shell, ACC-PANEL-147 the command Device Shell of the command palette, ACC-PANEL-140 the Devices menu has the entry Device Shell, DEF-PANEL-15 and ACC-PANEL-133 Stop ends the device shell, all passed in logs/banner-galata-1.log (82 passed, 1 failed: ACC-TERM-198 under the earlier key Ctrl+/, passed under Ctrl+Y in logs/banner-galata-2.log); no physical board used
   - related: ACC-CLI-141 - the two command lines of that banner are replaced
   - test: pytest test_cli.py: the five command lines with their descriptions in one column on 80 columns, the descriptions on their own lines on 60 columns; galata: the help line in the lab terminal
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-10-17T09:02:20Z @kj added
   - log: 2026-10-17T09:29:28Z @kj amended text "the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line" -> "the Commands section lists jupyterlab-device list, profile, monitor read, terminal and help, each with what it does; a description that does not fit beside its command goes to the next line"
   - log: 2026-10-17T09:29:29Z @kj edited test "pytest test_cli.py: the five command lines on 170 columns, the descriptions on their own lines on 80 columns; galata: the help line in the lab terminal" -> "pytest test_cli.py: the five command lines with their descriptions in one column on 80 columns, the descriptions on their own lines on 60 columns; galata: the help line in the lab terminal"
-- [ ] `ACC-CLI-196` **Help has a quick start** - MEDIUM; jupyterlab-device --help has a quick start section with the steps from a plugged-in board to its output: attach it in the Devices panel, list, profile, upload under run --, monitor read; each step that is a command line parses with the parser of the CLI
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-CLI-196` **Help has a quick start** - MEDIUM; jupyterlab-device --help has a quick start section with the steps from a plugged-in board to its output: attach it in the Devices panel, list, profile, upload under run --, monitor read; each step that is a command line parses with the parser of the CLI
+  - evidence: pytest test_cli.py::test_acc_cli_196_the_help_has_a_quick_start_whose_command_lines_parse passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 1 code change of this criterion caught (upload without run), 22/22 overall; no physical board used
   - test: pytest test_cli.py: the section and its five steps in --help; each command line of a step parses
   - test-tags: UNIT
   - log: 2026-10-17T09:02:20Z @kj added
-- [ ] `ACC-CLI-197` **Help names the agent skill** - MEDIUM; jupyterlab-device --help has an agent skill section with the skill name, the path of its SKILL.md under the Python prefix and the two link commands of the README section Agent skill
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-CLI-197` **Help names the agent skill** - MEDIUM; jupyterlab-device --help has an agent skill section with the skill name, the path of its SKILL.md under the Python prefix and the two link commands of the README section Agent skill
+  - evidence: pytest test_cli.py::test_acc_cli_197_the_help_names_the_agent_skill_and_the_commands_that_link_it passed in logs/banner-pytest-8.log (222 passed, 0 failed, 0 errors in 91.55 s over test_cli.py, test_environments.py, test_terminal_app.py) and in the full suite of logs/publish-1.0.5.log (538 passed, 1 skipped); logs/banner-mutations-2.log: 1 code change of this criterion caught (one link command), 22/22 overall; no physical board used
   - test: pytest test_cli.py: the section in --help; the path is under sys.prefix; the two commands are the README lines with the prefix written out
   - test-tags: UNIT
   - log: 2026-10-17T09:02:20Z @kj added
+  - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-CLI-200` **The client picks the lab's own server when several are listed** - HIGH; jupyterlab-device prefers the record whose pid is an ancestor of its process; without one, the record whose base_url is JUPYTERHUB_SERVICE_PREFIX, or the only record when unset; several with no match are refused, not guessed; with no record the address is 127.0.0.1 on JUPYTER_PORT
+  - related: ACC-CLI-231
+  - evidence: test_client.py 17 passed; make test Jest 266, pytest 544 passed 1 skipped, auth gate; live client resolved 127.0.0.1:8888 and listed tty-303a-1001
+  - test: test_client.py lists a dead server first and the lab's server second: the prefix selects the lab, a prefix matching none falls back to JUPYTER_PORT with the hub token, one record with the variable unset is accepted, several with no match raise.
+  - test-tags: UNIT
+  - mechanism: 2026-10-17T15:14:25Z @kj client._server_list() matches JUPYTERHUB_SERVICE_PREFIX, accepts one record, and raises on several with no match, as the notifications extension does; _base_url uses the record's scheme and falls back to 127.0.0.1 on JUPYTER_PORT or 8888.
+  - log: 2026-10-17T15:08:46Z @kj added
+  - log: 2026-10-17T15:14:25Z @kj edited text "When jupyter server list holds several records, jupyterlab-device uses the server of the current lab: the record whose base_url matches JUPYTERHUB_SERVICE_PREFIX, else the port from JUPYTERHUB_SERVICE_URL or JUPYTER_PORT, else the first record. Devices, runs and the shell command come from that server." -> "When jupyter server list holds several records, jupyterlab-device uses the server of the current lab: the record whose base_url is JUPYTERHUB_SERVICE_PREFIX, or the only record. Several with no match are refused, not guessed. With no record the address is 127.0.0.1 on JUPYTER_PORT, default 8888, under the prefix."; test "test_client.py lists a dead server first and the lab's server second; the client picks the lab's server by prefix, by service URL port and by JUPYTER_PORT, and the first record only when no environment names a server." -> "test_client.py lists a dead server first and the lab's server second; the prefix selects the lab, one record is accepted, several with no match raise, and the fallback address uses JUPYTER_PORT."; reason: align with the notifications extension selection rule
+  - log: 2026-10-17T15:14:25Z @kj mechanism updated "2026-10-17T15:08:46Z @kj client._server_list() selects from every listed record by JUPYTERHUB_SERVICE_PREFIX or the port of JUPYTERHUB_SERVICE_URL and JUPYTER_PORT before the first-record fallback." -> "client._server_list() matches JUPYTERHUB_SERVICE_PREFIX, accepts one record, and raises on several with no match, as the notifications extension does; _base_url uses the record's scheme and falls back to 127.0.0.1 on JUPYTER_PORT or 8888."
+  - log: 2026-10-17T15:47:27Z @kj closed: verified
+  - log: 2026-10-17T16:21:09Z @kj edited text "When jupyter server list holds several records, jupyterlab-device uses the server of the current lab: the record whose base_url is JUPYTERHUB_SERVICE_PREFIX, or the only record. Several with no match are refused, not guessed. With no record the address is 127.0.0.1 on JUPYTER_PORT, default 8888, under the prefix." -> "HIGH; jupyterlab-device uses the record whose base_url is JUPYTERHUB_SERVICE_PREFIX; with the variable unset, the only record. A record the prefix disowns is not used: with no matching record the address is 127.0.0.1 on JUPYTER_PORT, default 8888, under the prefix. Several with no match are refused, not guessed."; test "test_client.py lists a dead server first and the lab's server second; the prefix selects the lab, one record is accepted, several with no match raise, and the fallback address uses JUPYTER_PORT." -> "test_client.py lists a dead server first and the lab's server second: the prefix selects the lab, a prefix matching none falls back to JUPYTER_PORT with the hub token, one record with the variable unset is accepted, several with no match raise."
+  - log: 2026-10-17T16:21:27Z @kj edited evidence "test_client.py 16 passed: the prefix selects the lab among two records, one record is accepted, several are refused; live client resolved 127.0.0.1:8888 and listed tty-303a-1001" -> "test_client.py 17 passed: the prefix selects the lab among two records, a prefix matching none falls back to JUPYTER_PORT with the hub token, one record with the variable unset is accepted, several are refused; live client resolved 127.0.0.1:8888 and listed tty-303a-1001"; reason: the evidence line states the 17 tests and the fallback the narrowed rule adds
+  - log: 2026-10-17T16:21:27Z @kj prefix guard added: a lone record the prefix disowns no longer wins; the fallback address and hub token are used instead
+  - log: 2026-10-17T16:41:34Z @kj edited evidence "test_client.py 17 passed: the prefix selects the lab among two records, a prefix matching none falls back to JUPYTER_PORT with the hub token, one record with the variable unset is accepted, several are refused; live client resolved 127.0.0.1:8888 and listed tty-303a-1001" -> "test_client.py 17 passed; make test Jest 266, pytest 544 passed 1 skipped, auth gate; live client resolved 127.0.0.1:8888 and listed tty-303a-1001"; reason: the gate reran at 1.0.9 and the evidence names its counts
+  - log: 2026-10-18T02:40:35Z @kj edited text "jupyterlab-device uses the record whose base_url is JUPYTERHUB_SERVICE_PREFIX; with the variable unset, the only record. A record the prefix disowns is not used: with no matching record the address is 127.0.0.1 on JUPYTER_PORT, default 8888, under the prefix. Several with no match are refused, not guessed." -> "HIGH; jupyterlab-device prefers the record whose pid is an ancestor of its process; without one, the record whose base_url is JUPYTERHUB_SERVICE_PREFIX, or the only record when unset; several with no match are refused, not guessed; with no record the address is 127.0.0.1 on JUPYTER_PORT"
+- [x] `ACC-CLI-210` **run names its device** - MEDIUM; jupyterlab-device run without --device exits 2 and names the flag; a run whose device is detached is refused; the Devices panel lists every CLI-started run on its device
+  - evidence: make test 1.0.21: test_acc_cli_210_run_without_a_device_exits_2 and test_acc_shim_35_run_does_not_start_the_tool_without_its_device pass; Galata 87/87 includes ACC-PANEL-131, a CLI run listed on its device
+  - test: jupyterlab_device_bridge_extension/tests/test_cli.py::test_acc_cli_210_run_without_a_device_exits_2
+  - test-tags: UNIT
+  - log: 2026-10-17T19:56:00Z @kj added
+  - log: 2026-10-17T22:53:11Z @kj closed: run --device proven at 1.0.21
+- [x] `ACC-CLI-211` **probe command group** - HIGH; jupyterlab-device probe has baud, avr, stm32 and esp; each prints a conclusion and a next step, supports --json, exits 0 identified, 1 not identified, 2 wrong arguments; the tool probes start their uploader through run --device
+  - evidence: make test 1.0.21: four test_acc_cli_211_* tests pass; Jest 270 and Galata 87/87 green
+  - test: pytest test_cli.py: probe --help lists baud, avr, stm32, esp; each probe parses on the fake tab
+  - test-tags: UNIT
+  - log: 2026-10-17T20:16:39Z @kj added
+  - log: 2026-10-17T22:53:11Z @kj closed: probe group proven at 1.0.21
+- [x] `ACC-CLI-212` **probe names the next step** - HIGH; every probe failure prints exactly one next: line naming a command the parser accepts; text and --json agree; a detached device names reattach and the config apply; several attached devices refuse and list their names
+  - evidence: make test 1.0.21: five test_acc_cli_212_* tests pass, each failure path parsed by the real parser
+  - test: pytest test_cli.py: every failure path asserted to hold one next: line that parses
+  - test-tags: UNIT
+  - log: 2026-10-17T20:16:39Z @kj added
+  - log: 2026-10-17T22:53:11Z @kj closed: next-line contract proven at 1.0.21
+- [x] `ACC-CLI-213` **probe baud restores the port** - MEDIUM; probe baud sweeps 9600 to 230400, reports the readable rate, and restores the port's settings record and open state afterwards
+  - evidence: make test 1.0.21: test_acc_cli_213_probe_baud_reports_the_readable_rate_and_puts_the_port_back and test_acc_cli_213_probe_baud_puts_the_port_back_when_no_rate_is_readable pass
+  - test: pytest test_cli.py: the record equals its pre-probe values after probe baud
+  - test-tags: UNIT
+  - log: 2026-10-17T20:16:39Z @kj added
+  - log: 2026-10-17T22:53:11Z @kj closed: probe baud restore proven at 1.0.21
+- [x] `ACC-CLI-214` **skill FAQ maps symptoms to probes** - MEDIUM; references/faq.md gives symptom, probe command, cause and next step for a refused run, no serial data, a wrong bootloader baud, a pty that refuses parity, binary monitor output, a removed port and a held port; SKILL.md tells the agent to probe before retrying
+  - evidence: make test 1.0.21: four ACC-CLI-214 test_agent_skill.py tests pass; installed references byte-identical to the repository copies
+  - test: pytest test_agent_skill.py: the installed references match the repository and faq.md holds one row per symptom
+  - test-tags: UNIT
+  - log: 2026-10-17T20:16:45Z @kj added
+  - log: 2026-10-17T22:53:11Z @kj closed: skill FAQ proven at 1.0.21
+- [-] `ACC-CLI-215` **Nano bootloader how-to** - MEDIUM; references/boards.md says how to tell the old 57600 Nano bootloader from the new 115200 one, the upload form for each, and how to burn optiboot with an ISP programmer
+  - test: pytest test_agent_skill.py: boards.md holds the bootloader section; the burn itself is manual
+  - test-tags: UNIT, MANUAL
+  - log: 2026-10-17T20:16:51Z @kj added
+  - log: 2026-10-18T00:20:46Z @kj rejected: parked: the optiboot burn needs a Nano and an ISP programmer, deferred to a future board session; reason: the how-to half is written in references/boards.md and covered by test_agent_skill.py; the manual burn on hardware was not run
+- [x] `ACC-CLI-230` **A failed server list is not an empty list** - MEDIUM; a failed `jupyter server list --json` (timeout, missing command, nonzero exit or an unreadable line) is retried 3 times with 1 s between, then refused with the reason and exit 1; a failed list is never read as no server, so the address never falls back to JUPYTER_PORT
+  - evidence: pytest test_client.py -k acc_cli_200: 6 passed at 1.0.29; full pytest 594 passed 1 skipped; the installed client on a failing jupyter exits 1 with the reason, not a JUPYTER_PORT address
+  - test: pytest test_client.py: a list that fails once then succeeds is retried; a list that always fails raises DeviceBridgeError with the reason and no JUPYTER_PORT address
+  - test-tags: UNIT
+  - mechanism: 2026-10-18T02:36:32Z @kj client._listed_servers retries a failed server list 3 times with a 1 s pause, then raises DeviceBridgeError with the last stderr; a successful empty list still falls back to JUPYTER_PORT
+  - log: 2026-10-18T02:36:32Z @kj added
+  - log: 2026-10-18T02:36:38Z @kj closed
+- [x] `ACC-CLI-231` **The client selects the server that hosts the current process** - HIGH; when several servers are listed, the client uses the record whose pid appears in the parent chain of its own process, so the current lab wins over stale records and listing order; without such a record the rules of ACC-CLI-200 apply; no record is ever chosen by guess
+  - evidence: pytest test_client.py 22 passed and test_cli.py 200 passed at installed 1.0.30; removing the ancestor branch failed the named test; installed client.py byte-identical to the tree
+  - test: pytest test_client.py: two records, the ancestor pid selects the second though the first is listed first; without an ancestor match the prefix and one-record rules decide
+  - test-tags: UNIT
+  - mechanism: 2026-10-18T02:40:35Z @kj _ancestor_pids walks /proc/<pid>/stat from os.getpid() to 1; _server_list looks for the record whose pid is in that set before the prefix and one-record rules
+  - log: 2026-10-18T02:40:35Z @kj added
+  - log: 2026-10-18T02:52:48Z @kj closed
 
 ## Grants, authentication and ownership `SEC`
 
@@ -1238,54 +1559,68 @@ A device opens only after the user's grant, endpoints sit behind Jupyter authent
 
 Behaviour that needs a real board, tested by the user, tag MANUAL
 
-- [ ] `ACC-BOARD-98` **Arduino Uno upload** - HIGH; avrdude uploads a sketch to an Arduino Uno through the virtual device with the arduino-upload profile
+- [-] `ACC-BOARD-98` **Arduino Uno upload** - HIGH; avrdude uploads a sketch to an Arduino Uno through the virtual device with the arduino-upload profile
   - test: connect an Uno, set arduino-upload, run avrdude -c arduino on the path, assert the upload verifies
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:47Z @kj added
-- [ ] `ACC-BOARD-99` **Arduino Nano and Mega upload** - MEDIUM; avrdude uploads to a Nano and to a Mega with the arduino-upload profile
+  - log: 2026-10-17T20:20:53Z @kj rejected: no Uno board available
+- [-] `ACC-BOARD-99` **Arduino Nano and Mega upload** - MEDIUM; avrdude uploads to a Nano and to a Mega with the arduino-upload profile
   - test: connect each board, run avrdude with its part and baud rate, assert the upload verifies
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:47Z @kj added
-- [ ] `ACC-BOARD-100` **ATtiny through Arduino as ISP** - MEDIUM; avrdude programs an ATtiny through an Arduino running ArduinoISP with the arduino-isp profile, and the Arduino is not reset on open
+  - log: 2026-10-17T20:20:53Z @kj Nano half proven on tty-1a86-7523 and tty-1a86-8040: ATmega328P signature 0x1e 0x95 0x0f at 57600 (old bootloader); 2138 bytes written and verified under run --device at 57600; monitor read NANO-READY 0 to 9
+  - log: 2026-10-17T20:20:53Z @kj rejected: no Mega board; the Nano half is proven in the log above
+- [-] `ACC-BOARD-100` **ATtiny through Arduino as ISP** - MEDIUM; avrdude programs an ATtiny through an Arduino running ArduinoISP with the arduino-isp profile, and the Arduino is not reset on open
   - test: wire the ISP, run avrdude -c stk500v1, assert the upload verifies
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:47Z @kj added
-- [ ] `ACC-BOARD-101` **STM32 serial bootloader** - MEDIUM; stm32flash writes an STM32 through the virtual device, with the stm32-bootloader profile and with the shim
+  - log: 2026-10-18T14:14:33Z @kj rejected: rejected: ATtiny through Arduino as ISP will not be done; reason: the Star Colonel withdrew the ATtiny board case
+- [-] `ACC-BOARD-101` **STM32 serial bootloader** - MEDIUM; stm32flash writes an STM32 through the virtual device, with the stm32-bootloader profile and with the shim
   - test: board in bootloader mode, run stm32flash on the path, then again under run, assert both write and verify
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
-- [ ] `ACC-BOARD-102` **ESP upload** - HIGH; esptool writes an ESP32 and an ESP8266, with the esp-upload profile and --before no-reset, and under the shim with its own reset
+  - log: 2026-10-17T23:53:02Z @kj rejected: scrapped: the VCP cannot reach the STM32L1 bootloader; reason: the Nucleo-L152RE VCP is wired to USART2 PA2/PA3; the STM32L1 bootloader uses USART2 on the remapped PD5/PD6, absent on the 64-pin package, or USART1 PA9/PA10, not exposed to the VCP, and no USB-UART adapter is available, so stm32flash cannot reach this board
+- [x] `ACC-BOARD-102` **ESP upload** - HIGH; esptool writes an ESP32 and an ESP8266, with the esp-upload profile and --before no-reset, and under the shim with its own reset
+  - evidence: esptool 4.11 write_flash on ESP8266EX chip id 0x002a6be1: Hash of data verified in both forms; ESP32-C3 half already logged
   - test: connect each board, run both forms, assert the flash verifies
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
   - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: ESP32 half done: esptool 5.5.0 write-flash 0x0 under jupyterlab-device run, shim reset, 4194304 bytes, Hash of data verified, program runs; open: ESP8266 and the esp-upload profile form with --before no-reset
+  - log: 2026-10-17T18:25:04Z @kj ESP32-C3 on tty-303a-1001: ESP upload set, esptool --before no-reset wrote 16 KiB, hash verified; under run -- with its own reset wrote and verified; ESP8266 part still open
+  - log: 2026-10-17T22:01:52Z @kj closed: ESP8266 D1 Mini Pro tty-10c4-ea60: esptool 4.11 wrote 4096 bytes at 0x700000 under esp-upload with --before no_reset, and at 0x701000 under the shim with its own reset; both printed Hash of data verified. esptool 5.6 fails this chip's erase (C400 in the stub, 0x0106 from the ROM) at both offsets; 4.11 at the same offset passes, so the tool version is the variable.; reason: the esptool 5.6 failure is a tool-version finding for the FAQ, not a bridge fault
 - [x] `ACC-BOARD-103` **Board output in the monitor** - HIGH; the serial output of a running board is read with monitor read and in the serial terminal
   - evidence: session 2cdf8020 2026-10-14, ESP32-D0WD-V3 on CH340 1a86:7523, device 0.6.29: monitor read showed the board's boot log and 'esp-helloworld ready - send hi', hi written got hello world!; the Star Colonel used the serial terminal on it
   - test: board prints a counter, assert the lines in both
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
   - log: 2026-10-14T18:26:03Z @kj closed
-- [ ] `ACC-BOARD-104` **CMSIS-DAP v2 probe with pyOCD** - MEDIUM; pyOCD lists and uses a CMSIS-DAP v2 probe through the pyusb backend
+- [-] `ACC-BOARD-104` **CMSIS-DAP v2 probe with pyOCD** - MEDIUM; pyOCD lists and uses a CMSIS-DAP v2 probe through the pyusb backend
   - test: attach the probe over USB, run pyOCD list through the backend, assert the probe is listed
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
-- [ ] `ACC-BOARD-105` **ST-Link with pyOCD** - MEDIUM; pyOCD lists and uses an ST-Link through the pyusb backend on Windows with ST's driver
+  - log: 2026-10-17T20:20:53Z @kj rejected: no CMSIS-DAP v2 probe available
+- [-] `ACC-BOARD-105` **ST-Link with pyOCD** - MEDIUM; pyOCD lists and uses an ST-Link through the pyusb backend on Windows with ST's driver
   - test: attach the ST-Link over USB, run pyOCD list through the backend, assert the probe is listed
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
-- [ ] `ACC-BOARD-106` **Real browser dialogs** - MEDIUM; Chrome and Edge open the port dialog and the device dialog from the panel buttons, the commands, the menu and the grant button
+  - log: 2026-10-17T20:20:54Z @kj rejected: no pyOCD path; the ST-Link needs a Windows driver swap for WebUSB, not done
+- [-] `ACC-BOARD-106` **Real browser dialogs** - MEDIUM; Chrome and Edge open the port dialog and the device dialog from the panel buttons, the commands, the menu and the grant button
   - test: click each in desktop Chrome and Edge, assert the dialog opens
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
   - log: 2026-10-14T18:26:03Z @kj session 2cdf8020 2026-10-14: a CH340 port was granted and attached from the Star Colonel's browser; open: each entry point in desktop Chrome and in Edge
   - log: 2026-10-16T10:10:36Z @kj add to the manual check: press F3, F6, F7 and F10 once in the serial terminal in real Chrome and Edge; no find bar, focus change, caret browsing dialog or menu may appear (Galata sends keys below the browser shortcuts)
-- [ ] `ACC-BOARD-107` **Board that changes identity** - LOW; a board that enters bootloader mode as another device is attached after its own grant
+  - log: 2026-10-17T20:21:53Z @kj rejected: not the extension's responsibility: the browser's own device picker
+- [-] `ACC-BOARD-107` **Board that changes identity** - LOW; a board that enters bootloader mode as another device is attached after its own grant
   - test: touch a Leonardo at 1200 baud, grant the bootloader port, assert the upload runs
   - test-tags: MANUAL
   - log: 2026-10-12T00:27:48Z @kj added
-- [ ] `ACC-BOARD-186` **PlatformIO upload to an ESP32** - HIGH; pio run -t upload under run uploads a PlatformIO project to an ESP32 through the bridge and the board runs it
+  - log: 2026-10-17T20:20:54Z @kj rejected: no board that re-enumerates after a 1200-baud touch
+- [x] `ACC-BOARD-186` **PlatformIO upload to an ESP32** - HIGH; pio run -t upload under run uploads a PlatformIO project to an ESP32 through the bridge and the board runs it
+  - evidence: make-free MANUAL run 2026-10-18: pio upload verified and monitor read DEVICE-BRIDGE BOARD TEST boot=1..39
   - related: ACC-BOARD-102
   - test: connect an ESP32, run the pio upload line under run with --upload-port, assert the flash verifies and the program prints
   - test-tags: MANUAL
   - log: 2026-10-14T19:09:06Z @kj added
+  - log: 2026-10-17T23:27:58Z @kj closed: pio run -t upload under run --device wrote three images, each Hash of data verified; the upload left the C3 in ROM download, and after a replug the monitor shows the app boot lines; the USB-JTAG run-mode reset is recorded for the skill; reason: the post-upload reset behaviour of the native USB-JTAG is part of the observed evidence
 

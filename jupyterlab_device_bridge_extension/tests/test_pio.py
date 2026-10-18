@@ -47,7 +47,7 @@ def modem_lines(tab):
 
 async def test_acc_shim_183_the_dtr_and_rts_calls_of_a_program_that_pio_starts_reach_the_port(
         cli_run, fake_tab, tmp_path):
-    """ACC-SHIM-183 under `run -- pio run -t upload --upload-port <path>` the DTR and then the RTS call of the child process that pio starts reach the port in that order; without `run` the pty refuses them and the port gets nothing."""
+    """ACC-SHIM-183 under `run --device <name> -- pio run -t upload --upload-port <path>` the DTR and then the RTS call of the child process that pio starts reach the port in that order; without `run` the pty refuses them and the port gets nothing."""
     tab, path = await attach_serial(fake_tab)
     pio = tmp_path / "pio"
     pio.write_text(FAKE_PIO)
@@ -58,7 +58,7 @@ async def test_acc_shim_183_the_dtr_and_rts_calls_of_a_program_that_pio_starts_r
     assert bare.status != 0 and "Inappropriate ioctl for device" in bare.err, "a pty refuses the calls"
     assert tab.got("serial-signals") == []
 
-    outcome = await cli_run("run", "--", *upload)
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", *upload)
 
     assert (outcome.status, outcome.err) == (0, "")
     await tab.until(lambda: len(modem_lines(tab)) == 2)

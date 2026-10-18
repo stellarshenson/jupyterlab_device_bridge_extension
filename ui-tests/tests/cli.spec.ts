@@ -62,26 +62,43 @@ test.beforeAll(async () => {
 });
 
 test.describe('jupyterlab-device with a serial port', () => {
-  test('ACC-PROF-24 the profile command sets the profile of a device and single fields', async ({
+  test('ACC-PROF-208 settings apply applies a config and settings set changes single fields', async ({
     page
   }) => {
     const port = simSerial();
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
 
-    const result = await runCli([
-      'profile',
+    const applied = await runCli([
+      'settings',
+      'apply',
       port.name,
-      'stm32-bootloader',
+      'stm32-bootloader'
+    ]);
+
+    expect(applied.code, `stderr: ${applied.stderr}`).toBe(0);
+    expect(applied.stdout).toBe(
+      `${port.name}: config STM32 bootloader, settings 115200 8E1, on open: none\n`
+    );
+    expect(await serialRecord(port.name)).toMatchObject({
+      config: 'stm32-bootloader',
+      configName: 'STM32 bootloader',
+      settings: { baudRate: 115200, dataBits: 8, parity: 'even', stopBits: 1 }
+    });
+
+    const changed = await runCli([
+      'settings',
+      'set',
+      port.name,
       '--parity',
       'odd',
       '--baud',
       '57600'
     ]);
 
-    expect(result.code, `stderr: ${result.stderr}`).toBe(0);
-    expect(result.stdout).toBe(
-      `${port.name}: profile stm32-bootloader, overrides baudRate=57600, parity=odd, settings 57600 8O1, on open none\n`
+    expect(changed.code, `stderr: ${changed.stderr}`).toBe(0);
+    expect(changed.stdout).toBe(
+      `${port.name}: config custom, settings 57600 8O1, on open: none\n`
     );
     const settings = {
       baudRate: 57600,
@@ -90,11 +107,12 @@ test.describe('jupyterlab-device with a serial port', () => {
       stopBits: 1
     };
     expect(await serialRecord(port.name)).toMatchObject({
-      profile: 'stm32-bootloader',
-      overrides: { baudRate: 57600, parity: 'odd' },
+      config: null,
+      configName: null,
+      configured: { ...settings, onOpen: 'none' },
       settings
     });
-    // The port in the browser is open with the settings of the profile now.
+    // The port in the browser is open with the settings now.
     await expect
       .poll(async () => (await simArgs(page, port.id, 'open')).at(-1)?.[0], {
         timeout: ROUND_TRIP
@@ -112,6 +130,8 @@ test.describe('jupyterlab-device with a serial port', () => {
 
     const result = await runCli([
       'run',
+      '--device',
+      port.name,
       '--',
       ...toolCommand(devicePath, [
         ...['--signals', 'dtr=1', 'rts=1', 'dtr=0', 'rts=0'],

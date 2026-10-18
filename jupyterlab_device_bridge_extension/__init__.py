@@ -33,6 +33,12 @@ class DeviceBridge(Configurable):
         config=True,
         help="Most bytes of serial output the server keeps for each port.",
     )
+    settings_file = Unicode(
+        "",
+        config=True,
+        help="File of the user-saved serial settings. Empty means serial-settings.json in "
+             "the Jupyter data directory.",
+    )
 
 
 def _jupyter_labextension_paths():
@@ -58,7 +64,8 @@ def _load_jupyter_server_extension(server_app):
     """
     config = DeviceBridge(config=server_app.config)
     device_dir = config.device_dir or default_device_dir(server_app.log)
-    manager = DeviceManager(device_dir, config.monitor_bytes, server_app.log)
+    manager = DeviceManager(device_dir, config.monitor_bytes, server_app.log,
+                            config.settings_file or None)
     server_app.web_app.settings[MANAGER_KEY] = manager
     # A server extension of this form has no stop hook: the ptys, the symlinks and the
     # shim sockets are released when the server process ends.

@@ -20,10 +20,10 @@ import type {
   IErrorInfo,
   IGrant,
   IGrantedDevice,
-  IProfile,
-  IProfileChange,
   IRunRecord,
   ISerialDefaults,
+  ISerialSettingsChange,
+  ISettingsConfig,
   PageToWorker,
   WorkerToPage
 } from './protocol';
@@ -119,9 +119,9 @@ export class DeviceBridgeModel implements IDisposable {
     return this._tabId;
   }
 
-  /** The built-in profiles of the server; set together with `tabId`. */
-  get profiles(): IProfile[] {
-    return this._profiles;
+  /** The serial settings configs of the server: the system configs and the saved ones. Set with `tabId`. */
+  get configs(): ISettingsConfig[] {
+    return this._configs;
   }
 
   /** The device requests of container programs that wait for the user. */
@@ -144,7 +144,7 @@ export class DeviceBridgeModel implements IDisposable {
     return this._devicesChanged;
   }
 
-  /** Emitted when the server answered and `tabId` and `profiles` are set. */
+  /** Emitted when the server answered and `tabId` and `configs` are set. */
   get tabIdChanged(): ISignal<this, string | null> {
     return this._tabIdChanged;
   }
@@ -245,18 +245,70 @@ export class DeviceBridgeModel implements IDisposable {
   }
 
   /**
-   * Set the profile of a serial device, or single fields of it.
+   * Apply a saved config or single fields to a serial device.
    *
    * @param name The device name
-   * @param change The profile id and the fields to override
+   * @param change The config id or name, and the fields to change
    * @throws ServerConnection.ResponseError when the server refuses the change
    */
-  async setProfile(name: string, change: IProfileChange): Promise<void> {
+  async setSettings(
+    name: string,
+    change: ISerialSettingsChange
+  ): Promise<void> {
     await requestAPI<unknown>(
-      `serial/${encodeURIComponent(name)}/profile`,
+      `serial/${encodeURIComponent(name)}/settings`,
       this._serverSettings,
       { method: 'PUT', body: JSON.stringify(change) }
     );
+  }
+
+  /**
+   * Save five serial settings under a user name.
+   *
+   * @param name The name of the new config
+   * @param values The five settings
+   * @throws ServerConnection.ResponseError when the name is taken or a value is refused
+   */
+  async saveConfig(
+    name: string,
+    values: ISerialDefaults
+  ): Promise<ISettingsConfig> {
+    return requestAPI<ISettingsConfig>(
+      'settings-configs',
+      this._serverSettings,
+      {
+        method: 'POST',
+        body: JSON.stringify({ name, ...values })
+      }
+    );
+  }
+
+  /**
+   * Delete a user-saved config.
+   *
+   * @param token The id or name of the config
+   * @throws ServerConnection.ResponseError for a system config or an unknown config
+   */
+  async deleteConfig(token: string): Promise<void> {
+    await requestAPI<unknown>(
+      `settings-configs/${encodeURIComponent(token)}`,
+      this._serverSettings,
+      { method: 'DELETE' }
+    );
+  }
+
+  /**
+   * Read the configs again after one was saved or deleted.
+   *
+   * @throws ServerConnection.ResponseError when the server refuses the read
+   */
+  async refreshConfigs(): Promise<void> {
+    const answer = await requestAPI<{ configs: ISettingsConfig[] }>(
+      'settings-configs',
+      this._serverSettings
+    );
+    this._configs = answer.configs;
+    this._tabIdChanged.emit(this._tabId);
   }
 
   /**
@@ -340,7 +392,7 @@ export class DeviceBridgeModel implements IDisposable {
     switch (message.type) {
       case 'welcome':
         this._tabId = message.tabId;
-        this._profiles = message.profiles;
+        this._configs = message.configs;
         this._tabIdChanged.emit(this._tabId);
         return;
       case 'devices':
@@ -484,7 +536,7 @@ export class DeviceBridgeModel implements IDisposable {
   private _devices = EMPTY_TABLE;
   private _grants: IGrant[] = [];
   private _tabId: string | null = null;
-  private _profiles: IProfile[] = [];
+  private _configs: ISettingsConfig[] = [];
   private _requests: IDeviceRequest[] = [];
   private _runs: IRunRecord[] = [];
   private _roundTrip: number | null = null;

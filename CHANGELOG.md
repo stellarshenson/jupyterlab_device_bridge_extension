@@ -2,6 +2,31 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.35] - 2026-10-18
+
+The Devices panel gets a settings dialog that reads as a table, a help tab on the lab's own Markdown viewer, byte counters that change unit, and a server discovery that identifies the lab hosting the command. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Added
+
+- Help tab: the help button of the Serial and USB header writes the file `Device Bridge Help` at the root of the contents and opens it in the lab's read-only Markdown Preview; the document covers the panel options, the connections, the tools and the connection configs. A second click activates the same tab
+- Settings dialog as a table: one row per setting, alternating shaded rows, one control per value cell; baud rate is one editable field that lists the standard rates 300 to 921600 and shows a Custom badge when the value is not standard; the buttons are slim, 28 px high
+- Run rows: Copy shows Copied for 1.5 s, a run that ends within 3 s stays visible until 3 s, and a lingering stopped row disables Stop
+- Server discovery: the client prefers the listed server whose pid is an ancestor of its process; a failed `jupyter server list --json` is retried three times and then refused with its reason instead of falling back to a port where nothing listens
+- Saved configs: a name or id equal to an existing config's name or id is refused
+
+### Changed
+
+- The RX and TX counters show a unit: byte or bytes below 10 KB, KB with one decimal from 10 KB, MB with one decimal from 1 MB, so 999999 reads 1.0 MB
+- The panel footer has no separator above the round trip, and the round trip text uses the same muted colour as its label
+- The baud rate of a serial port is one field in the settings table; the separate Custom select and text field are gone
+- The installer copies come from the copier embedded project's template: `make build` syncs them, the wheel ships three installers and `firmware_env.py`, and `firmware-stm32.py` absorbs the PlatformIO installer
+- The agent skill names the installers and the environment installer route; the README and the design document the new settings table and counters
+
+### Fixed
+
+- A failed `jupyter server list --json` was read as an empty list, and the client then reported a connection refused at `JUPYTER_PORT` instead of the real cause
+- A saved config name equal to a system config id could shadow the system config; the save now refuses it
+
 ## [1.0.5] - 2026-10-17
 
 The device shell opens with a larger banner, and the help texts of the command line, the serial terminal and the environment selector say more. The extension is tested against simulated devices in the browser; no test used a physical board.

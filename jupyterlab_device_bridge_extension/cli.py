@@ -11,7 +11,7 @@ Jupyter server passes it to programs in this container:
   jupyterlab_device_bridge_extension.client, or with its pyusb backend
 
     jupyterlab-device list
-    jupyterlab-device profile tty-2341-0043 arduino-upload
+    jupyterlab-device settings apply tty-2341-0043 arduino-upload
     jupyterlab-device monitor read tty-2341-0043 --lines 20
 
 Run it in a terminal of the lab and keep the lab tab open: the tab moves every byte.
@@ -28,9 +28,9 @@ import shutil
 import sys
 import time
 
-from . import __version__, banner, environments, shim_build
+from . import __version__, banner, environments, probe, shim_build
 from .client import DeviceBridgeClient, DeviceBridgeError
-from .profiles import ACTIONS
+from .serial_settings import ACTIONS
 
 PROG = "jupyterlab-device"
 # Longest single wait the CLI asks of the server while it follows or polls.
@@ -61,10 +61,11 @@ def _banner_devices(table: dict) -> list[tuple[str, str, str]]:
     """The devices of the banner for the device table of the server.
 
     `(kind, name, information)` for each device that is attached and has no error, the serial
-    devices first: `COM`, the path, the settings and the profile of a serial device; `USB`,
+    devices first: `COM`, the path, the settings and the action on open of a serial device; `USB`,
     the name, the ids and the product name of a USB device.
     """
-    serial = [("COM", record["path"], f"{_settings_text(record['settings'])}  profile {record['profile']}")
+    serial = [("COM", record["path"],
+               f"{_settings_text(record['settings'])}  on open: {record['configured']['onOpen']}")
               for record in table["serial"] if record["state"] == "attached" and not record["error"]]
     usb = [("USB", record["name"],
             f"{record['vendorId']:04x}:{record['productId']:04x}  {record['productName'] or ''}".rstrip())
@@ -75,23 +76,22 @@ def _banner_devices(table: dict) -> list[tuple[str, str, str]]:
 def _upload_examples() -> str:
     """The end of the top-level help: one example for each known upload tool on PATH now.
 
-    A line of a tool that needs the shim starts with `run --`, except inside a device shell,
-    where every tool has the shim already.
+    A line of a tool that needs the shim starts with `run --device <name> --`, except inside
+    a device shell, where every tool has the shim already.
     """
-    prefix = "" if "JUPYTERLAB_DEVICE_SHIM_DIR" in os.environ else f"{PROG} run -- "
+    prefix = "" if "JUPYTERLAB_DEVICE_SHIM_DIR" in os.environ else f"{PROG} run --device <name> -- "
     lines = [f"  {prefix if shim else ''}{line}" for _, line, shim in _tools_on_path()]
     if not lines:
         return f"No upload tool is on PATH. Known tools: {', '.join(_TOOL_NAMES)}."
     return "\n".join([
-        "examples for the upload tools on PATH; <path> is the path of the serial device,",
-        f"which `{PROG} list` prints:",
+        "examples for the upload tools on PATH; <name> is the serial device, as",
+        f"`{PROG} list` prints it, and <path> is its path:",
         *lines])
 
 
 USB_READ_LENGTH = 64
 
 HINTS = {
-    None: "start JupyterLab, or run this command in a terminal of the lab",
     401: "the token was refused; run this command in a terminal of the lab",
     403: "the token was refused; run this command in a terminal of the lab",
     409: "open the lab in Chrome or Edge and attach the device in the Devices panel "
@@ -168,12 +168,9 @@ def cmd_list(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
         holder = record["holder"]
         held = f"held by {holder['name']} (pid {holder['pid']})" if holder else "free"
         error = f"  error: {record['error']}" if record["error"] else ""
-        # An action that is not the profile's: a default of the lab's settings, or `--on-open`.
-        on_open = record["overrides"].get("onOpen")
-        action = f"  on open {on_open}" if on_open else ""
         print(f"serial  {record['name']}  {record['state']}  {record['path']}  "
-              f"{_settings_text(record['settings'])}  profile {record['profile']}{action}  "
-              f"{held}{error}")
+              f"{_settings_text(record['settings'])}  on open: {record['configured']['onOpen']}  "
+              f"config: {record['configName'] or 'custom'}  {held}{error}")
     for record in devices["usb"]:
         print(_usb_line(record))
     if not devices["serial"] and not devices["usb"]:
@@ -200,27 +197,58 @@ def cmd_status(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_profiles(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
-    profiles = bridge.profiles()
+def _settings_line(record: dict) -> str:
+    return (f"{record['name']}: config {record['configName'] or 'custom'}, "
+            f"settings {_settings_text(record['configured'])}, "
+            f"on open: {record['configured']['onOpen']}")
+
+
+def cmd_settings_list(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    configs = bridge.configs()
     if args.json:
-        return _print_json(profiles)
-    for profile in profiles:
-        print(f"{profile['id']:<18}{_settings_text(profile):<12}"
-              f"on open: {profile['onOpen']:<16}{profile['label']}")
+        return _print_json(configs)
+    for item in configs:
+        print(f"{item['name']:<20}{_settings_text(item):<12}"
+              f"on open: {item['onOpen']:<16}{'system' if item['system'] else item['id']}")
     return 0
 
 
-def cmd_profile(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
-    port = bridge.serial(args.device)
-    flags = {"profile": args.id, "baudRate": args.baud, "dataBits": args.data_bits,
-             "parity": args.parity, "stopBits": args.stop_bits, "onOpen": args.on_open}
+def cmd_settings_show(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    record = bridge.serial(args.device).record()
+    if args.json:
+        return _print_json(record)
+    print(_settings_line(record))
+    return 0
+
+
+def cmd_settings_apply(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    record = bridge.serial(args.device).set_settings(config=args.config)
+    print(_settings_line(record))
+    return 0
+
+
+def cmd_settings_set(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    flags = {"baudRate": args.baud, "dataBits": args.data_bits, "parity": args.parity,
+             "stopBits": args.stop_bits, "onOpen": args.on_open}
     change = {field: value for field, value in flags.items() if value is not None}
-    record = port.set_profile(**change) if change else port.record()
-    overrides = ", ".join(f"{field}={value}" for field, value in record["overrides"].items())
-    on_open = record["overrides"].get("onOpen") or next(
-        profile["onOpen"] for profile in bridge.profiles() if profile["id"] == record["profile"])
-    print(f"{record['name']}: profile {record['profile']}, overrides {overrides or 'none'}, "
-          f"settings {_settings_text(record['settings'])}, on open {on_open}")
+    if not change:
+        raise UsageError("give at least one of --baud, --data-bits, --parity, --stop-bits "
+                         "and --on-open")
+    record = bridge.serial(args.device).set_settings(**change)
+    print(_settings_line(record))
+    return 0
+
+
+def cmd_settings_save(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    record = bridge.serial(args.device).record()
+    saved = bridge.save_config(args.name, record["configured"])
+    print(f"{saved['name']}: saved as {saved['id']}")
+    return 0
+
+
+def cmd_settings_delete(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
+    bridge.delete_config(args.config)
+    print(f"{args.config}: deleted")
     return 0
 
 
@@ -379,7 +407,8 @@ def _start_with_shim(bridge: DeviceBridgeClient, command: list[str] | None,
 
 def cmd_run(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
     if not args.command:
-        raise UsageError(f"name the tool after `--`, for example `{PROG} run -- avrdude -c arduino ...`")
+        raise UsageError(f"name the tool after `--`, for example "
+                         f"`{PROG} run --device tty-2341-0043 -- avrdude -c arduino ...`")
     return _start_with_shim(bridge, args.command, args.device)
 
 
@@ -468,33 +497,86 @@ def _sub(sub: argparse._SubParsersAction, name: str, help_: str, description: st
 
 
 def _add_serial_commands(sub: argparse._SubParsersAction) -> None:
-    p = _sub(sub, "profile", "show or set the profile of a serial port", """
-A profile is the serial settings the browser opens the port with (baud rate, data
-bits, parity, stop bits) and the action it runs when a tool opens the virtual device.
-Without an id and without a flag the command prints the device's profile. With an
-id it sets that built-in profile and removes the fields overridden before; a flag
-overrides one field of the profile. The change applies at once and stays until it
-is changed again. Prints one line: the profile id, the overridden fields, the
-settings now in use and the action on open.
-
-While a tool holds the device the baud rate is the one the tool sets. A pty cannot
-carry parity, data bits or stop bits, so those come from the profile (or from the
-tool itself when it runs under `jupyterlab-device run`).
+    settings = _sub(sub, "settings", "show and set the serial settings, and manage saved configs", """
+A port has one settings record: baud rate, data bits, parity, stop bits and the action
+the browser runs when a tool opens the virtual device. The system delivers six
+read-only configs; a user-saved config is the values of a port stored under a name. `apply`
+copies a config onto a port; `set` changes single fields, which makes the port custom;
+`save` stores the current values of a port under a name. A change applies at once.
 """, """
-  jupyterlab-device profile tty-2341-0043
-  jupyterlab-device profile tty-2341-0043 arduino-upload
-  jupyterlab-device profile tty-0483-5740 stm32-bootloader --baud 57600
-  jupyterlab-device profile tty-10c4-ea60 --on-open none
+  jupyterlab-device settings list
+  jupyterlab-device settings show tty-2341-0043
+  jupyterlab-device settings apply tty-2341-0043 "Arduino upload"
+  jupyterlab-device settings set tty-10c4-ea60 --on-open none --baud 57600
+  jupyterlab-device settings save tty-2341-0043 "My Uno"
+  jupyterlab-device settings delete "My Uno"
+""").add_subparsers(dest="settings_command", required=True, metavar="COMMAND")
+
+    p = _sub(settings, "list", "list the system and saved serial settings configs", """
+Prints the six system configs first, then the configs the user saved. A system config cannot
+be deleted. The last column is `system` or the id of a saved config.
+""", """
+  jupyterlab-device settings list
+  jupyterlab-device settings list --json
+""")
+    p.add_argument("--json", action="store_true", help="print the configs as JSON")
+    p.set_defaults(func=cmd_settings_list)
+
+    p = _sub(settings, "show", "print the settings of a serial port", """
+Prints the config the port uses, or `custom`, and the five values.
+""", """
+  jupyterlab-device settings show tty-2341-0043
+  jupyterlab-device settings show tty-2341-0043 --json
 """)
     p.add_argument("device", help="name of the serial device, as `list` prints it")
-    p.add_argument("id", nargs="?", help="id of a built-in profile, as `profiles` prints it")
+    p.add_argument("--json", action="store_true", help="print the device record as JSON")
+    p.set_defaults(func=cmd_settings_show)
+
+    p = _sub(settings, "apply", "apply a saved or system config to a serial port", """
+Copies all five values of the config onto the port and names the config.
+""", """
+  jupyterlab-device settings apply tty-2341-0043 "Arduino upload"
+  jupyterlab-device settings apply tty-10c4-ea60 esp-upload
+""")
+    p.add_argument("device", help="name of the serial device, as `list` prints it")
+    p.add_argument("config", help="name or id of a config, as `settings list` prints it")
+    p.set_defaults(func=cmd_settings_apply)
+
+    p = _sub(settings, "set", "change single settings fields of a serial port", """
+The port becomes custom: it no longer names a config. At least one field is required.
+While a tool holds the device the baud rate is the one the tool sets; a pty cannot
+carry parity, data bits or stop bits, so those apply to the browser's port.
+""", """
+  jupyterlab-device settings set tty-10c4-ea60 --on-open none
+  jupyterlab-device settings set tty-0483-5740 --baud 57600 --parity even
+""")
+    p.add_argument("device", help="name of the serial device, as `list` prints it")
     p.add_argument("--baud", type=int, metavar="N", help="baud rate while no tool holds the device")
     p.add_argument("--data-bits", type=int, choices=(7, 8), help="data bits")
     p.add_argument("--parity", choices=("none", "even", "odd"), help="parity")
     p.add_argument("--stop-bits", type=int, choices=(1, 2), help="stop bits")
     p.add_argument("--on-open", choices=ACTIONS,
                    help="action the browser runs on the port when a tool opens the device")
-    p.set_defaults(func=cmd_profile)
+    p.set_defaults(func=cmd_settings_set)
+
+    p = _sub(settings, "save", "save the current settings of a port under a name", """
+Stores the five values the port uses now as a user-saved config. The name is 1 to 64
+characters; a name or id of a system config or of another saved config is refused.
+""", """
+  jupyterlab-device settings save tty-2341-0043 "My Uno"
+""")
+    p.add_argument("device", help="name of the serial device, as `list` prints it")
+    p.add_argument("name", help="name for the saved config, in quotes when it holds spaces")
+    p.set_defaults(func=cmd_settings_save)
+
+    p = _sub(settings, "delete", "delete a user-saved config", """
+A system config cannot be deleted. A port that uses the config keeps its values and becomes
+custom.
+""", """
+  jupyterlab-device settings delete "My Uno"
+""")
+    p.add_argument("config", help="name or id of the saved config")
+    p.set_defaults(func=cmd_settings_delete)
 
     monitor = _sub(sub, "monitor", "read what a serial port sent, or send bytes to it", """
 The server keeps the most recent bytes every serial port sent (262144 by default),
@@ -575,15 +657,15 @@ keys (the bottom row of the app lists them too):
   Ctrl+Y  keys: a list of every key with what it does; Esc or Ctrl+Y closes it
   Enter   send the typed line
 
-The baud rate is the profile's unless --baud is given. The command refuses, with
+The baud rate is the port's unless --baud is given. The command refuses, with
 exit status 1, when another program holds the device, and names that program.
 The app opens the device path as every tool does, so this command is the program
-that holds the device, and the action on open of the device's profile runs
-first. Set the profile `monitor` to open the terminal without an action. A
-setting applied with Ctrl+O changes the profile of the device. When the port is
-detached or removed the app stays open, shows `removed` and sends nothing until
-the port is attached again; after Forget, or when the device path failed, it
-stays removed: quit and start it again.
+that holds the device, and the action on open of the port runs first. Set `--on-open
+none` on the port to open the terminal without an action. A setting applied with
+Ctrl+O changes the settings of the device. When the port is detached or removed the
+app stays open, shows `removed` and sends nothing until the port is attached again;
+after Forget, or when the device path failed, it stays removed: quit and start it
+again.
 
 Exit status: 0 after Ctrl+Q or Esc; 1 when another program holds the device or
 its path cannot be opened; 2 without a terminal.
@@ -592,7 +674,7 @@ its path cannot be opened; 2 without a terminal.
   jupyterlab-device terminal tty-2341-0043 --baud 9600
 """)
     p.add_argument("device", help="name of the serial device, as `list` prints it")
-    p.add_argument("--baud", type=int, metavar="N", help="baud rate (default: the profile's)")
+    p.add_argument("--baud", type=int, metavar="N", help="baud rate (default: the port's)")
     p.set_defaults(func=cmd_terminal)
 
     p = _sub(sub, "signals", "set the DTR and RTS lines of a serial port", """
@@ -609,8 +691,8 @@ Prints nothing.
     p.set_defaults(func=cmd_signals)
 
     p = _sub(sub, "action", "run one reset or bootloader action on a serial port", """
-Runs one action on the port in the browser, now. These are the actions a profile
-runs when a tool opens the device:
+Runs one action on the port in the browser, now. These are the actions a saved config
+may run when a tool opens the device:
 
   pulse-dtr       DTR off, 100 ms, DTR on: the reset pulse for an Arduino Uno,
                   Nano or Mega
@@ -763,9 +845,10 @@ quick start, from a board plugged into the user's computer to its output:
   2. {PROG} list
      The line of the board holds its name and its path, for example
      tty-2341-0043 and /run/devices/tty-2341-0043.
-  3. {PROG} profile tty-2341-0043 arduino-upload
-  4. {PROG} run -- pio run -t upload --upload-port /run/devices/tty-2341-0043
-     A tool that sets DTR, RTS or parity itself runs under `run --`.
+  3. {PROG} settings apply tty-2341-0043 "Arduino upload"
+  4. {PROG} run --device tty-2341-0043 -- pio run -t upload --upload-port /run/devices/tty-2341-0043
+     A tool that sets DTR, RTS or parity itself runs under `run`, which names the
+     device; without `--device` the command does not start.
   5. {PROG} monitor read tty-2341-0043 --lines 20
 
 agent skill:
@@ -788,14 +871,18 @@ exit status:
 
 Results go to stdout and messages to stderr.
 
-The server is the first one that `jupyter server list` reports, reached on 127.0.0.1
+The server is the one this lab names: the record whose base URL is
+`JUPYTERHUB_SERVICE_PREFIX`, or, when the variable is unset, the only listed server.
+Several servers with no match are refused, not guessed. With no matching record the
+address is 127.0.0.1 on `JUPYTER_PORT` (default 8888) under the prefix. It is reached
 without a proxy.
 
 environment:
   JUPYTERHUB_API_TOKEN, JPY_API_TOKEN  the token; under JupyterHub it outranks the server's own
-  JUPYTER_TOKEN                        the token when `jupyter server list` reports no server
-  JUPYTER_PORT, JUPYTERHUB_SERVICE_PREFIX
-                                       where the server answers when the list reports none
+  JUPYTER_TOKEN                        the token when no record matches
+  JUPYTERHUB_SERVICE_PREFIX            which listed server is this lab's; the base path
+                                       when no record matches
+  JUPYTER_PORT                         the port when no record matches (default 8888)
   NO_COLOR                             when set and not empty, the banner of `shell` has no colour
 
 {_upload_examples()}
@@ -808,20 +895,18 @@ environment:
     p = _sub(sub, "list", "list the devices with path, state, holder and settings", """
 Prints one line per device.
 
-A serial line: `serial`, name, state, path, settings, profile, holder. The path is
-what a serial tool opens. State `attached` means a lab tab holds the port; on a
-`detached` device the path still opens but no byte reaches the board. After the
-profile the line has `on open <action>` when the port has an action on open of
-its own, which runs in place of the profile's: the user can set one as a default
-in the settings of the lab, and `profile --on-open` sets one. The holder is
-the program that has the path open now, or `free`. The line ends with
-`error: <reason>` for a port that failed in the browser, for example one the
-browser could not open, or with `error: removed` for an unplugged port. The
-browser does not open a port with `error: <reason>` again by itself: tell the
-user the reason and, when the cause is gone, set the profile of the board again
-with `jupyterlab-device profile <device> <id>`. A profile change asks the
-browser to open the port again. Then run `list` again, and upload only when the
-line has no `error:`.
+A serial line: `serial`, name, state, path, settings, the action on open and the
+config, then the holder. The path is what a serial tool opens. State `attached` means
+a lab tab holds the port; on a `detached` device the path still opens but no byte
+reaches the board. The config is the name of the config the port uses, or `custom` after
+a field was changed with `settings set`. The holder is the program that has the
+path open now, or `free`. The line ends with `error: <reason>` for a port that
+failed in the browser, for example one the browser could not open, or with
+`error: removed` for an unplugged port. The browser does not open a port with
+`error: <reason>` again by itself: tell the user the reason and, when the cause is
+gone, apply a config again with `jupyterlab-device settings apply <device> <config>`. A
+settings change asks the browser to open the port again. Then run `list` again, and
+upload only when the line has no `error:`.
 
 A USB line: `usb`, name, state, vendor:product id, open or closed, product name.
 
@@ -847,16 +932,6 @@ device can be attached: open the lab in Chrome or Edge, over HTTPS or localhost.
     p.add_argument("--json", action="store_true", help="print the status as one JSON document")
     p.set_defaults(func=cmd_status)
 
-    p = _sub(sub, "profiles", "list the built-in serial profiles", """
-Prints one line per built-in profile: id, settings, the action on open, and what
-the profile is for. Set one with `jupyterlab-device profile <device> <id>`.
-""", """
-  jupyterlab-device profiles
-  jupyterlab-device profiles --json
-""")
-    p.add_argument("--json", action="store_true", help="print the profiles as one JSON list")
-    p.set_defaults(func=cmd_profiles)
-
     _add_serial_commands(sub)
 
     p = _sub(sub, "run", "start a tool with the preload shim", """
@@ -864,14 +939,16 @@ Starts CMD with a small preloaded library (LD_PRELOAD) that passes the tool's ow
 DTR and RTS calls, its break, and its parity, data bits and stop bits to the port.
 Without it the virtual device refuses the DTR, RTS and break calls and holds no
 parity: a tool that asks for parity or 7 data bits gets an error from its settings
-call or reads back 8N1, and only the profile of the device supplies them. The
-command becomes CMD: output and exit status are the tool's. CMD names the device
-by the path that `jupyterlab-device list` prints.
+call or reads back 8N1, and only the port's settings supply them. The
+command becomes CMD: output and exit status are the tool's. The run names its
+serial device with --device, the name `jupyterlab-device list` prints; CMD names
+the same device by the path on that line. Without --device the command does not
+start.
 
 The library is compiled on the first run with the system C compiler (cc or gcc)
 into ~/.cache/jupyterlab-device-bridge/ and reused after. Without a compiler the
-command exits 1; set a profile instead. A statically linked tool does not load the
-library; set a profile for it too.
+command exits 1; set the settings on the port instead. A statically linked tool
+does not load the library; set the settings for it too.
 
 Before the command becomes CMD it tells the server its process id. So the
 Devices panel of the lab (if no sidebar has the panel: menu View, item Show
@@ -897,17 +974,18 @@ The two keys in platformio.ini, under the environment of the board:
   upload_port = /run/devices/tty-2341-0043
   monitor_port = /run/devices/tty-2341-0043
 """, """
-  jupyterlab-device run -- avrdude -c arduino -p m328p \\
+  jupyterlab-device run --device tty-2341-0043 -- avrdude -c arduino -p m328p \\
       -P /run/devices/tty-2341-0043 -U flash:w:blink.hex
   jupyterlab-device run --device tty-10c4-ea60 -- esptool \\
       --port /run/devices/tty-10c4-ea60 chip-id
-  jupyterlab-device run -- pio run -t upload \\
+  jupyterlab-device run --device tty-2341-0043 -- pio run -t upload \\
       --upload-port /run/devices/tty-2341-0043
 """)
-    p.usage = f"{PROG} run [-h] [--device D] -- CMD [ARG ...]"
-    p.add_argument("--device", metavar="D",
-                   help="name of a serial device that must be attached; "
-                        "CMD is not started when it is not")
+    p.usage = f"{PROG} run [-h] --device D -- CMD [ARG ...]"
+    p.add_argument("--device", metavar="D", required=True,
+                   help="the serial device the run uses, as `jupyterlab-device list` prints it; "
+                        "it must be attached, and the Devices panel lists the run on it "
+                        "(if no sidebar has the panel: menu View, item Show Devices Panel)")
     p.set_defaults(func=cmd_run, command=[])
 
     p = _sub(sub, "shell", "start a device shell: the shell of the lab's terminals with the preload shim",
@@ -952,6 +1030,8 @@ report the shell command.
   jupyterlab-device shell
 """)
     p.set_defaults(func=cmd_shell)
+
+    probe.add_commands(sub, _sub)
 
     p = _sub(sub, "help", "print the help of the tool or of one command", """
 Prints the help of the tool, or of the command that the words name, on stdout:

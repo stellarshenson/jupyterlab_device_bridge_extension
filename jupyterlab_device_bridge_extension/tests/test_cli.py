@@ -28,7 +28,7 @@ from typing import NamedTuple
 import pytest
 import tornado.web
 
-from jupyterlab_device_bridge_extension import __version__, cli, shim_build, tui_theme
+from jupyterlab_device_bridge_extension import __version__, cli, probe, shim_build, tui_theme
 from jupyterlab_device_bridge_extension import banner as banner_module
 from jupyterlab_device_bridge_extension import manager as manager_module
 from jupyterlab_device_bridge_extension.manager import BridgeError
@@ -48,6 +48,7 @@ from .test_client import (  # noqa: F401 - `lab` is a fixture
     attach_usb,
     lab,
     list_server,
+    list_servers,
 )
 from .test_manager import HOLD, end, holding, record
 from .test_readme import command_lines, readme
@@ -84,16 +85,17 @@ cli._on_a_terminal = lambda: True  # the pipes of the test stand for a terminal
 raise SystemExit(cli.main(sys.argv[1:]))
 """
 
-SERIAL_FIELDS = {"name", "path", "state", "portState", "tab", "holder", "settings", "profile",
-                 "overrides", "signals", "rx", "tx", "vendorId", "productId", "error"}
+SERIAL_FIELDS = {"name", "path", "state", "portState", "tab", "holder", "settings", "configured",
+                 "config", "configName", "signals", "rx", "tx", "vendorId", "productId", "error"}
 USB_FIELDS = {"name", "state", "tab", "vendorId", "productId", "productName", "manufacturerName",
               "serialNumber", "opened", "holder", "rx", "tx", "error"}
 # The command table of docs/design.md.
 COMMANDS = {
-    "list", "status", "profiles", "profile", "monitor read", "monitor write", "terminal", "signals",
+    "list", "status", "settings list", "settings show", "settings apply", "settings set",
+    "settings save", "settings delete", "monitor read", "monitor write", "terminal", "signals",
     "action", "run", "shell", "help", "request", "usb list", "usb describe", "usb open", "usb close", "usb claim",
     "usb release", "usb configuration", "usb alternate", "usb clear-halt", "usb reset", "usb control",
-    "usb transfer",
+    "usb transfer", "probe baud", "probe avr", "probe stm32", "probe esp",
 }
 
 
@@ -415,10 +417,10 @@ async def test_acc_cli_82_list_and_status_in_plain_text(cli_run, fake_tab, tool,
 
     listed = await cli_run("list")
     status = await cli_run("status")
-    profiles = await cli_run("profiles")
+    configs = await cli_run("settings", "list")
 
     assert listed.out.decode().splitlines() == [
-        f"serial  {SERIAL_NAME}  attached  {path}  115200 8N1  profile monitor  "
+        f"serial  {SERIAL_NAME}  attached  {path}  115200 8N1  on open: none  config: Default  "
         f"held by {program_name(holder.pid)} (pid {holder.pid})",
         f"usb     {USB_NAME}  attached  cafe:4001  closed  {USB_PRODUCT_NAME}",
     ]
@@ -430,9 +432,10 @@ async def test_acc_cli_82_list_and_status_in_plain_text(cli_run, fake_tab, tool,
     assert re.fullmatch(r"tab tab-1: Web Serial yes, WebUSB yes, round trip \d+(\.\d+)? ms", lines[5])
     assert len(lines) == 6
     assert (listed.status, status.status, status.err) == (0, 0, "")
-    assert [line.split()[0] for line in profiles.out.decode().splitlines()] == [
-        "monitor", "arduino-upload", "arduino-isp", "stm32-bootloader", "esp-upload"]
-    assert "stm32-bootloader  115200 8E1  on open: none" in profiles.out.decode()
+    config_lines = configs.out.decode().splitlines()
+    assert len(config_lines) == 6 and all(line.endswith("system") for line in config_lines)
+    assert config_lines[0].startswith("Default")
+    assert "STM32 bootloader" in config_lines[4] and "115200 8E1" in config_lines[4]
     await end(holder)
 
 
@@ -446,34 +449,34 @@ async def test_acc_serial_17_list_ends_the_line_of_a_port_in_error_with_the_brow
     listed = await cli_run("list")
 
     assert listed.out.decode().splitlines() == [
-        f"serial  {SERIAL_NAME}  attached  {path}  115200 8N1  profile monitor  free"
+        f"serial  {SERIAL_NAME}  attached  {path}  115200 8N1  on open: none  config: Default  free"
         "  error: Failed to open serial port."]
     assert (listed.status, listed.err) == (0, "")
 
 
-async def test_acc_cli_125_list_names_an_action_on_open_that_is_not_the_profiles(cli_run, fake_tab):
-    """ACC-CLI-125 the line that `list` prints for a port with an action on open of its own, as a default of the lab's settings gives it, has `on open <action>` after the profile; a port with the action of its profile has none."""
+async def test_acc_cli_125_list_names_the_action_on_open_and_the_config(cli_run, fake_tab):
+    """ACC-CLI-125 the line that `list` prints for a port has the settings, `on open: <action>` and the config, or custom after a field of the port was changed."""
     tab = await fake_tab()
     assert (await tab.claim_serial(defaults={"baudRate": 9600, "onOpen": "pulse-dtr"}))["ok"]
     await tab.until(lambda: record(tab)["portState"] == "open")
     start = f"serial  {SERIAL_NAME}  attached  {record(tab)['path']}  "
 
     by_default = await cli_run("list")
-    await cli_run("profile", SERIAL_NAME, "arduino-upload")
+    await cli_run("settings", "apply", SERIAL_NAME, "arduino-upload")
     await tab.until(lambda: record(tab)["settings"]["baudRate"] == 115200)
-    by_profile = await cli_run("list")
-    await cli_run("profile", SERIAL_NAME, "--on-open", "none")
+    by_config = await cli_run("list")
+    await cli_run("settings", "set", SERIAL_NAME, "--on-open", "none")
     by_flag = await cli_run("list")
 
-    assert [listed.out.decode().splitlines() for listed in (by_default, by_profile, by_flag)] == [
-        [f"{start}9600 8N1  profile monitor  on open pulse-dtr  free"],
-        [f"{start}115200 8N1  profile arduino-upload  free"],
-        [f"{start}115200 8N1  profile arduino-upload  on open none  free"],
+    assert [listed.out.decode().splitlines() for listed in (by_default, by_config, by_flag)] == [
+        [f"{start}9600 8N1  on open: pulse-dtr  config: custom  free"],
+        [f"{start}115200 8N1  on open: pulse-dtr  config: Arduino upload  free"],
+        [f"{start}115200 8N1  on open: none  config: custom  free"],
     ]
 
 
-async def test_acc_serial_17_a_profile_set_asks_the_browser_to_open_a_port_in_error_again(cli_run, fake_tab):
-    """ACC-SERIAL-17 `profile <device> <id>` on a port the browser could not open sends one `serial-configure`, and `list` then prints the line without `error:`; `list` and `profile <device>` alone send none."""
+async def test_acc_serial_17_a_config_applied_asks_the_browser_to_open_a_port_in_error_again(cli_run, fake_tab):
+    """ACC-SERIAL-17 `settings apply` on a port the browser could not open sends one `serial-configure`, and `list` then prints the line without `error:`; `list` and `settings show` alone send none."""
     tab, path = await attach_serial(fake_tab)
     await tab.send({"type": "serial-state", "name": SERIAL_NAME, "state": "error", "settings": None,
                     "signals": {}, "error": "Failed to open serial port."})
@@ -481,15 +484,15 @@ async def test_acc_serial_17_a_profile_set_asks_the_browser_to_open_a_port_in_er
     before = len(tab.got("serial-configure"))
 
     await cli_run("list")
-    await cli_run("profile", SERIAL_NAME)
+    await cli_run("settings", "show", SERIAL_NAME)
     looked = len(tab.got("serial-configure")) - before
-    changed = await cli_run("profile", SERIAL_NAME, "monitor")
+    changed = await cli_run("settings", "apply", SERIAL_NAME, "monitor")
     await tab.until(lambda: record(tab)["portState"] == "open")
     listed = await cli_run("list")
 
     assert (looked, len(tab.got("serial-configure")) - before, changed.status) == (0, 1, 0)
     assert listed.out.decode().splitlines() == [
-        f"serial  {SERIAL_NAME}  attached  {path}  115200 8N1  profile monitor  free"]
+        f"serial  {SERIAL_NAME}  attached  {path}  115200 8N1  on open: none  config: Monitor  free"]
 
 
 async def test_acc_cli_84_no_server(cli_run, monkeypatch):
@@ -503,6 +506,24 @@ async def test_acc_cli_84_no_server(cli_run, monkeypatch):
     assert outcome.err.startswith(f"{cli.PROG}: cannot reach the Jupyter server at http://127.0.0.1:9 (")
     assert outcome.err.endswith(" - start JupyterLab, or run this command in a terminal of the lab\n")
     assert outcome.err.count("\n") == 1
+
+
+async def test_acc_cli_200_the_refusal_of_several_servers_does_not_say_to_start_jupyterlab(cli_run,
+                                                                                          monkeypatch):
+    """ACC-CLI-200 several non-matching servers are refused with one line that names the next step, not 'start JupyterLab'."""
+    list_servers(cli_run.binaries, [
+        {"port": 9, "base_url": "/decoy/", "token": "decoy"},
+        {"port": 8, "base_url": "/other/", "token": "other"},
+    ])
+    monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", "/user/someone.else/")
+
+    outcome = await cli_run("list")
+
+    assert (outcome.status, outcome.out) == (1, b"")
+    assert outcome.err == (
+        f"{cli.PROG}: 2 Jupyter servers are listed and none is this lab's: 9/decoy/, 8/other/"
+        " - remove the stale records, or set JUPYTERHUB_SERVICE_PREFIX to the lab's base path\n")
+    assert "start JupyterLab" not in outcome.err
 
 
 async def test_acc_cli_84_no_connected_tab(cli_run, fake_tab):
@@ -560,7 +581,7 @@ async def test_acc_cli_84_unknown_device(cli_run, fake_tab):
     await attach_serial(fake_tab)
     hint = f" - run `{cli.PROG} list` for the names of the attached devices\n"
 
-    for command in (("monitor", "read", "tty-none"), ("profile", "tty-none"), ("terminal", "tty-none"),
+    for command in (("monitor", "read", "tty-none"), ("settings", "show", "tty-none"), ("terminal", "tty-none"),
                     ("signals", "tty-none", "--dtr", "1"), ("usb", "open", USB_NAME),
                     ("monitor", "read", "TTY_wrong")):
         outcome = await cli_run(*command)
@@ -588,33 +609,47 @@ async def test_acc_cli_84_a_server_without_the_bridge_and_a_refused_token(
 # ----------------------------------------------------------------------- serial ports
 
 
-async def test_acc_prof_24_profile_sets_the_profile_and_single_fields(cli_run, fake_tab):
-    """ACC-PROF-24 `profile <device> <id> --parity ...` sets the profile and the field; the record and the port have them."""
+async def test_acc_prof_204_settings_apply_and_set_the_port(cli_run, fake_tab):
+    """ACC-PROF-204 `settings apply <device> <config>` applies a config and `settings set --flags` changes fields; the record and the port have them."""
     tab, _ = await attach_serial(fake_tab)
 
-    changed = await cli_run("profile", SERIAL_NAME, "arduino-isp", "--parity", "even")
-    shown = await cli_run("profile", SERIAL_NAME)
+    applied = await cli_run("settings", "apply", SERIAL_NAME, "arduino-isp")
+    shown = await cli_run("settings", "show", SERIAL_NAME)
 
-    settings = {"baudRate": 19200, "dataBits": 8, "parity": "even", "stopBits": 1}
-    line = f"{SERIAL_NAME}: profile arduino-isp, overrides parity=even, settings 19200 8E1, on open none\n"
-    assert changed == Outcome(0, line.encode(), "") and shown == changed
+    settings = {"baudRate": 19200, "dataBits": 8, "parity": "none", "stopBits": 1}
+    line = f"{SERIAL_NAME}: config Arduino as ISP, settings 19200 8N1, on open: none\n"
+    assert applied == Outcome(0, line.encode(), "") and shown == applied
     await tab.until(lambda: tab.settings[SERIAL_NAME] == settings)
-    assert (record(tab)["profile"], record(tab)["overrides"], record(tab)["settings"]) == (
-        "arduino-isp", {"parity": "even"}, settings)
+    assert (record(tab)["configName"], record(tab)["configured"], record(tab)["settings"]) == (
+        "Arduino as ISP",
+        {"baudRate": 19200, "dataBits": 8, "parity": "none", "stopBits": 1, "onOpen": "none"},
+        settings)
 
-    fields = await cli_run("profile", SERIAL_NAME, "--baud", "57600", "--data-bits", "7", "--stop-bits", "2",
-                           "--on-open", "pulse-rts")
-    assert fields.out.decode() == (
-        f"{SERIAL_NAME}: profile arduino-isp, overrides parity=even, baudRate=57600, dataBits=7, "
-        "stopBits=2, onOpen=pulse-rts, settings 57600 7E2, on open pulse-rts\n")
-    replaced = await cli_run("profile", SERIAL_NAME, "esp-upload")
-    assert replaced.out.decode() == (
-        f"{SERIAL_NAME}: profile esp-upload, overrides none, settings 115200 8N1, on open esp-bootloader\n")
+    fields = await cli_run("settings", "set", SERIAL_NAME, "--baud", "57600", "--data-bits", "7",
+                           "--parity", "even", "--stop-bits", "2", "--on-open", "pulse-rts")
+    assert fields == Outcome(0, f"{SERIAL_NAME}: config custom, settings 57600 7E2, on open: pulse-rts\n"
+                              .encode(), "")
 
-    unknown = await cli_run("profile", SERIAL_NAME, "no-such-profile")
-    assert unknown.status == 1, "the server's message lists the ids"
-    assert unknown.err == (f"{cli.PROG}: profile: 'no-such-profile' is not one of monitor, arduino-upload, "
-                           "arduino-isp, stm32-bootloader, esp-upload\n")
+    unknown = await cli_run("settings", "apply", SERIAL_NAME, "no-such-config")
+    assert unknown.status == 1
+    assert unknown.err == f"{cli.PROG}: no serial settings config named no-such-config\n"
+
+
+async def test_acc_prof_205_settings_save_lists_and_deletes_a_config(cli_run, fake_tab):
+    """ACC-PROF-205 `settings save` stores the values of a port under a name, `settings list` shows it and `settings delete` removes it."""
+    tab, _ = await attach_serial(fake_tab)
+    await cli_run("settings", "set", SERIAL_NAME, "--baud", "57600", "--on-open", "pulse-rts")
+
+    saved = await cli_run("settings", "save", SERIAL_NAME, "My board")
+    listed = await cli_run("settings", "list")
+    deleted = await cli_run("settings", "delete", "My board")
+    empty = await cli_run("settings", "list")
+
+    assert saved.status == 0 and saved.out.decode().startswith("My board: saved as config-")
+    assert "My board" in listed.out.decode() and len(listed.out.decode().splitlines()) == 7
+    assert deleted == Outcome(0, b"My board: deleted\n", "")
+    assert len(empty.out.decode().splitlines()) == 6
+    assert record(tab)["configName"] is None
 
 
 async def test_acc_mon_39_monitor_read_prints_what_the_port_sent_before_the_call(cli_run, fake_tab, api):
@@ -705,7 +740,7 @@ async def test_cli_signals_and_action_reach_the_port(cli_run, fake_tab):
 
 
 async def test_acc_term_165_terminal_starts_the_textual_app_on_the_device_path(cli_run, fake_tab):
-    """ACC-TERM-165 `terminal` starts the extension's Textual app on the device's path at the profile's baud rate; pyserial and textual are dependencies of the wheel."""
+    """ACC-TERM-165 `terminal` starts the extension's Textual app on the device's path at the port's baud rate; pyserial and textual are dependencies of the wheel."""
     _, path = await attach_serial(fake_tab)
 
     outcome = await cli_run.app_recorded("terminal", SERIAL_NAME)
@@ -760,15 +795,15 @@ async def test_acc_term_165_the_real_terminal_command_runs_the_app_on_the_virtua
         os.close(keyboard)
 
 
-async def test_acc_term_109_terminal_uses_the_profile_baud_or_the_flag(cli_run, fake_tab):
-    """ACC-TERM-109 `terminal` starts the terminal program at the profile's baud rate, and at `--baud` when it is given."""
+async def test_acc_term_109_terminal_uses_the_port_baud_or_the_flag(cli_run, fake_tab):
+    """ACC-TERM-109 `terminal` starts the terminal program at the port's baud rate, and at `--baud` when it is given."""
     _, path = await attach_serial(fake_tab)
-    assert (await cli_run("profile", SERIAL_NAME, "--baud", "9600")).status == 0
+    assert (await cli_run("settings", "set", SERIAL_NAME, "--baud", "9600")).status == 0
 
-    profile = await cli_run.app_recorded("terminal", SERIAL_NAME)
+    configured = await cli_run.app_recorded("terminal", SERIAL_NAME)
     flag = await cli_run.app_recorded("terminal", SERIAL_NAME, "--baud", "57600")
 
-    assert json.loads(profile.out) == [path, 9600]
+    assert json.loads(configured.out) == [path, 9600]
     assert json.loads(flag.out) == [path, 57600]
 
 
@@ -821,11 +856,11 @@ def test_acc_term_174_terminal_help_lists_the_keys_and_says_that_the_command_is_
 
 async def test_acc_shim_35_run_starts_the_tool_with_the_shim_and_exits_with_its_status(
         cli_run, fake_tab, device_dir, monkeypatch):
-    """ACC-SHIM-35 `run -- CMD` starts CMD with the shim loaded and the shim directory set, and exits with CMD's status."""
+    """ACC-SHIM-35 `run --device <name> -- CMD` starts CMD with the shim loaded and the shim directory set, and exits with CMD's status."""
     await attach_serial(fake_tab)
     script = 'grep -c devshim /proc/self/maps; echo "$LD_PRELOAD"; echo "$JUPYTERLAB_DEVICE_SHIM_DIR"; exit 7'
 
-    outcome = await cli_run("run", "--", "sh", "-c", script)
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", "sh", "-c", script)
 
     loaded, library, shim_dir = outcome.out.decode().splitlines()
     assert outcome.status == 7
@@ -839,16 +874,26 @@ async def test_acc_shim_35_run_starts_the_tool_with_the_shim_and_exits_with_its_
     assert (kept.status, kept.out.decode()) == (0, f"{library}:{library}\n"), "a library preloaded already stays"
 
 
+async def test_acc_cli_210_run_without_a_device_exits_2(cli_run, fake_tab):
+    """ACC-CLI-210 `run` without `--device` exits 2, names the flag, and starts nothing."""
+    await attach_serial(fake_tab)
+
+    outcome = await cli_run("run", "--", "sh", "-c", "echo started")
+
+    assert (outcome.status, outcome.out) == (2, b"")
+    assert "the following arguments are required: --device" in outcome.err
+
+
 async def test_acc_shim_35_run_does_not_start_the_tool_without_its_device(cli_run, fake_tab):
-    """ACC-SHIM-35 `run` with no command exits 2; with `--device` it starts nothing when that device is detached or unknown."""
+    """ACC-SHIM-35 `run` with `--device` but no command exits 2; it starts nothing when that device is detached or unknown."""
     tab, _ = await attach_serial(fake_tab)
+
+    empty = await cli_run("run", "--device", SERIAL_NAME, "--")
+    missing = await cli_run("run", "--device", SERIAL_NAME, "--", "no-such-tool-7c1f")
     await tab.release(SERIAL_NAME)
     await tab.until(lambda: record(tab)["state"] == "detached")
-
-    empty = await cli_run("run", "--")
     detached = await cli_run("run", "--device", SERIAL_NAME, "--", "sh", "-c", "echo started")
     unknown = await cli_run("run", "--device", "tty-none", "--", "sh", "-c", "echo started")
-    missing = await cli_run("run", "--", "no-such-tool-7c1f")
 
     assert empty.status == 2 and "name the tool after `--`" in empty.err
     assert (detached.status, detached.out) == (1, b"") and f"{SERIAL_NAME} is detached" in detached.err
@@ -860,23 +905,24 @@ async def test_def_cli_13_run_with_an_empty_tool_name_says_so_and_exits_127(cli_
     """DEF-CLI-13 `run` with an empty word as the tool prints one message and exits 127, as for a tool that does not exist; it prints no traceback."""
     await attach_serial(fake_tab)
 
-    outcome = await cli_run("run", "--", "")
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", "")
 
     assert (outcome.status, outcome.out) == (127, b"")
     assert outcome.err.startswith(f"{cli.PROG}: cannot start ") and outcome.err.count("\n") == 1
 
 
-async def test_acc_shim_37_run_without_a_c_compiler_names_profiles(cli_run, fake_tab, monkeypatch):
-    """ACC-SHIM-37 without a C compiler `run` exits 1, starts nothing, and says that a profile needs no shim."""
+async def test_acc_shim_37_run_without_a_c_compiler_names_settings(cli_run, fake_tab, monkeypatch):
+    """ACC-SHIM-37 without a C compiler `run` exits 1, starts nothing, and says that the settings need no shim."""
     await attach_serial(fake_tab)
     monkeypatch.setenv("PATH", str(cli_run.binaries))
 
-    outcome = await cli_run("run", "--", "/bin/sh", "-c", "echo started")
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", "/bin/sh", "-c", "echo started")
 
     assert (outcome.status, outcome.out) == (1, b"")
     assert outcome.err == (
         f"{cli.PROG}: no C compiler (cc or gcc) is installed, so the preload shim cannot be built - "
-        f"set a profile with `{cli.PROG} profile <device> <id>` instead: a profile needs no shim\n")
+        f"set the port's settings with `{cli.PROG} settings set <device>` instead: "
+        "the settings need no shim\n")
 
 
 # Prints its process id, then waits for a line on stdin.
@@ -906,8 +952,8 @@ async def test_acc_shim_128_run_registers_the_process_it_then_becomes(cli_run, f
 
 async def test_acc_shim_128_run_starts_the_tool_when_the_server_refuses_the_run(
         cli_run, fake_tab, manager, monkeypatch):
-    """ACC-SHIM-128 when `POST runs` refuses the run, the tool starts all the same and exits with its own status, and `run` prints nothing about the refusal; a run without `--device` posts no device."""
-    await fake_tab()
+    """ACC-SHIM-128 when `POST runs` refuses the run, the tool starts all the same and exits with its own status, and `run` prints nothing about the refusal; the body names the run's device."""
+    await attach_serial(fake_tab)
     asked = []
 
     def refuse(body):
@@ -917,16 +963,17 @@ async def test_acc_shim_128_run_starts_the_tool_when_the_server_refuses_the_run(
     monkeypatch.setattr(manager, "register_run", refuse)
     script = "echo started; exit 7"
 
-    outcome = await cli_run("run", "--", "sh", "-c", script)
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", "sh", "-c", script)
 
-    assert asked == [{"pid": cli_run.children[-1].pid, "command": ["sh", "-c", script]}]
+    assert asked == [{"pid": cli_run.children[-1].pid, "command": ["sh", "-c", script],
+                      "device": SERIAL_NAME}]
     assert outcome == (7, b"started\n", "")
 
 
 async def test_acc_shim_128_run_starts_the_tool_when_the_server_does_not_answer_within_2_s(
         cli_run, fake_tab, monkeypatch):
     """ACC-SHIM-128 when `POST runs` gives no answer, `run` waits 2 s for it, then starts the tool and prints nothing about it."""
-    await fake_tab()
+    await attach_serial(fake_tab)
     asked = []
     answer = asyncio.Event()
 
@@ -936,7 +983,7 @@ async def test_acc_shim_128_run_starts_the_tool_when_the_server_does_not_answer_
 
     monkeypatch.setattr(RunsHandler, "post", silent)
 
-    outcome = await cli_run("run", "--", "sh", "-c", "echo started; exit 7")
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", "sh", "-c", "echo started; exit 7")
     ended = time.monotonic()
     answer.set()
     await asyncio.sleep(0.1)  # the handler ends within the test
@@ -979,7 +1026,7 @@ SKILL_NOT_FOUND = (banner_module.SKILL, "○ no agent finds it", str(SKILL_MD),
                    "jupyterlab-device help names the two commands that link it")
 COMMAND_ROWS = (
     ("jupyterlab-device list", "devices and paths"),
-    ("jupyterlab-device profile <dev> <id>", "set a board profile"),
+    ("jupyterlab-device settings apply <dev> <config>", "apply saved serial settings"),
     ("jupyterlab-device monitor read <dev>", "what a board sent"),
     ("jupyterlab-device terminal <dev>", "serial terminal"),
     ("jupyterlab-device help", "commands, examples"),
@@ -1225,12 +1272,14 @@ async def test_acc_shim_160_the_banner_holds_no_escape_sequence_when_no_color_is
 
 
 @pytest.mark.parametrize("tool", ["shell", "other"], ids=["the value of SHELL as its tool", "another tool"])
-async def test_acc_shim_145_run_prints_no_banner_on_a_terminal(tool, cli_run, screen, lab_shell, tmp_path, monkeypatch):
+async def test_acc_shim_145_run_prints_no_banner_on_a_terminal(tool, cli_run, fake_tab, screen, lab_shell, tmp_path, monkeypatch):
     """ACC-SHIM-145 `run` on a terminal prints nothing of its own for any tool: not for the program that the variable SHELL names, which is the shell command of the lab's terminals too, and not for another program."""
     programs = {"shell": lab_shell, "other": stand_in(tmp_path / "tool")}
     monkeypatch.setenv("SHELL", lab_shell)
+    await attach_serial(fake_tab)
 
-    status, displayed, piped = await on_a_terminal(cli_run, screen, "run", "--", programs[tool])
+    status, displayed, piped = await on_a_terminal(
+        cli_run, screen, "run", "--device", SERIAL_NAME, "--", programs[tool])
 
     assert (status, piped) == (0, (None, b""))
     assert displayed == "started\n"
@@ -1377,7 +1426,7 @@ def usb_record(tab, name):
 @pytest.mark.usefixtures("three_upload_tools")
 async def test_acc_shim_192_the_banner_lists_an_attached_serial_port_and_an_attached_usb_device(
         cli_run, fake_tab, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-192 (ACC-SHIM-139: one call for the devices) with one attached serial port and one attached USB device on a terminal of 80 columns the Devices section has the port with COM, its path and under it its settings and profile, then the USB device with USB, its name and under it its ids and product name; `shell` reads the devices with one call."""
+    """ACC-SHIM-192 (ACC-SHIM-139: one call for the devices) with one attached serial port and one attached USB device on a terminal of 80 columns the Devices section has the port with COM, its path and under it its settings and action on open, then the USB device with USB, its name and under it its ids and product name; `shell` reads the devices with one call."""
     tab, path = await attach_serial(fake_tab)
     assert (await tab.claim_usb())["ok"]
     await tab.until(lambda: tab.devices["usb"])
@@ -1388,7 +1437,7 @@ async def test_acc_shim_192_the_banner_lists_an_attached_serial_port_and_an_atta
 
     assert (status, piped) == (0, (None, b""))
     assert plain(displayed) == banner(devices=(
-        f"● COM  {path}", "       115200 8N1  profile monitor",
+        f"● COM  {path}", "       115200 8N1  on open: none",
         f"● USB  {USB_NAME}", f"       {usb['vendorId']:04x}:{usb['productId']:04x}  {usb['productName']}"),
     ) + "started\n"
     assert len(asked) == 1
@@ -1420,10 +1469,36 @@ async def test_acc_shim_192_the_banner_lists_no_detached_device_and_no_device_wi
     column = max(len(first), len(fourth), len(SECOND_USB_NAME))
     assert status == 0
     assert plain(displayed) == banner(devices=(
-        f"● COM  {first:<{column}}  115200 8N1  profile monitor",
-        f"● COM  {fourth:<{column}}  115200 8N1  profile monitor",
+        f"● COM  {first:<{column}}  115200 8N1  on open: none",
+        f"● COM  {fourth:<{column}}  115200 8N1  on open: none",
         f"● USB  {SECOND_USB_NAME:<{column}}  {usb['vendorId']:04x}:{usb['productId']:04x}  {usb['productName']}"),
         columns=170) + "started\n"
+
+
+@pytest.mark.usefixtures("three_upload_tools")
+async def test_acc_shim_192_the_information_of_every_device_goes_to_the_next_line_when_one_device_line_is_too_wide(
+        cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-192 on a terminal whose banner is exactly as wide as the line of the USB device and narrower than the line of the serial port, the information of both devices stands on the line under the device."""
+    tab, path = await attach_serial(fake_tab)
+    assert (await tab.claim_usb())["ok"]
+    await tab.until(lambda: tab.devices["usb"])
+    usb = usb_record(tab, USB_NAME)
+    serial_info = "115200 8N1  on open: none"
+    usb_info = f"{usb['vendorId']:04x}:{usb['productId']:04x}  {usb['productName']}"
+    # A device line: "  ● COM  " or "  ● USB  ", the name in a column as wide as the longest name, two spaces, the information.
+    column = max(len(path), len(USB_NAME))
+    width = 9 + column + 2 + len(usb_info)
+    assert 9 + column + 2 + len(serial_info) > width
+    columns = (4 * width + 2) // 3  # the terminal whose banner, 75% of its columns, is `width` columns wide
+    assert banner_width(columns) == width
+    monkeypatch.setenv("COLUMNS", str(columns))
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+
+    assert status == 0
+    assert plain(displayed) == banner(devices=(
+        f"● COM  {path}", f"       {serial_info}", f"● USB  {USB_NAME}", f"       {usb_info}"),
+        columns=columns) + "started\n"
 
 
 @pytest.mark.usefixtures("three_upload_tools")
@@ -1487,19 +1562,20 @@ async def test_acc_shim_139_shell_waits_2_s_for_the_devices_then_starts(
     assert len(asked) == 1 and 1.8 < ended - asked[0] < 5
 
 
-@pytest.mark.parametrize("words, streams", [(("run", "--", "{shell}"), ("stdin", "stdout")),
-                                            (("shell",), ("stdin", "stderr"))],
+@pytest.mark.parametrize("words, streams, reads",
+                         [(("run", "--device", SERIAL_NAME, "--", "{shell}"), ("stdin", "stdout"), 1),
+                          (("shell",), ("stdin", "stderr"), 0)],
                          ids=["run with a tool on a terminal", "shell with a pipe as standard output"])
 async def test_acc_shim_139_the_devices_are_read_only_when_the_banner_is_printed(
-        words, streams, cli_run, fake_tab, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-139 a command that prints no banner makes no call for the devices: `run`, and `shell` whose standard output is no terminal."""
+        words, streams, reads, cli_run, fake_tab, screen, lab_shell, monkeypatch):
+    """ACC-SHIM-139 a command that prints no banner does not read the devices for a banner: `run` reads them once, for the attached device it names, and `shell` whose standard output is no terminal reads them not at all."""
     await attach_serial(fake_tab)
     asked = device_calls(monkeypatch)
 
     status, _, _ = await on_a_terminal(
         cli_run, screen, *(word.format(shell=lab_shell) for word in words), streams=streams)
 
-    assert status == 0 and asked == []
+    assert status == 0 and len(asked) == reads
 
 
 # What the Environment section of the banner is for the upload tools on PATH, in the order they are put there.
@@ -1553,19 +1629,24 @@ async def test_acc_shim_193_a_file_that_is_no_program_is_not_named_in_the_enviro
 
 
 @pytest.mark.parametrize("columns", [80, 170])
+@pytest.mark.usefixtures("three_upload_tools")
 async def test_acc_shim_190_the_name_line_ends_with_device_shell_at_the_edge_of_the_banner(
         columns, cli_run, screen, lab_shell, monkeypatch):
-    """ACC-SHIM-190 (ACC-PANEL-140: device shell, no word shim) under the logo and an empty line the name line has the diamond, the name of the command and its version, and ends with `device shell` at the right edge of the banner; the banner does not hold the word shim."""
+    """ACC-SHIM-190 (ACC-PANEL-140: device shell, no word shim) under the logo and an empty line the name line has the diamond, the name of the command and its version, and ends with `device shell` at the right edge of the banner; then the sections Environment, Devices, Agent skill and Commands, each opened by a rule with its title, and a rule under the last; the banner does not hold the word shim."""
     monkeypatch.setenv("COLUMNS", str(columns))
 
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
     lines = plain(displayed).split("\n")
     name_line = lines[13 if columns == 80 else 7]
+    width = banner_width(columns)
     assert status == 0
     assert lines[12 if columns == 80 else 6] == ""
     assert name_line.startswith(f" ◆ jupyterlab-device {__version__}  ")
-    assert name_line.endswith(" device shell") and len(name_line) == banner_width(columns)
+    assert name_line.endswith(" device shell") and len(name_line) == width
+    assert [line for line in lines if line.startswith("──")] == [
+        *(rule(title, width) for title in ("Environment", "Devices", "Agent skill", "Commands")), "─" * width]
+    assert plain(displayed) == banner(columns=columns) + "started\n"
     assert "shim" not in displayed.lower()
 
 
@@ -1576,14 +1657,15 @@ def commands_section(displayed, columns):
 
 
 async def test_acc_cli_195_the_commands_section_lists_five_commands_with_what_they_do(cli_run, screen, lab_shell):
-    """ACC-CLI-195 (ACC-CLI-141 and ACC-CLI-158: list and help) on a terminal of 80 columns the Commands section has one line for each of list, profile, monitor read, terminal and help, with what it does in one column; the banner holds no `--help`."""
+    """ACC-CLI-195 (ACC-CLI-141 and ACC-CLI-158: list and help) on a terminal of 80 columns the Commands section has one entry for each of list, settings, monitor read, terminal and help; the longer command and its description do not fit in one column, so each description stands under its command; the banner holds no `--help`."""
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
 
     section = commands_section(displayed, 80)
     assert status == 0
-    assert [line.split("  ")[1].split()[:2] for line in section] == [
-        [cli.PROG, "list"], [cli.PROG, "profile"], [cli.PROG, "monitor"], [cli.PROG, "terminal"], [cli.PROG, "help"]]
-    assert len({line.index(what) for line, (_, what) in zip(section, COMMAND_ROWS)}) == 1
+    assert section == [
+        line for command, what in COMMAND_ROWS for line in (f"  {command}", f"      {what}")]
+    assert [line.split()[:2] for line in section[::2]] == [
+        [cli.PROG, "list"], [cli.PROG, "settings"], [cli.PROG, "monitor"], [cli.PROG, "terminal"], [cli.PROG, "help"]]
     assert "--help" not in displayed
 
 
@@ -1706,7 +1788,7 @@ def help_section(title):
 
 
 def test_acc_cli_196_the_help_has_a_quick_start_whose_command_lines_parse():
-    """ACC-CLI-196 the top-level help has a quick start section with five numbered steps: the plus icon of the panel that the description names, then list, profile, an upload under `run --` and monitor read; each command line of a step is one the parser of the CLI accepts."""
+    """ACC-CLI-196 the top-level help has a quick start section with five numbered steps: the plus icon of the panel that the description names, then list, settings, an upload under `run --device` and monitor read; each command line of a step is one the parser of the CLI accepts."""
     section = help_section("quick start")
     text = " ".join(" ".join(section).split())
     steps = [line.strip() for line in section if re.match(r"  \d\. ", line)]
@@ -1715,8 +1797,8 @@ def test_acc_cli_196_the_help_has_a_quick_start_whose_command_lines_parse():
     assert "attaches the board in the panel of the lab named above: the plus icon, Connect Serial Port" in text
     assert "Chrome's dialog" in text and f"{cli.PROG} request serial" in text
     commands = [shlex.split(step[3:])[1:] for step in steps[1:]]
-    assert [words[0] for words in commands] == ["list", "profile", "run", "monitor"]
-    assert commands[2][1] == "--"
+    assert [words[0] for words in commands] == ["list", "settings", "run", "monitor"]
+    assert commands[2][1:3] == ["--device", "tty-2341-0043"] and commands[2][3] == "--"
     for words in commands:
         cli.build_parser().parse_args(words[:words.index("--")] if "--" in words else words)
 
@@ -1745,14 +1827,14 @@ def test_acc_cli_197_the_help_names_the_agent_skill_and_the_commands_that_link_i
 UPLOAD_EXAMPLES = {
     "avrdude": ("avrdude -c arduino -p atmega328p -b 115200 -P <path> -U flash:w:firmware.hex:i",
                 "/run/devices/tty-2341-0043"),
-    "stm32flash": ("jupyterlab-device run -- stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>",
+    "stm32flash": ("jupyterlab-device run --device <name> -- stm32flash -b 115200 -w firmware.bin -v -g 0x0 <path>",
                    "/run/devices/tty-0403-6001"),
-    "esptool": ("jupyterlab-device run -- esptool --port <path> write-flash 0x0 firmware.bin",
+    "esptool": ("jupyterlab-device run --device <name> -- esptool --port <path> write-flash 0x0 firmware.bin",
                 "/run/devices/tty-10c4-ea60"),
 }
 EXAMPLES_HEAD = """
-examples for the upload tools on PATH; <path> is the path of the serial device,
-which `jupyterlab-device list` prints:
+examples for the upload tools on PATH; <name> is the serial device, as
+`jupyterlab-device list` prints it, and <path> is its path:
 """
 NO_UPLOAD_TOOL = "\nNo upload tool is on PATH. Known tools: avrdude, stm32flash, esptool, pio.\n"
 
@@ -1774,7 +1856,8 @@ def top_help():
 def example_lines(tools, prefixed=True):
     """The example lines of the help for these tools, in the order of the help."""
     lines = (UPLOAD_EXAMPLES[tool][0] for tool in UPLOAD_EXAMPLES if tool in tools)
-    return "".join(f"  {line if prefixed else line.removeprefix('jupyterlab-device run -- ')}\n" for line in lines)
+    prefix = "jupyterlab-device run --device <name> -- "
+    return "".join(f"  {line if prefixed else line.removeprefix(prefix)}\n" for line in lines)
 
 
 @pytest.mark.parametrize("tools", [("avrdude",), ("esptool", "stm32flash"), ("esptool", "avrdude", "stm32flash")],
@@ -1804,7 +1887,7 @@ def test_acc_cli_141_the_top_level_help_says_that_no_upload_tool_is_on_path(exec
 
 
 def test_acc_cli_141_inside_a_device_shell_the_examples_have_no_run_prefix(tmp_path, monkeypatch):
-    """ACC-CLI-141 inside a device shell, where JUPYTERLAB_DEVICE_SHIM_DIR is set, the stm32flash line and the esptool line have no `jupyterlab-device run -- ` before the tool; outside one they have it, and the avrdude line never has it."""
+    """ACC-CLI-141 inside a device shell, where JUPYTERLAB_DEVICE_SHIM_DIR is set, the stm32flash line and the esptool line have no `jupyterlab-device run --device <name> -- ` before the tool; outside one they have it, and the avrdude line never has it."""
     path_with(monkeypatch, tmp_path / "tools", *UPLOAD_EXAMPLES)
     outside = top_help()
     monkeypatch.setenv("JUPYTERLAB_DEVICE_SHIM_DIR", "/run/devices/.shim")
@@ -1829,7 +1912,8 @@ def test_acc_cli_141_each_example_of_the_help_is_a_command_line_of_the_readme(tm
 
     assert len(printed) == 3
     for line, (_, device) in zip(printed, UPLOAD_EXAMPLES.values()):
-        assert line.replace("<path>", device) in documented, line
+        written = line.replace("<path>", device).replace("<name>", device.rsplit("/", 1)[-1])
+        assert written in documented, line
 
 
 def test_acc_cli_141_the_help_of_the_subcommands_does_not_change(tmp_path, monkeypatch):
@@ -1858,7 +1942,8 @@ async def test_acc_cli_141_the_command_prints_the_examples_where_no_server_answe
     assert outcome.out.decode().endswith(EXAMPLES_HEAD + example_lines(["avrdude"]))
 
 
-PIO_UPLOAD = ["run", "--", "pio", "run", "-t", "upload", "--upload-port", "/run/devices/tty-2341-0043"]
+PIO_UPLOAD = ["run", "--device", "tty-2341-0043", "--", "pio", "run", "-t", "upload",
+              "--upload-port", "/run/devices/tty-2341-0043"]
 
 
 @pytest.mark.parametrize("asked", [("run", "--help"), ("help", "run")], ids=" ".join)
@@ -2049,3 +2134,315 @@ async def test_acc_cli_85_a_usb_failure_is_one_line_on_stderr(cli_run, fake_tab)
     assert wrong.status == 2 and "--data is hexadecimal digits" in wrong.err
     assert (stalled.status, stalled.out) == (1, b"") and stalled.err.startswith(f"{cli.PROG}: stall: ")
     assert refused == Outcome(1, b"", f"{cli.PROG}: NetworkError: Unable to claim interface.\n")
+
+
+# ----------------------------------------------------------------------------- probe
+
+PROBE_FIELDS = {"device", "probe", "identified", "conclusion", "next", "details"}
+AVR_SIGNATURE = 'echo "avrdude: Device signature = 0x1e950f (probably m328p)"'
+STM32_ANSWER = ('echo "Version      : 0x31"\n'
+                'echo "Device ID    : 0x0410 (STM32F10xxx Medium-density)"')
+ESP_ANSWER = 'echo "Chip is ESP32-D0WD-V3 (revision v3.1)"'
+READABLE = b"boot ok\r\nready\r\n"
+GARBAGE = b"\x00\x01\x02\x80\xff\xfe"
+
+
+def probe_next(outcome):
+    """The one `next:` line of a probe run: its command, which must be the last line of stdout."""
+    lines = outcome.out.decode().splitlines()
+    found = [line for line in lines if line.startswith("next: ")]
+    assert len(found) == 1, f"one next line, got {lines!r}"
+    assert lines[-1] == found[0], f"the next line is not the last line: {lines!r}"
+    return found[0][len("next: "):]
+
+
+def probe_parsed(command):
+    """The real parser's answer to a next command, which must leave no word unknown."""
+    words = shlex.split(command)
+    assert words[0] == cli.PROG, command
+    own = words[1:]
+    if own and own[0] == "run" and "--" in own:
+        own = own[:own.index("--")]
+    parsed, unknown = cli.build_parser().parse_known_args(own)
+    assert unknown == [], f"{command} leaves {unknown} to the parser"
+    return parsed
+
+
+def assert_probe_agrees(text, document):
+    """The text of one probe run and the JSON document of another carry the same facts."""
+    lines = text.out.decode().splitlines()
+    assert set(document) == PROBE_FIELDS
+    assert document["conclusion"] == lines[0]
+    assert document["next"] == probe_next(text)
+    assert document["identified"] == (text.status == 0)
+    assert isinstance(document["details"], dict)
+
+
+@pytest.fixture
+def probe_tools(upload_tools):
+    """Put a stand-in upload tool on PATH: `probe_tools("avrdude", 'echo "1e950f"')`."""
+
+    def install(name, script):
+        folder = upload_tools()
+        path = folder / name
+        path.write_text("#!/bin/sh\n" + script.rstrip("\n") + "\n")
+        path.chmod(0o755)
+        return path
+
+    return install
+
+
+def test_acc_cli_211_probe_help_lists_baud_avr_stm32_and_esp():
+    """ACC-CLI-211 `probe --help` lists baud, avr, stm32 and esp, each with a description and examples, and the top-level help has a line for probe."""
+    text = PARSERS[("probe",)].format_help()
+    for name in ("baud", "avr", "stm32", "esp"):
+        assert re.search(rf"^    {name} +\S", text, re.MULTILINE), f"no line for {name} in probe --help"
+        assert ("probe", name) in PARSERS, f"no parser for probe {name}"
+        leaf = PARSERS[("probe", name)].format_help()
+        assert f"{cli.PROG} probe {name} " in leaf
+    assert "\n    probe " in PARSERS[()].format_help()
+
+
+async def test_acc_cli_211_each_tool_probe_identifies_the_board_and_prints_text_and_json(
+        cli_run, fake_tab, probe_tools):
+    """ACC-CLI-211 probe avr, probe stm32 and probe esp each identify the simulated board with exit status 0, print one conclusion and one next step, and carry the same facts in --json."""
+    probe_tools("avrdude", AVR_SIGNATURE)
+    probe_tools("stm32flash", STM32_ANSWER)
+    probe_tools("esptool", ESP_ANSWER)
+    await attach_serial(fake_tab)
+    expected = {"avr": "ATmega328P", "stm32": "0x0410", "esp": "ESP32-D0WD-V3"}
+    for name, board in expected.items():
+        text = await cli_run("probe", name, SERIAL_NAME)
+        assert (text.status, text.err) == (0, ""), name
+        lines = text.out.decode().splitlines()
+        assert len(lines) == 2, lines
+        assert board in lines[0], lines
+        if name == "stm32":
+            assert "BOOT0" in lines[0]
+        probe_parsed(probe_next(text))
+        document = json.loads((await cli_run("probe", name, SERIAL_NAME, "--json")).out)
+        assert_probe_agrees(text, document)
+        assert document["identified"] is True
+        assert (document["device"], document["probe"]) == (SERIAL_NAME, name)
+
+
+async def test_acc_cli_211_the_tool_probe_starts_its_uploader_through_run(
+        cli_run, fake_tab, probe_tools, device_dir, tmp_path):
+    """ACC-CLI-211 the uploader of probe avr runs under `jupyterlab-device run --device`: its process holds the preload shim and the shim directory of the bridge."""
+    marker = tmp_path / "tool-environment"
+    probe_tools("avrdude", f'echo "$LD_PRELOAD" > "{marker}"\n'
+                           f'echo "$JUPYTERLAB_DEVICE_SHIM_DIR" >> "{marker}"\n'
+                           'echo "1e950f"')
+    await attach_serial(fake_tab)
+
+    outcome = await cli_run("probe", "avr", SERIAL_NAME)
+
+    assert (outcome.status, outcome.err) == (0, "")
+    loaded, shim_dir = marker.read_text().splitlines()
+    cache = os.path.join(os.environ["HOME"], ".cache", "jupyterlab-device-bridge")
+    assert loaded.split(os.pathsep)[0].startswith(os.path.join(cache, "devshim-"))
+    assert shim_dir == os.path.join(device_dir, ".shim")
+
+
+async def test_acc_cli_211_a_tool_probe_that_does_not_identify_the_board_exits_1(
+        cli_run, fake_tab, probe_tools):
+    """ACC-CLI-211 a signature that is not an ATmega328P and an avrdude that reads no signature each exit 1 with one conclusion and one parsable next step; a tool that is not on PATH exits 1 and its next step names the installer script in envs."""
+    await attach_serial(fake_tab)
+
+    missing = await cli_run("probe", "avr", SERIAL_NAME)
+    probe_tools("avrdude", 'echo "deadbe"')
+    wrong = await cli_run("probe", "avr", SERIAL_NAME)
+    wrong_json = await cli_run("probe", "avr", SERIAL_NAME, "--json")
+    probe_tools("avrdude", 'echo "avrdude: initialization failed, rc=-1"\nexit 1')
+    silent = await cli_run("probe", "avr", SERIAL_NAME)
+
+    for outcome in (missing, wrong, silent):
+        assert (outcome.status, outcome.err) == (1, ""), outcome
+        assert len(outcome.out.decode().splitlines()) == 2
+        probe_parsed(probe_next(outcome))
+    assert "avrdude is not on PATH" in missing.out.decode().splitlines()[0]
+    assert "firmware-avr.py" in probe_next(missing)
+    assert "envs" in probe_next(missing)
+    assert "signature deadbe" in wrong.out.decode().splitlines()[0]
+    assert "read no signature" in silent.out.decode().splitlines()[0]
+    document = json.loads(wrong_json.out)
+    assert_probe_agrees(wrong, document)
+    assert document["identified"] is False
+
+
+async def test_acc_cli_212_no_attached_device_names_reattach_and_the_config_apply(cli_run):
+    """ACC-CLI-212 with no attached serial device `probe avr` exits 1, and its conclusion names the request command and the config apply."""
+    outcome = await cli_run("probe", "avr")
+
+    assert (outcome.status, outcome.err) == (1, "")
+    lines = outcome.out.decode().splitlines()
+    assert len(lines) == 2
+    assert f"{cli.PROG} request serial --reason" in lines[0]
+    assert f"{cli.PROG} settings apply <name> monitor" in lines[0]
+    command = probe_next(outcome)
+    assert command.startswith(f"{cli.PROG} request serial --reason")
+    probe_parsed(command)
+    document = json.loads((await cli_run("probe", "avr", "--json")).out)
+    assert_probe_agrees(outcome, document)
+    assert document["device"] is None
+
+
+async def test_acc_cli_212_a_detached_device_names_reattach_and_the_config_apply(cli_run, fake_tab):
+    """ACC-CLI-212 a device whose tab closed exits 1, and its conclusion names the request command and the config apply."""
+    tab, _ = await attach_serial(fake_tab)
+    watcher = await fake_tab("tab-2")
+    await tab.close()
+    await watcher.until(lambda: record(watcher)["state"] == "detached")
+
+    outcome = await cli_run("probe", "avr", SERIAL_NAME)
+
+    assert (outcome.status, outcome.err) == (1, "")
+    lines = outcome.out.decode().splitlines()
+    assert f"{SERIAL_NAME} is detached" in lines[0]
+    assert f"{cli.PROG} request serial --reason" in lines[0]
+    assert f"{cli.PROG} settings apply {SERIAL_NAME} default" in lines[0]
+    command = probe_next(outcome)
+    assert command.startswith(f"{cli.PROG} request serial --reason")
+    probe_parsed(command)
+    document = json.loads((await cli_run("probe", "avr", SERIAL_NAME, "--json")).out)
+    assert_probe_agrees(outcome, document)
+
+
+async def test_acc_cli_212_several_attached_devices_refuse_and_list_their_names(cli_run, fake_tab):
+    """ACC-CLI-212 with two attached serial devices and no DEVICE `probe avr` exits 2, and its conclusion lists the names of both."""
+    await attach_serial(fake_tab)
+    second = await fake_tab("tab-2")
+    assert (await second.claim_serial("s:0403:6001:0"))["ok"]
+    await second.until(lambda: any(device["name"] == "tty-0403-6001"
+                                   and device["portState"] == "open"
+                                   for device in second.devices["serial"]))
+
+    outcome = await cli_run("probe", "avr")
+
+    assert (outcome.status, outcome.err) == (2, "")
+    lines = outcome.out.decode().splitlines()
+    assert SERIAL_NAME in lines[0] and "tty-0403-6001" in lines[0]
+    assert probe_next(outcome) == f"{cli.PROG} list"
+    probe_parsed(probe_next(outcome))
+    document = json.loads((await cli_run("probe", "avr", "--json")).out)
+    assert_probe_agrees(outcome, document)
+    assert document["device"] is None
+    assert set(document["details"]["attached"]) == {SERIAL_NAME, "tty-0403-6001"}
+
+
+async def test_acc_cli_212_an_unknown_device_and_a_port_in_error_name_the_next_step(cli_run, fake_tab):
+    """ACC-CLI-212 an unknown device name exits 1 with `list` as the next step, and a port the browser could not open exits 1 with the config apply as the next step."""
+    tab, _ = await attach_serial(fake_tab)
+
+    unknown = await cli_run("probe", "avr", "tty-none")
+    await tab.send({"type": "serial-state", "name": SERIAL_NAME, "state": "error",
+                    "settings": None, "signals": {}, "error": "Failed to open serial port."})
+    await tab.until(lambda: record(tab)["portState"] == "error")
+    in_error = await cli_run("probe", "avr", SERIAL_NAME)
+    in_error_json = await cli_run("probe", "avr", SERIAL_NAME, "--json")
+
+    assert (unknown.status, unknown.err) == (1, "")
+    assert "no serial device named tty-none" in unknown.out.decode().splitlines()[0]
+    assert probe_next(unknown) == f"{cli.PROG} list"
+    probe_parsed(probe_next(unknown))
+    assert (in_error.status, in_error.err) == (1, "")
+    lines = in_error.out.decode().splitlines()
+    assert "failed in the browser: Failed to open serial port." in lines[0]
+    assert probe_next(in_error) == f"{cli.PROG} settings apply {SERIAL_NAME} default"
+    probe_parsed(probe_next(in_error))
+    assert_probe_agrees(in_error, json.loads(in_error_json.out))
+
+
+async def test_acc_cli_212_a_probe_with_no_server_prints_one_parsable_next_line(no_server, cli_run):
+    """ACC-CLI-212 when the server does not answer `probe esp` exits 1 with one conclusion and one next step the parser accepts."""
+    outcome = await cli_run("probe", "esp", "tty-any")
+
+    assert outcome.status == 1
+    assert len(outcome.out.decode().splitlines()) == 2
+    command = probe_next(outcome)
+    assert command == f"{cli.PROG} status"
+    probe_parsed(command)
+
+
+async def test_acc_cli_213_probe_baud_reports_the_readable_rate_and_puts_the_port_back(
+        cli_run, fake_tab):
+    """ACC-CLI-213 probe baud sets 9600 to 230400 in order, reports 57600 as the readable rate, and puts the settings record and the open state back afterwards."""
+    tab, _ = await attach_serial(fake_tab)
+    await cli_run("settings", "set", SERIAL_NAME, "--baud", "57600", "--data-bits", "7",
+                  "--parity", "even", "--stop-bits", "2", "--on-open", "pulse-rts")
+    await tab.until(lambda: record(tab)["settings"]["baudRate"] == 57600
+                    and record(tab)["settings"]["parity"] == "even")
+    before = record(tab)
+    start = len(tab.got("serial-configure"))
+
+    async def answer():
+        seen = start
+        while True:
+            events = tab.got("serial-configure")
+            while seen < len(events):
+                baud = events[seen]["settings"]["baudRate"]
+                seen += 1
+                await asyncio.sleep(0.12)
+                await tab.port_sends(SERIAL_NAME, READABLE if baud == 57600 else GARBAGE)
+            await asyncio.sleep(0.01)
+
+    responder = asyncio.ensure_future(answer())
+    try:
+        outcome = await cli_run("probe", "baud", SERIAL_NAME)
+        await tab.until(lambda: len(tab.got("serial-configure")) >= start + len(probe.BAUD_RATES) + 1)
+        sent = [event["settings"]["baudRate"] for event in tab.got("serial-configure")[start:]]
+    finally:
+        responder.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await responder
+
+    assert (outcome.status, outcome.err) == (0, "")
+    lines = outcome.out.decode().splitlines()
+    assert len(lines) == 2, lines
+    assert "readable output at 57600 baud" in lines[0]
+    assert probe_next(outcome) == f"{cli.PROG} settings set {SERIAL_NAME} --baud 57600"
+    probe_parsed(probe_next(outcome))
+    assert sent == [*probe.BAUD_RATES, 57600]
+
+    await tab.until(lambda: record(tab)["settings"] == before["settings"]
+                    and record(tab)["configured"] == before["configured"])
+    # The tab sends no stats, so every field of the record is the pre-probe one.
+    assert record(tab) == before
+    assert tab.settings[SERIAL_NAME] == before["settings"]
+
+
+async def test_acc_cli_213_probe_baud_puts_the_port_back_when_no_rate_is_readable(
+        cli_run, fake_tab):
+    """ACC-CLI-213 when no rate sends readable text probe baud exits 1, puts the settings record and the open state back, and prints the same facts as text and as JSON."""
+    tab, _ = await attach_serial(fake_tab)
+    await cli_run("settings", "set", SERIAL_NAME, "--baud", "19200", "--parity", "odd")
+    await tab.until(lambda: record(tab)["settings"]["baudRate"] == 19200
+                    and record(tab)["settings"]["parity"] == "odd")
+    before = record(tab)
+
+    start = len(tab.got("serial-configure"))
+    text = await cli_run("probe", "baud", SERIAL_NAME)
+    await tab.until(lambda: len(tab.got("serial-configure")) >= start + len(probe.BAUD_RATES) + 1)
+    text_sent = len(tab.got("serial-configure")) - start
+
+    start = len(tab.got("serial-configure"))
+    document = json.loads((await cli_run("probe", "baud", SERIAL_NAME, "--json")).out)
+    await tab.until(lambda: len(tab.got("serial-configure")) >= start + len(probe.BAUD_RATES) + 1)
+    json_sent = len(tab.got("serial-configure")) - start
+
+    assert (text.status, text.err) == (1, "")
+    assert_probe_agrees(text, document)
+    assert document["identified"] is False
+    assert document["conclusion"].startswith(f"{SERIAL_NAME}: no readable output at any of")
+    assert "readableRate" not in document["details"]
+    assert document["details"]["restored"] is True
+    assert [entry["baudRate"] for entry in document["details"]["rates"]] == list(probe.BAUD_RATES)
+    assert all(entry["readable"] is False for entry in document["details"]["rates"])
+    probe_parsed(document["next"])
+    assert (text_sent, json_sent) == (len(probe.BAUD_RATES) + 1, len(probe.BAUD_RATES) + 1)
+
+    await tab.until(lambda: record(tab)["settings"] == before["settings"]
+                    and record(tab)["configured"] == before["configured"])
+    # The tab sends no stats, so every field of the record is the pre-probe one.
+    assert record(tab) == before
+    assert tab.settings[SERIAL_NAME] == before["settings"]

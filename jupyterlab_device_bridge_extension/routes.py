@@ -17,7 +17,7 @@ from jupyter_server.base.websocket import WebSocketMixin
 from jupyter_server.utils import url_path_join
 from tornado.websocket import WebSocketClosedError, WebSocketHandler
 
-from . import __version__, profiles
+from . import __version__, serial_settings
 from .manager import BridgeError, DeviceManager, Tab
 
 NAMESPACE = "jupyterlab-device-bridge-extension"
@@ -104,20 +104,35 @@ class DevicesHandler(BridgeHandler):
         self.finish(json.dumps(self.manager.table()))
 
 
-class ProfilesHandler(BridgeHandler):
-    """`GET profiles`: the built-in serial profiles."""
+class SettingsConfigsHandler(BridgeHandler):
+    """`GET settings-configs` lists the system and saved configs; `POST settings-configs` saves one."""
 
     @tornado.web.authenticated
     def get(self) -> None:
-        self.finish(json.dumps({"profiles": profiles.PROFILES}))
+        self.finish(json.dumps({"configs": self.manager.configs()}))
+
+    @tornado.web.authenticated
+    def post(self) -> None:
+        body = self.body()
+        values = {field: body.get(field) for field in serial_settings.ALL_FIELDS}
+        self.finish(json.dumps(self.manager.save_config(body.get("name"), values)))
 
 
-class SerialProfileHandler(BridgeHandler):
-    """`PUT serial/<name>/profile`: set the profile id or single fields; answers the record."""
+class SettingsConfigHandler(BridgeHandler):
+    """`DELETE settings-configs/<token>`: delete a user-saved config."""
+
+    @tornado.web.authenticated
+    def delete(self, token: str) -> None:
+        self.manager.delete_config(token)
+        self.finish("{}")
+
+
+class SerialSettingsHandler(BridgeHandler):
+    """`PUT serial/<name>/settings`: apply a config or single fields; answers the record."""
 
     @tornado.web.authenticated
     def put(self, name: str) -> None:
-        self.finish(json.dumps(self.manager.set_profile(name, self.body())))
+        self.finish(json.dumps(self.manager.set_settings(name, self.body())))
 
 
 class SerialMonitorHandler(BridgeHandler):
@@ -263,8 +278,9 @@ def setup_route_handlers(web_app: tornado.web.Application) -> None:
         (r"ws", TabSocketHandler),
         (r"status", StatusHandler),
         (r"devices", DevicesHandler),
-        (r"profiles", ProfilesHandler),
-        (rf"serial/{name}/profile", SerialProfileHandler),
+        (r"settings-configs", SettingsConfigsHandler),
+        (rf"settings-configs/{name}", SettingsConfigHandler),
+        (rf"serial/{name}/settings", SerialSettingsHandler),
         (rf"serial/{name}/monitor", SerialMonitorHandler),
         (rf"serial/{name}/(write|signals|action)", SerialCommandHandler),
         (r"requests", RequestsHandler),

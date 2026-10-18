@@ -16,6 +16,7 @@ import { Signal } from '@lumino/signaling';
 import { Menu, Panel, Widget } from '@lumino/widgets';
 
 import plugin from '../index';
+import { HELP_MARKDOWN } from '../help';
 import { DeviceBridgePanel } from '../panel';
 import type { IDeviceRequest, IRunRecord, ISerialDefaults } from '../protocol';
 import { DeviceBridgeStatus } from '../status';
@@ -71,6 +72,12 @@ const CONNECT_USB = 'device-bridge:connect-usb';
 const OPEN_TERMINAL = 'device-bridge:open-terminal';
 const START_RUN = 'device-bridge:start-run';
 const SHOW_PANEL = 'device-bridge:show-panel';
+/** The command of the lab that opens a file in its read-only Markdown Preview. */
+const MARKDOWN_VIEWER_OPEN = 'markdownviewer:open';
+/** The file at the root of the contents that holds the help document. */
+const HELP_PATH = 'Device Bridge Help';
+/** The id that the plugin gives the help tab when the viewer gives it none. */
+const HELP_ID = 'device-bridge-help';
 /** The command of jupyterlab_basic_terminal_extension that starts one program in a lab terminal. */
 const BASIC_TERMINAL_LAUNCH = 'basic-terminal:launch';
 /** The command of the lab that opens a terminal with a shell. The plugin never runs it. */
@@ -165,9 +172,19 @@ interface ILab {
   serial: SimSerial;
   usb: SimUsb;
   commands: CommandRegistry;
-  shell: { add: jest.Mock; activateById: jest.Mock };
+  shell: {
+    add: jest.Mock;
+    activateById: jest.Mock;
+    widgets: jest.Mock;
+  };
   /** Stands for the left sidebar of the lab: `shell.add` puts a widget into it. */
   sidebar: Panel;
+  /** Stands for the main area of the lab: `shell.add` with the area main puts a widget into it. */
+  main: Panel;
+  /** The stand-in of the contents API of the server: the read and the write of the help file. */
+  contents: { get: jest.Mock; save: jest.Mock };
+  /** The stand-in of the command `markdownviewer:open`: it records its arguments. */
+  markdown: jest.Mock;
   palette: { addItem: jest.Mock };
   mainMenu: { addMenu: jest.Mock };
   statusBar: { registerStatusItem: jest.Mock };
@@ -202,6 +219,12 @@ interface ILabOptions {
   loadFails?: boolean;
   /** True: the lab cannot save a setting; `settings.set` rejects with the reason `SAVE_REFUSED`. */
   saveFails?: boolean;
+  /**
+   * The id that the stand-in of the Markdown viewer gives its widget before the plugin
+   * sees it, as the document manager of the lab does. The default is a
+   * `document-manager-<n>` id; `''` gives the widget no id.
+   */
+  viewerId?: string;
   /**
    * The settings the user changed; every other setting has the default of the schema.
    * When omitted the user set showPanel to true: most tests read the panel, which the
@@ -272,9 +295,42 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
 
   const sidebar = new Panel();
   Widget.attach(sidebar, document.body);
+  const main = new Panel();
+  Widget.attach(main, document.body);
   const shell = {
-    add: jest.fn((widget: Widget) => sidebar.addWidget(widget)),
-    activateById: jest.fn()
+    add: jest.fn((widget: Widget, area?: string) =>
+      area === 'main' ? main.addWidget(widget) : sidebar.addWidget(widget)
+    ),
+    activateById: jest.fn(),
+    widgets: jest.fn((area: string) => (area === 'main' ? main.widgets : []))
+  };
+  // The stand-in of the Markdown Preview: the document manager puts the widget into
+  // the main area and gives it an id of its own unless a test says otherwise.
+  let opened = 0;
+  const markdown = jest.fn(async (args: { path?: string }) => {
+    const widget = new Widget();
+    widget.title.label = (args.path ?? '').split('/').pop() ?? '';
+    (widget as Widget & { content: unknown }).content = {
+      context: { path: args.path }
+    };
+    if (options.viewerId === undefined) {
+      widget.id = `document-manager-${++opened}`;
+    } else if (options.viewerId) {
+      widget.id = options.viewerId;
+    }
+    shell.add(widget, 'main');
+    return widget;
+  });
+  commands.addCommand(MARKDOWN_VIEWER_OPEN, { execute: markdown });
+  const contents = {
+    // The contents API answers 404 for a path that the server does not have.
+    get: jest.fn(async () => {
+      throw new ServerConnection.ResponseError({
+        status: 404,
+        statusText: 'Not Found'
+      } as unknown as Response);
+    }),
+    save: jest.fn(async () => ({}))
   };
   const palette = { addItem: jest.fn() };
   const mainMenu = { addMenu: jest.fn() };
@@ -288,7 +344,8 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
         baseUrl: 'http://lab.test/',
         wsUrl: 'ws://lab.test/'
       }),
-      terminals: { isAvailable: () => options.terminals !== false }
+      terminals: { isAvailable: () => options.terminals !== false },
+      contents
     }
   };
   const services =
@@ -306,6 +363,9 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     commands,
     shell,
     sidebar,
+    main,
+    contents,
+    markdown,
     palette,
     mainMenu,
     statusBar,
@@ -1454,7 +1514,7 @@ describe('plugin: the Info dialog of the runs section', () => {
     pio: '/run/devices/tty-2341-0043'
   };
   /** What a README line has in front of a tool that needs the shim. */
-  const RUN_PREFIX = 'jupyterlab-device run -- ';
+  const RUN_PREFIX = /^jupyterlab-device run (?:--device \S+ )?-- /;
 
   /** Make the server list one run, so that the panel offers Info, and click Info. */
   async function openInfo(all: ILab): Promise<void> {
@@ -1592,11 +1652,7 @@ describe('plugin: the Info dialog of the runs section', () => {
       found = block.exec(section!)
     ) {
       commandLines.push(
-        ...found[1]
-          .split('\n')
-          .map(line =>
-            line.startsWith(RUN_PREFIX) ? line.slice(RUN_PREFIX.length) : line
-          )
+        ...found[1].split('\n').map(line => line.replace(RUN_PREFIX, ''))
       );
     }
     const all = await lab();
@@ -2365,5 +2421,146 @@ describe('plugin: texts that send the user to the Devices panel', () => {
     for (const text of sending) {
       expect(text.split(VIEW_ITEM)).toHaveLength(2);
     }
+  });
+});
+
+describe('plugin: the help tab', () => {
+  /** The help file, as the contents API reports it. */
+  const file = (content: string): { content: string } => ({ content });
+
+  /** What the plugin wrote to the help file, as the contents API recorded it. */
+  const saves = (all: ILab): unknown[][] => all.contents.save.mock.calls;
+
+  /** The widgets of the main area that show the help file. */
+  const helpTabs = (all: ILab): Widget[] =>
+    all.main.widgets.filter(
+      widget =>
+        (widget as Widget & { content?: { context?: { path?: string } } })
+          .content?.context?.path === HELP_PATH
+    );
+
+  it('ACC-PANEL-227 a missing help file is written and the lab Markdown viewer opens it in one tab', async () => {
+    const all = await lab();
+
+    button(all, '[data-action="settings-help"]').click();
+    await tick();
+
+    expect(all.contents.get.mock.calls).toEqual([
+      [HELP_PATH, { content: true }]
+    ]);
+    expect(saves(all)).toEqual([
+      [HELP_PATH, { type: 'file', format: 'text', content: HELP_MARKDOWN }]
+    ]);
+    expect(all.markdown.mock.calls).toEqual([[{ path: HELP_PATH }]]);
+    expect(all.main.widgets).toHaveLength(1);
+    const [tab] = all.main.widgets;
+    // The title of a document tab is the name of its file, so the tab is titled
+    // Device Bridge Help. The stand-in of the document manager gives the tab an id
+    // of its own.
+    expect(tab.title.label).toBe('Device Bridge Help');
+    expect(tab.id).toBe('document-manager-1');
+    expect(helpTabs(all)).toEqual([tab]);
+  });
+
+  it('ACC-PANEL-227 an unchanged help file is not written again', async () => {
+    const all = await lab();
+    all.contents.get.mockResolvedValueOnce(file(HELP_MARKDOWN));
+
+    button(all, '[data-action="settings-help"]').click();
+    await tick();
+
+    expect(all.contents.get).toHaveBeenCalledTimes(1);
+    expect(all.contents.save).not.toHaveBeenCalled();
+    expect(all.markdown.mock.calls).toEqual([[{ path: HELP_PATH }]]);
+    expect(all.main.widgets).toHaveLength(1);
+  });
+
+  it('ACC-PANEL-227 a help file that holds other text is written with the help text', async () => {
+    const all = await lab();
+    all.contents.get.mockResolvedValueOnce(file('An older help text.'));
+
+    button(all, '[data-action="settings-help"]').click();
+    await tick();
+
+    expect(saves(all)).toEqual([
+      [HELP_PATH, { type: 'file', format: 'text', content: HELP_MARKDOWN }]
+    ]);
+    expect(all.markdown.mock.calls).toEqual([[{ path: HELP_PATH }]]);
+  });
+
+  it('ACC-PANEL-227 a second click activates the open help tab and opens neither a second tab nor a second file', async () => {
+    const all = await lab();
+    const help = button(all, '[data-action="settings-help"]');
+
+    help.click();
+    await tick();
+    const [tab] = all.main.widgets;
+
+    help.click();
+    await tick();
+
+    expect(all.main.widgets).toHaveLength(1);
+    expect(all.main.widgets[0]).toBe(tab);
+    expect(all.shell.activateById.mock.calls).toEqual([[tab.id]]);
+    expect(all.markdown).toHaveBeenCalledTimes(1);
+    expect(all.contents.get).toHaveBeenCalledTimes(1);
+    expect(all.contents.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('ACC-PANEL-227 a widget without an id gets the help id, and the id that the lab gave the viewer is kept', async () => {
+    const withoutId = await lab({ viewerId: '' });
+    button(withoutId, '[data-action="settings-help"]').click();
+    await tick();
+    expect(withoutId.main.widgets[0].id).toBe(HELP_ID);
+
+    const withId = await lab();
+    button(withId, '[data-action="settings-help"]').click();
+    await tick();
+    expect(withId.main.widgets[0].id).toBe('document-manager-1');
+  });
+
+  it('ACC-PANEL-227 a contents call that fails raises one error notification, opens no tab and leaves no rejected promise', async () => {
+    const all = await lab();
+    all.contents.get.mockRejectedValueOnce(
+      new Error('The contents server is down.')
+    );
+
+    button(all, '[data-action="settings-help"]').click();
+    await tick();
+    // Node reports a rejected promise without a handler when a task of the event loop
+    // ends. The test lives through one task, so a rejected promise would appear here.
+    await new Promise(resolve =>
+      jest.requireActual('timers').setImmediate(resolve)
+    );
+
+    expect(notifications()).toEqual([
+      [
+        'The help document could not be opened: The contents server is down.',
+        'error'
+      ]
+    ]);
+    expect(all.markdown).not.toHaveBeenCalled();
+    expect(all.main.widgets).toHaveLength(0);
+
+    // A save that fails is the same failure: no tab, one error notification.
+    all.contents.get.mockRejectedValueOnce(
+      new ServerConnection.ResponseError({
+        status: 404,
+        statusText: 'Not Found'
+      } as unknown as Response)
+    );
+    all.contents.save.mockRejectedValueOnce(new Error('Permission denied'));
+    button(all, '[data-action="settings-help"]').click();
+    await tick();
+
+    expect(notifications()).toEqual([
+      [
+        'The help document could not be opened: The contents server is down.',
+        'error'
+      ],
+      ['The help document could not be opened: Permission denied', 'error']
+    ]);
+    expect(all.markdown).not.toHaveBeenCalled();
+    expect(all.main.widgets).toHaveLength(0);
   });
 });

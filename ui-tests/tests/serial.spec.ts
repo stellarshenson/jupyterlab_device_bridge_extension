@@ -44,7 +44,7 @@ test.use({ autoGoto: false, mockSettings: PANEL_SHOWN });
 const ALL_BYTES = Array.from({ length: 256 }, (_, value) => value);
 const ALL_BYTES_HEX = Buffer.from(ALL_BYTES).toString('hex');
 const BRIDGE_SOCKET = 'jupyterlab-device-bridge-extension/ws';
-/** The settings of the default profile, as the worker passes them to `port.open()`. */
+/** The settings of the built-in Monitor config, as the worker passes them to `port.open()`. */
 const MONITOR_OPEN = {
   baudRate: 115200,
   dataBits: 8,
@@ -158,7 +158,7 @@ test.describe('serial port', () => {
     expect(toolReport(await tool.done).read).toEqual([0x55, 0xaa]);
 
     // Each open of the port with its baud rate, and each byte written, in order: the
-    // port is opened at 57600 for the tool's bytes and at the profile's rate after it.
+    // port is opened at 57600 for the tool's bytes and at the port's rate after it.
     const opensAndBytes = async (): Promise<number[]> =>
       (await simCalls(page, port.id)).flatMap((call: ISimCall) => {
         if (call.op === 'open') {
@@ -382,18 +382,18 @@ test.describe('serial port', () => {
     await second.close();
   });
 
-  test('ACC-PROF-31 a tool without the shim whose DTR call is refused still exchanges bytes with the port and gets the action of the profile', async ({
+  test('ACC-PROF-31 a tool without the shim whose DTR call is refused still exchanges bytes with the port and gets the action of the config', async ({
     page
   }) => {
     const port = simSerial();
     await openLab(page, { serial: [port] });
     await addSerial(page, port);
-    const profile = await api('PUT', `serial/${port.name}/profile`, {
-      profile: 'arduino-upload'
+    const applied = await api('PUT', `serial/${port.name}/settings`, {
+      config: 'arduino-upload'
     });
-    expect(profile.status).toBe(200);
+    expect(applied.status).toBe(200);
 
-    const tool = startTool(profile.body.path, [
+    const tool = startTool(applied.body.path, [
       '--signals',
       'dtr=0',
       '--write',
@@ -406,7 +406,7 @@ test.describe('serial port', () => {
     // A pty has no modem lines: the DTR call of the tool itself is refused.
     expect(report.signals).toEqual(['ENOTTY']);
     expect(report.read).toEqual([0x30, 0x20]);
-    // The profile pulsed DTR when the tool opened the device, before the tool's bytes.
+    // The config pulsed DTR when the tool opened the device, before the tool's bytes.
     const signalsAndBytes = async (): Promise<unknown[]> =>
       (await simCalls(page, port.id))
         .filter(call => call.op === 'setSignals' || call.op === 'write')
@@ -431,7 +431,7 @@ test.describe('default serial settings', () => {
     const dialog = page.locator('.jp-Dialog');
     const values = await Promise.all(
       ['baudRate', 'dataBits', 'parity', 'stopBits', 'onOpen'].map(name =>
-        dialog.locator(`[data-profile-field="${name}"]`).inputValue()
+        dialog.locator(`[data-setting-field="${name}"]`).inputValue()
       )
     );
     await dialog
@@ -477,13 +477,14 @@ test.describe('default serial settings', () => {
         ]
       ]);
     expect(await serialRecord(port.name)).toMatchObject({
-      profile: 'monitor',
-      overrides: defaults,
+      config: null,
+      configName: null,
+      configured: defaults,
       settings: { baudRate: 9600, dataBits: 7, parity: 'even', stopBits: 2 }
     });
     const portRow = row(page, port.name);
     await expect(field(portRow, 'baud')).toHaveText('9600');
-    await expect(field(portRow, 'profile')).toHaveText('monitor');
+    await expect(field(portRow, 'config')).toHaveText('custom');
     expect(await editorValues(page, portRow)).toEqual([
       '9600',
       '7',
@@ -564,7 +565,8 @@ test.describe('default serial settings', () => {
 
     // The server takes the stored values: a port added now gets them.
     await addSerial(page, port);
-    expect((await serialRecord(port.name)).overrides).toEqual({
+    expect((await serialRecord(port.name)).configured).toEqual({
+      baudRate: 115200,
       dataBits: 7,
       parity: 'even',
       stopBits: 2,
@@ -595,8 +597,14 @@ test.describe('default serial settings', () => {
       .poll(() => simArgs(page, second.id, 'open'))
       .toEqual([[{ ...MONITOR_OPEN, baudRate: 57600 }]]);
     expect(await serialRecord(second.name)).toMatchObject({
-      profile: 'monitor',
-      overrides: { baudRate: 57600 },
+      config: null,
+      configured: {
+        baudRate: 57600,
+        dataBits: 8,
+        parity: 'none',
+        stopBits: 1,
+        onOpen: 'none'
+      },
       settings: { baudRate: 57600, dataBits: 8, parity: 'none', stopBits: 1 }
     });
     await expect(field(row(page, second.name), 'baud')).toHaveText('57600');
@@ -605,8 +613,15 @@ test.describe('default serial settings', () => {
     const unchanged = {
       state: 'attached',
       portState: 'open',
-      profile: 'monitor',
-      overrides: {},
+      config: 'default',
+      configName: 'Default',
+      configured: {
+        baudRate: 115200,
+        dataBits: 8,
+        parity: 'none',
+        stopBits: 1,
+        onOpen: 'none'
+      },
       settings: { baudRate: 115200, dataBits: 8, parity: 'none', stopBits: 1 }
     };
     expect(await serialRecord(first.name)).toMatchObject(unchanged);
@@ -628,7 +643,7 @@ test.describe('default serial settings', () => {
       )
       .toBe('open');
     expect(await serialRecord(first.name)).toMatchObject(unchanged);
-    expect((await serialRecord(second.name)).overrides).toEqual({
+    expect((await serialRecord(second.name)).configured).toMatchObject({
       baudRate: 57600
     });
     await expect
