@@ -2651,7 +2651,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@jupyterlab/rendermime@npm:^4.6.4":
+"@jupyterlab/rendermime@npm:^4.6.0, @jupyterlab/rendermime@npm:^4.6.4":
   version: 4.6.4
   resolution: "@jupyterlab/rendermime@npm:4.6.4"
   dependencies:
@@ -7664,6 +7664,7 @@ __metadata:
     "@jupyterlab/apputils": ^4.7.0
     "@jupyterlab/coreutils": ^6.6.0
     "@jupyterlab/mainmenu": ^4.6.0
+    "@jupyterlab/rendermime": ^4.6.0
     "@jupyterlab/services": ^7.6.0
     "@jupyterlab/settingregistry": ^4.6.0
     "@jupyterlab/statusbar": ^4.6.0
