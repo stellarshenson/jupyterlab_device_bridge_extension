@@ -1,6 +1,6 @@
 {
     "name": "jupyterlab_device_bridge_extension",
-    "version": "1.0.35",
+    "version": "1.0.62",
     "description": "Bridge serial (COM) ports and USB devices of the browser's computer into the JupyterLab container, so terminal programs and AI agents can program and read microcontroller boards",
     "keywords": [
         "jupyter",
