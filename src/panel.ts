@@ -49,13 +49,14 @@
  *                       six rows, one setting per row; the label is the row head and
  *                       the value cell holds the one control
  *                       [data-setting-field="config|baudRate|dataBits|parity|stopBits|onOpen"];
- *                       [data-setting-field="baudRate"] is a text field with a datalist
- *                       of the standard rates, and [data-setting-badge="custom"] is
- *                       the Custom badge that shows while the typed value is no
- *                       standard rate; the buttons Cancel, Delete config, Save as...
- *                       and Save carry the class jp-DeviceBridgeSettings-button, of
- *                       which Save is the one accent button and Delete config carries
- *                       the warning colour
+ *                       [data-setting-field="baudRate"] is an editable text field
+ *                       inside [data-setting-baud], the group that joins it to the
+ *                       button that opens the list of the sixteen standard rates;
+ *                       the buttons Delete config, Cancel, Save as... and Save carry
+ *                       the class jp-DeviceBridgeSettings-button, of which Save is the
+ *                       one filled primary button, Cancel and Save as... are
+ *                       secondary and Delete config is an unfilled danger at the far
+ *                       left
  *   help button         [data-action="settings-help"] in the Serial and USB header;
  *                       a click opens the file `Device Bridge Help` at the root of the
  *                       contents in the lab's read-only Markdown Preview, or activates
@@ -100,6 +101,7 @@ import {
 } from '@jupyterlab/apputils';
 import { addIcon } from '@jupyterlab/ui-components';
 
+import { CommandRegistry } from '@lumino/commands';
 import { Menu, Widget } from '@lumino/widgets';
 
 import { deviceIcon } from './icons';
@@ -178,7 +180,7 @@ const ACTION_LABELS: Record<SerialAction, string> = {
 /** The fields of a profile change that the server takes as a number. */
 const NUMBER_FIELDS = new Set(['baudRate', 'dataBits', 'stopBits']);
 
-/** The rates the Baud rate field lists; any other value shows the Custom badge. */
+/** The sixteen standard rates that the list of the Baud rate field offers. */
 const STANDARD_BAUD_RATES = [
   300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 38400, 57600, 74880,
   115200, 230400, 460800, 921600
@@ -187,8 +189,14 @@ const STANDARD_BAUD_RATES = [
 /** The class of the four buttons of the Settings dialog; style/base.css makes them slim. */
 const SETTINGS_BUTTON_CLASS = 'jp-DeviceBridgeSettings-button';
 
-/** Numbers the datalist of each Settings dialog, so two dialogs have no id in common. */
-let baudLists = 0;
+/** Save is the one filled button of the Settings dialog. */
+const SETTINGS_PRIMARY_CLASS = 'jp-DeviceBridgeSettings-primary';
+
+/** Cancel and Save as... are the secondary surface buttons. */
+const SETTINGS_SECONDARY_CLASS = 'jp-DeviceBridgeSettings-secondary';
+
+/** Delete config keeps the error colour in its text and border. */
+const SETTINGS_DANGER_CLASS = 'jp-DeviceBridgeSettings-danger';
 
 const VALUE_CLASS = 'jp-DeviceBridgePanel-value';
 
@@ -407,6 +415,18 @@ function select(
   return node;
 }
 
+/** The down arrow of the button that opens the list of the standard rates. */
+function baudArrow(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', 'M6 9l6 6 6-6');
+  svg.append(path);
+  return svg;
+}
+
 /**
  * The body of the Settings dialog of a serial port: a table with the saved config and
  * the five settings, one setting per row. Choosing a config fills the fields;
@@ -427,19 +447,51 @@ class SerialSettingsBody extends Widget {
     // number field would change the rate by 1 (DEF-PANEL-6).
     baudRate.type = 'text';
     baudRate.setAttribute('inputmode', 'numeric');
-    const listId = `jp-DeviceBridgeSettings-baud-${++baudLists}`;
-    baudRate.setAttribute('list', listId);
     baudRate.setAttribute('aria-label', 'Baud rate');
-    const list = el('datalist', '');
-    list.id = listId;
-    list.append(
-      ...STANDARD_BAUD_RATES.map(rate => new Option(String(rate), String(rate)))
-    );
-    const custom = el('span', 'jp-DeviceBridgeSettings-badge', 'Custom');
-    custom.dataset.settingBadge = 'custom';
-    custom.hidden = true;
+    baudRate.setAttribute('aria-haspopup', 'listbox');
+    baudRate.setAttribute('aria-expanded', 'false');
+    const toggle = el('button', 'jp-DeviceBridgeSettings-baudToggle');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-label', 'Standard baud rates');
+    toggle.setAttribute('aria-haspopup', 'listbox');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.append(baudArrow());
+    const baud = el('div', 'jp-DeviceBridgeSettings-baud');
+    baud.dataset.settingBaud = 'baudRate';
+    baud.append(baudRate, toggle);
+    const menu = new Menu({ commands: new CommandRegistry() });
+    menu.addClass('jp-DeviceBridgeSettings-baudMenu');
+    for (const rate of STANDARD_BAUD_RATES) {
+      const command = `device-bridge:baud-rate-${rate}`;
+      menu.commands.addCommand(command, {
+        label: String(rate),
+        execute: () => {
+          baudRate.value = String(rate);
+          baudRate.dispatchEvent(new Event('input', { bubbles: true }));
+          baudRate.dispatchEvent(new Event('change', { bubbles: true }));
+          baudRate.focus();
+        }
+      });
+      menu.addItem({ command });
+    }
+    // The menu is a widget of the page body, so the dialog body, which clips its own
+    // overflow, cannot clip it.
+    toggle.addEventListener('click', event => {
+      event.preventDefault();
+      const rect = baud.getBoundingClientRect();
+      // The menu is attached to the page body, where a percentage says nothing
+      // about the dialog; the width of the field bounds it in pixels.
+      menu.node.style.maxWidth = rect.width + 'px';
+      toggle.setAttribute('aria-expanded', 'true');
+      baudRate.setAttribute('aria-expanded', 'true');
+      menu.open(rect.left, rect.bottom);
+    });
+    menu.aboutToClose.connect(() => {
+      toggle.setAttribute('aria-expanded', 'false');
+      baudRate.setAttribute('aria-expanded', 'false');
+    });
     this._baudRate = baudRate;
-    this._custom = custom;
+    this._menu = menu;
     this._controls = [
       [
         'config',
@@ -491,10 +543,11 @@ class SerialSettingsBody extends Widget {
       const head = el('th', 'jp-DeviceBridgePanel-fieldLabel', label);
       head.scope = 'row';
       const cell = el('td', 'jp-DeviceBridgeSettings-cell');
-      cell.append(control);
-      if (control === baudRate) {
-        cell.append(custom, list);
-      }
+      // The cell keeps the table-cell display; this wrapper is the one flex row,
+      // so the control fills the value column.
+      const field = el('div', 'jp-DeviceBridgeSettings-field');
+      field.append(control === baudRate ? baud : control);
+      cell.append(field);
       const row = el('tr', '');
       row.append(head, cell);
       tbody.append(row);
@@ -508,13 +561,9 @@ class SerialSettingsBody extends Widget {
         this._fill(chosen);
       }
     });
-    // The badge shows a value that is no standard rate, and every edit selects Custom
-    // in the Config select.
+    // Every edit selects Custom in the Config select.
     for (const [, , control] of this._controls.slice(1)) {
       control.addEventListener('input', () => {
-        if (control === baudRate) {
-          custom.hidden = STANDARD_BAUD_RATES.includes(Number(baudRate.value));
-        }
         config.value = '';
       });
     }
@@ -575,7 +624,6 @@ class SerialSettingsBody extends Widget {
 
   private _fill(values: ISerialConfig): void {
     this._baudRate.value = String(values.baudRate);
-    this._custom.hidden = STANDARD_BAUD_RATES.includes(values.baudRate);
     for (const [key, , control] of this._controls.slice(1)) {
       if (control !== this._baudRate) {
         control.value = String(values[key as keyof ISerialConfig]);
@@ -583,10 +631,16 @@ class SerialSettingsBody extends Widget {
     }
   }
 
+  /** Close the rate list with the dialog, so no menu stays in the page body. */
+  dispose(): void {
+    this._menu.dispose();
+    super.dispose();
+  }
+
   private readonly _record: ISerialRecord;
   private readonly _configs: ISettingsConfig[];
   private readonly _baudRate: HTMLInputElement;
-  private readonly _custom: HTMLElement;
+  private readonly _menu: Menu;
   private readonly _controls: Array<
     [
       key: keyof ISerialSettingsChange | 'config',
@@ -670,18 +724,24 @@ async function editSettings(
   const result = await showDialog({
     title: `Serial settings of ${record.name}`,
     body,
+    focusNodeSelector: '[data-setting-field="config"]',
     buttons: [
-      Dialog.cancelButton({ className: SETTINGS_BUTTON_CLASS }),
       Dialog.warnButton({
         label: 'Delete config',
-        className: SETTINGS_BUTTON_CLASS
+        className: `${SETTINGS_BUTTON_CLASS} ${SETTINGS_DANGER_CLASS}`
+      }),
+      Dialog.cancelButton({
+        className: `${SETTINGS_BUTTON_CLASS} ${SETTINGS_SECONDARY_CLASS}`
       }),
       Dialog.createButton({
         label: 'Save as...',
         accept: false,
-        className: SETTINGS_BUTTON_CLASS
+        className: `${SETTINGS_BUTTON_CLASS} ${SETTINGS_SECONDARY_CLASS}`
       }),
-      Dialog.okButton({ label: 'Save', className: SETTINGS_BUTTON_CLASS })
+      Dialog.okButton({
+        label: 'Save',
+        className: `${SETTINGS_BUTTON_CLASS} ${SETTINGS_PRIMARY_CLASS}`
+      })
     ]
   });
   if (result.button.label === 'Delete config') {

@@ -26,7 +26,7 @@ from jupyterlab_device_bridge_extension import DeviceBridge, _load_jupyter_serve
 from jupyterlab_device_bridge_extension import manager as manager_module
 from jupyterlab_device_bridge_extension.manager import DeviceManager
 from jupyterlab_device_bridge_extension.routes import MANAGER_KEY
-from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_KEY, SERIAL_NAME, FakeTab
+from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_KEY, SERIAL_NAME, USB_NAME, FakeTab
 
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
 
@@ -527,6 +527,123 @@ async def test_acc_serial_152_the_link_a_server_made_stays_at_its_next_claim(fak
 
     assert all(os.path.islink(os.path.join(device_dir, name)) for name in (SERIAL_NAME, f"{SERIAL_NAME}-2"))
     assert len(os.listdir(os.path.join(device_dir, ".shim"))) == 2
+
+
+def stale(device_dir):
+    """Place device entries that no record accounts for in a device directory, and entries that are no device entry.
+
+    The device entries are a symlink to a pty slave, symlinks named tty-* and usb-* that
+    lead elsewhere or nowhere, and a socket in the shim directory. Their names are names
+    that no device of the test and no pty number gives.
+
+    Returns:
+        The paths of the device entries, and the paths of the other entries.
+    """
+    shim_dir = os.path.join(device_dir, ".shim")
+    for directory in (device_dir, shim_dir):
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(directory, 0o700)
+    links = {"left": "/dev/pts/left", "tty-5555-6666": "/dev/pts/stale", "tty-port-9": "/tmp/jdb-gone",
+             "usb-5555-6666": "/dev/bus/usb/001/099"}
+    entries = [os.path.join(device_dir, name) for name in links]
+    for path, target in zip(entries, links.values()):
+        os.symlink(target, path)
+    entries.append(os.path.join(shim_dir, "pts-stale.sock"))
+    with socket.socket(socket.AF_UNIX) as listener:
+        listener.bind(entries[-1])
+    others = [os.path.join(device_dir, name) for name in ("notes.txt", "tty-file", "tty-folder", "mylink")]
+    others.append(os.path.join(shim_dir, "file"))
+    for file in (others[0], others[1], others[4]):
+        pathlib.Path(file).write_bytes(b"")
+    os.mkdir(others[2])
+    os.symlink(os.path.dirname(device_dir), others[3])
+    return entries, others
+
+
+def test_acc_serial_251_a_server_that_starts_removes_every_device_entry_no_record_accounts_for(device_dir):
+    """ACC-SERIAL-251-STARTSWEEP a server that starts on a device directory removes the symlinks to a pty slave, the symlinks named tty-* and usb-* with any target and the sockets in .shim; regular files, directories, .shim and other symlinks stay."""
+    entries, others = stale(device_dir)
+
+    DeviceManager(device_dir, 1024, logging.getLogger(__name__)).close()
+
+    assert [path for path in entries if os.path.lexists(path)] == []
+    assert all(os.path.lexists(path) for path in others)
+    assert os.path.isdir(os.path.join(device_dir, ".shim")) and os.path.islink(others[3])
+
+
+async def test_acc_serial_251_a_server_whose_directory_another_process_locks_removes_no_device_entry(
+        device_dir, tool):
+    """ACC-SERIAL-251-STARTSWEEP while another process holds the lock on the device directory, a server that starts and a tab that connects to it remove no device entry."""
+    entries, others = stale(device_dir)
+    assert await line(await tool(LOCK, device_dir)) == b"locked\n"
+
+    manager = DeviceManager(device_dir, 1024, logging.getLogger(__name__))
+    try:
+        manager.connect("tab-1", True, True, lambda message: None)
+    finally:
+        manager.close()
+
+    assert all(os.path.lexists(path) for path in entries + others)
+
+
+async def test_acc_serial_252_a_tab_that_connects_removes_the_device_entries_no_record_accounts_for(
+        fake_tab, device_dir):
+    """ACC-SERIAL-252-TABSWEEP a tab that connects removes the device entries placed while the server runs; the attached port, a detached port and a USB device of the table keep their links and shim sockets, and entries that are no device entry stay."""
+    tab, path = await attach(fake_tab)
+    assert (await tab.claim_serial("s:2341:0043:1"))["ok"]
+    await tab.release(f"{SERIAL_NAME}-2")
+    await tab.until(lambda: record(tab, f"{SERIAL_NAME}-2")["state"] == "detached")
+    assert (await tab.claim_usb())["ok"]
+    # The bridge makes no entry for a USB device; an entry with its name is the device's all the same.
+    usb_entry = os.path.join(device_dir, USB_NAME)
+    os.symlink("/dev/bus/usb/001/002", usb_entry)
+    known = [path, f"{path}-2", usb_entry, shim_socket(path), shim_socket(f"{path}-2")]
+    entries, others = stale(device_dir)
+
+    await fake_tab("tab-2")
+
+    assert [entry for entry in entries if os.path.lexists(entry)] == []
+    assert all(os.path.lexists(entry) for entry in known + others)
+    assert stat.S_ISSOCK(os.lstat(shim_socket(path)).st_mode)
+
+
+def test_acc_serial_252_a_removal_that_fails_is_logged_and_the_tab_is_welcomed(device_dir, caplog):
+    """ACC-SERIAL-252-TABSWEEP a device entry that cannot be removed at a tab connect is logged as an error, and the tab still gets the welcome."""
+    os.mkdir(device_dir, 0o700)
+    manager = DeviceManager(device_dir, 1024, logging.getLogger(__name__))
+    entries, _ = stale(device_dir)
+    sent = []
+    os.chmod(device_dir, 0o500)  # no entry of the directory can be removed now
+    try:
+        manager.connect("tab-1", True, True, sent.append)
+    finally:
+        os.chmod(device_dir, 0o700)
+        manager.close()
+
+    assert sent[0]["type"] == "welcome"
+    assert os.path.lexists(entries[0])
+    assert [entry.levelname for entry in caplog.records
+            if "stale device entries" in entry.getMessage()] == ["ERROR"]
+
+
+async def test_acc_serial_253_after_a_page_load_the_table_lists_the_device_and_no_removed_entry(
+        fake_tab, device_dir):
+    """ACC-SERIAL-253-SWEEPPANEL after a page load, the device table that the Devices panel shows holds no record of a removed stale entry, and the port attached before keeps its record, its owner and its link."""
+    tab, path = await attach(fake_tab)
+    entries, _ = stale(device_dir)
+    await tab.close()  # the page unloads: its device becomes detached
+
+    reloaded = await fake_tab("tab-2")
+    await reloaded.until(lambda: record(reloaded)["state"] == "detached")
+    assert os.path.islink(path), "a detached device of the table keeps its link"
+    assert (await reloaded.claim_serial())["ok"]
+    await reloaded.until(lambda: record(reloaded)["portState"] == "open")
+
+    assert [entry for entry in entries if os.path.lexists(entry)] == []
+    assert [device["name"] for device in reloaded.devices["serial"] + reloaded.devices["usb"]] == [SERIAL_NAME]
+    assert (record(reloaded)["path"], record(reloaded)["state"], record(reloaded)["tab"]) == (
+        path, "attached", "tab-2")
+    assert os.path.islink(path) and os.path.lexists(shim_socket(path))
 
 
 # -------------------------------------------------------------------- bytes both ways

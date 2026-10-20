@@ -17,6 +17,7 @@ import { Menu, Panel, Widget } from '@lumino/widgets';
 
 import plugin from '../index';
 import { HELP_MARKDOWN } from '../help';
+import { deviceIcon } from '../icons';
 import { DeviceBridgePanel } from '../panel';
 import type { IDeviceRequest, IRunRecord, ISerialDefaults } from '../protocol';
 import { DeviceBridgeStatus } from '../status';
@@ -152,6 +153,27 @@ const MONITOR_DEFAULTS: ISerialDefaults = {
 /** The reason a lab gives when it cannot save a setting. */
 const SAVE_REFUSED = 'Permission denied';
 
+/**
+ * The title of the terminal widget that `basic-terminal:launch` returns, before the
+ * plugin sets the identity of its tab.
+ */
+const LAUNCH_TITLE = { label: '1', icon: { name: 'terminal' }, caption: '' };
+
+/** The title of the widget-like object that the stand-in of `basic-terminal:launch` returns. */
+interface ILaunchTitle {
+  label: string;
+  icon: unknown;
+  caption: string;
+  /** Says that the title changed, as the Title of the lab does. */
+  changed: Signal<ILaunchTitle, void>;
+}
+
+/** The widget-like object that the stand-in of `basic-terminal:launch` returns. */
+interface ILaunchWidget {
+  id: string;
+  title: ILaunchTitle;
+}
+
 /** The warning the plugin raises when the lab could not save the option showPanel. */
 const notSaved = (state: 'shown' | 'hidden'): [string, string] => [
   `The Devices panel is ${state} now, but the lab could not save the setting showPanel: ${SAVE_REFUSED}`,
@@ -196,6 +218,8 @@ interface ILab {
   shownWhenActivated: boolean;
   /** The stand-in of the command `basic-terminal:launch`: it records its arguments. */
   launch: jest.Mock;
+  /** The widget-like object of every `basic-terminal:launch` call, in order. */
+  launchWidgets: ILaunchWidget[];
   /** The stand-in of the command of the lab that opens a terminal with a shell. */
   newTerminal: jest.Mock;
   /** Change one setting as the Settings Editor of the lab does. */
@@ -261,7 +285,21 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     return scope.page;
   });
 
-  const launch = jest.fn(async () => ({ id: 'launched-terminal' }));
+  const launchWidgets: ILaunchWidget[] = [];
+  const launch = jest.fn(async () => {
+    const title = { ...LAUNCH_TITLE } as ILaunchTitle;
+    // The Title of the lab has the signal; toEqual of a title must still see only
+    // the three fields, so the signal is not an enumerable property.
+    Object.defineProperty(title, 'changed', {
+      value: new Signal<ILaunchTitle, void>(title)
+    });
+    const widget = {
+      id: `launched-terminal-${launchWidgets.length + 1}`,
+      title
+    };
+    launchWidgets.push(widget);
+    return widget;
+  });
   const newTerminal = jest.fn(async () => ({ id: 'shell-terminal' }));
   const commands = new CommandRegistry();
   commands.addCommand(NEW_LAB_TERMINAL, { execute: newTerminal });
@@ -379,6 +417,7 @@ async function lab(options: ILabOptions = {}): Promise<ILab> {
     },
     shownWhenActivated,
     launch,
+    launchWidgets,
     newTerminal,
     setSetting,
     setShowMenu: (show: boolean): void => setSetting('showMenu', show)
@@ -1062,6 +1101,31 @@ describe('plugin: the serial terminal command', () => {
     expect(all.newTerminal).not.toHaveBeenCalled();
     expect(getItem).not.toHaveBeenCalled();
     expect(notifications()).toEqual([]);
+  });
+
+  it('ACC-TERM-239-SERIAL-TAB the serial terminal tab is titled Serial Terminal with the device icon and the caption of the port, and the device shell tab keeps its own title', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+
+    await all.commands.execute(OPEN_TERMINAL);
+
+    expect(all.launchWidgets).toHaveLength(1);
+    const [serial] = all.launchWidgets;
+    expect(serial.title.label).toBe('Serial Terminal');
+    expect(serial.title.icon).toBe(deviceIcon);
+    expect(serial.title.caption).toBe(`Serial terminal on ${UNO_NAME}`);
+
+    // The Terminal widget writes its own title when the launch resolves and on the
+    // title changes of xterm; the plugin puts the identity of the tab back.
+    serial.title.label = 'Terminal 1';
+    serial.title.icon = { name: 'terminal' };
+    serial.title.changed.emit();
+    expect(serial.title.label).toBe('Serial Terminal');
+    expect(serial.title.icon).toBe(deviceIcon);
+
+    await all.commands.execute(START_RUN);
+
+    expect(all.launchWidgets).toHaveLength(2);
+    expect(all.launchWidgets[1].title).toEqual(LAUNCH_TITLE);
   });
 
   it('ACC-TERM-148 with several attached ports the command asks which one and launches the words with the chosen port, and a closed question launches nothing', async () => {

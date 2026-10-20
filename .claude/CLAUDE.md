@@ -125,11 +125,10 @@ architecture changes.
   in the worker; the lab, the server, the CLI and the terminal app are real)
 - **Agent skill** (`.agents/skills/jupyterlab-device-bridge-extension/SKILL.md`) - tells an agent
   to read `jupyterlab-device --help` first; the wheel installs it under `share/jupyter/agents/skills/`
-- **Resources** (`resources/envs/`) - copies of the three firmware environment installers and of
-  `firmware_env.py`, the module they import; the source of truth is the template of the copier
-  embedded project at `~/workspace/private/copier-projects/copier-embedded-project/template/resources/envs`,
-  and `make build` refreshes the copies; no code of the extension uses them; the wheel installs
-  them in `envs/` beside the agent skill, and one rule of the skill names them
+- **Resources** - the extension ships no environment installers; the three firmware environment
+  installers and `firmware_env.py` are in the template of the copier embedded project at
+  https://github.com/stellarshenson/copier-embedded-project under `template/resources/envs`;
+  no code of the extension uses them
 - **CI/CD** - GitHub Actions plus jupyter-releaser under `.github/workflows/`
 
 **Terms**: a **grant** is the user's permission for one device in Chrome's dialog; **attached**
@@ -255,8 +254,9 @@ A command-line tool the extension ships (an entry point under `[project.scripts]
   `make test` runs it
 - **Never state that anything works with hardware** - no test here uses a physical board; a claim
   about a board needs the user's `MANUAL` test behind it
-- **No apt installs** - a firmware conda environment (`resources/envs/firmware-*.py`) is
-  installed only when a test needs its tool
+- **No apt installs** - a firmware conda environment (the installers in
+  `template/resources/envs` of the copier embedded project) is installed only when a test
+  needs its tool
 - **Unprivileged container** - the design may not need sudo, a kernel module or a device node
 - **Styling through JupyterLab CSS variables only** - no literal colours; follow the Extension
   Design System of the jupyterlab-extension skill

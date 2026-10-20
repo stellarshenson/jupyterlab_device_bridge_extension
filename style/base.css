@@ -419,138 +419,329 @@ body[data-jp-theme-light='false'] [data-kind='usb'] .jp-DeviceBridgePanel-kind {
   padding-top: 4px;
 }
 
-/* Settings dialog of a serial port: one labelled field per line. The dialog
-   is no child of the panel, so its body has its own class name */
+/* Settings dialog of a serial port: a compact table of six label-control rows.
+   The dialog is no child of the panel, so its body has its own class name. */
 
-/* The Settings dialogs take the visual language of the Manage Sessions popup in
-   jupyterlab_ai_code_assistants_extension: a token layer over --jp-* variables so
-   a theme flip restyles the dialog, 6px control radius, and an accent focus ring. */
-.jp-DeviceBridgeSettings {
-  --db-radius-sm: 4px;
-  --db-radius: 6px;
-  --db-radius-lg: 8px;
-  --db-surface: var(--jp-layout-color1);
-  --db-surface-hover: var(--jp-layout-color2);
+/* ---- Serial settings: a compact, uniform grid --------------------------- */
+
+/* A designed width for the Serial settings dialog only: the Save-as dialog
+   has no table and keeps the default width. */
+.jp-Dialog-content:has(.jp-DeviceBridgeSettings-table) {
+  width: min(680px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 32px));
+  min-width: min(520px, calc(100vw - 32px));
+}
+
+/* The token layer of the Settings dialogs, on the dialog content so that the
+   footer buttons, which are no children of the body, read the same values. */
+.jp-Dialog-content:has(.jp-DeviceBridgeSettings) {
+  --db-line: color-mix(in srgb, var(--jp-ui-font-color0) 9%, transparent);
+  --db-field: var(--jp-layout-color0);
+  --db-field-hover: color-mix(
+    in srgb,
+    var(--jp-layout-color0) 90%,
+    var(--jp-ui-font-color0) 10%
+  );
+  --db-hover: color-mix(in srgb, var(--jp-ui-font-color0) 5%, transparent);
   --db-border: var(--jp-border-color2);
-  --db-border-subtle: var(--jp-border-color3);
-  --db-text: var(--jp-ui-font-color1);
-  --db-text-subtle: var(--jp-ui-font-color2);
-  --db-accent: var(--jp-brand-color1);
-  --db-accent-soft: color-mix(in srgb, var(--jp-brand-color1) 14%, transparent);
+  --db-secondary: color-mix(
+    in srgb,
+    var(--jp-ui-font-color0) 6%,
+    var(--jp-layout-color1)
+  );
+  --db-secondary-hover: color-mix(
+    in srgb,
+    var(--jp-ui-font-color0) 11%,
+    var(--jp-layout-color1)
+  );
+  --db-danger-border: color-mix(
+    in srgb,
+    var(--jp-error-color1) 45%,
+    var(--jp-border-color2)
+  );
+  --db-danger-hover: color-mix(
+    in srgb,
+    var(--jp-error-color1) 12%,
+    transparent
+  );
+}
 
+.jp-DeviceBridgeSettings {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: min(320px, 90vw);
-  color: var(--db-text);
+  width: 100%;
+  min-width: 0;
+  gap: 0;
+  color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size1);
 }
 
-.jp-DeviceBridgePanel-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.jp-DeviceBridgePanel-fieldLabel {
-  flex: 1 1 50%;
-  min-width: 0;
-  color: var(--db-text-subtle);
-  font-size: var(--jp-ui-font-size0);
-}
-
-/* an input keeps its intrinsic width as a flex item; min-width 0 lets it
-   shrink in a narrow sidebar */
-.jp-DeviceBridgePanel-input {
-  flex: 1 1 50%;
-  min-width: 0;
-  box-sizing: border-box;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--db-border);
-  border-radius: var(--db-radius-sm);
-  background: var(--jp-input-background, var(--db-surface));
-  color: var(--db-text);
-  font-family: var(--jp-ui-font-family);
-  font-size: var(--jp-ui-font-size0);
-  outline: none;
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
-}
-
-.jp-DeviceBridgePanel-input:focus {
-  border-color: var(--db-accent);
-  box-shadow: 0 0 0 2px var(--db-accent-soft);
-}
-
-/* The Settings dialog is no child of the panel and needs its own rule for an
-   element that is not offered. */
+/* The dialog is no child of the panel and needs its own rule for an element
+   that is not offered: this hides a button or a field a row does not show. */
 .jp-DeviceBridgeSettings [hidden] {
   display: none;
 }
 
-/* The body of the Settings dialog is a table: one setting per row, the label in the
-   row head and the control in the value cell. Rows alternate through the token
-   layer, so a theme flip restyles them. */
+/* One label-control row per setting. Fixed layout plus explicit columns keeps
+   every control the same width; the row is 6 + 28 + 6 = 40px high. Collapse
+   keeps the 42/58 columns seamless at fractional column widths. */
 .jp-DeviceBridgeSettings-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
-}
-
-.jp-DeviceBridgeSettings-table tbody tr:nth-child(odd) {
-  background: var(--db-surface);
-}
-
-.jp-DeviceBridgeSettings-table tbody tr:nth-child(even) {
-  background: var(--db-surface-hover);
 }
 
 .jp-DeviceBridgeSettings-table th,
 .jp-DeviceBridgeSettings-table td {
-  padding: 4px 8px;
+  box-sizing: border-box;
+  height: 40px;
+  padding: 6px 12px;
   border: none;
   text-align: left;
   vertical-align: middle;
 }
 
+/* The labels are muted; the values carry the primary text colour. */
 .jp-DeviceBridgeSettings-table th {
   width: 42%;
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size1);
   font-weight: 400;
+  white-space: normal;
 }
 
-.jp-DeviceBridgeSettings-cell {
+.jp-DeviceBridgeSettings-table td {
+  width: 58%;
+  color: var(--jp-ui-font-color0);
+  font-size: var(--jp-ui-font-size1);
+}
+
+/* A hairline between the rows, not alternating band fills. The line sits in a
+   shadow, so it adds no height to the 40 px row. */
+.jp-DeviceBridgeSettings-table tbody tr + tr th,
+.jp-DeviceBridgeSettings-table tbody tr + tr td {
+  box-shadow: inset 0 1px 0 var(--db-line);
+}
+
+.jp-DeviceBridgeSettings-table tbody tr:hover {
+  background: var(--db-hover);
+}
+
+/* The cell keeps the table-cell display. This wrapper is the one flex row, so
+   the control fills the value column without breaking the table. */
+.jp-DeviceBridgeSettings-field {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
-/* one control per value cell, filling its cell */
-.jp-DeviceBridgeSettings-cell .jp-DeviceBridgePanel-input {
+/* One metric for the six controls, raised over JupyterLab's jp-mod-styled
+   rules: input.jp-mod-styled is 0,1,1 and select.jp-mod-styled:not([multiple])
+   is 0,2,1. The doubled selector is what wins. */
+.jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input,
+.jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input.jp-mod-styled {
+  box-sizing: border-box;
   flex: 1 1 auto;
   width: 100%;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--jp-input-border-color);
+  border-radius: var(--jp-border-radius);
+  background: var(--jp-input-background, var(--jp-layout-color1));
+  color: var(--jp-ui-font-color0);
+  font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size1);
+  font-variant-numeric: tabular-nums;
+  line-height: 26px;
+  outline: none;
+  box-shadow: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
-/* the Custom badge of a baud rate that is no standard rate */
-.jp-DeviceBridgeSettings-badge {
-  flex: 0 0 auto;
-  padding: 0 6px;
-  border-radius: var(--db-radius-sm);
-  background: var(--db-accent-soft);
-  color: var(--db-accent);
-  font-size: var(--jp-ui-font-size0);
-  line-height: 20px;
+/* JupyterLab wraps every select in jp-select-wrapper and lets the wrapper
+   shrink to the longest option. Inside this dialog the wrapper is the flex
+   item and fills the value column; it paints no frame of its own. */
+.jp-DeviceBridgeSettings .jp-DeviceBridgeSettings-field .jp-select-wrapper {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
 }
 
-/* The four buttons of the Settings dialog are slim, 8px apart in the footer.
-   The element and the second class raise the rule over the lab's own
-   button.jp-mod-styled height of 32px. */
+.jp-DeviceBridgeSettings
+  .jp-DeviceBridgeSettings-field
+  .jp-select-wrapper
+  select.jp-mod-styled {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0 25px 0 8px;
+  border: 1px solid var(--db-border);
+  border-radius: var(--jp-border-radius);
+  background-color: var(--db-field);
+  color: var(--jp-ui-font-color0);
+  font-family: var(--jp-ui-font-family);
+  font-size: var(--jp-ui-font-size1);
+  font-variant-numeric: tabular-nums;
+  line-height: 26px;
+  outline: none;
+  box-shadow: none;
+}
+
+.jp-DeviceBridgeSettings
+  .jp-DeviceBridgeSettings-field
+  .jp-select-wrapper
+  select.jp-mod-styled:hover {
+  background-color: var(--db-field-hover);
+}
+
+.jp-DeviceBridgeSettings
+  .jp-DeviceBridgeSettings-field
+  .jp-select-wrapper
+  select.jp-mod-styled:focus,
+.jp-DeviceBridgeSettings
+  .jp-DeviceBridgeSettings-field
+  .jp-select-wrapper.jp-mod-focused
+  select.jp-mod-styled {
+  border-color: var(--jp-brand-color1);
+  box-shadow: 0 0 0 1px var(--jp-brand-color1);
+}
+
+/* The baud rate: an editable field joined to a plain button with a down arrow.
+   The button opens the list of the sixteen standard rates. */
+.jp-DeviceBridgeSettings-baud {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  border-radius: var(--jp-border-radius);
+}
+
+.jp-DeviceBridgeSettings-baud .jp-DeviceBridgePanel-input,
+.jp-DeviceBridgeSettings-baud .jp-DeviceBridgePanel-input.jp-mod-styled {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  padding: 0 8px;
+  border-color: var(--db-border);
+  border-right: 0;
+  border-radius: var(--jp-border-radius) 0 0 var(--jp-border-radius);
+  background: var(--db-field);
+}
+
+.jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input:focus,
+.jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input.jp-mod-styled:focus {
+  border-color: var(--jp-brand-color1);
+  box-shadow: 0 0 0 1px var(--jp-brand-color1);
+}
+
+/* The group draws one focus ring, so the input inside it draws none. */
+.jp-DeviceBridgeSettings-baud .jp-DeviceBridgePanel-input:focus,
+.jp-DeviceBridgeSettings-baud .jp-DeviceBridgePanel-input.jp-mod-styled:focus {
+  box-shadow: none;
+}
+
+/* The plain selector is not enough: JupyterLab's button.jp-mod-styled sets a
+   height of 32 px, a line height of 32 px and a minimum width of 36 px with a
+   higher specificity, so the doubled selector carries the joined measures. */
+.jp-DeviceBridgeSettings-baudToggle,
+.jp-DeviceBridgeSettings-baudToggle.jp-mod-styled {
+  box-sizing: border-box;
+  flex: 0 0 30px;
+  min-width: 30px;
+  display: grid;
+  place-items: center;
+  height: 28px;
+  line-height: 1;
+  padding: 0;
+  border: 1px solid var(--db-border);
+  border-radius: 0 var(--jp-border-radius) var(--jp-border-radius) 0;
+  background: var(--db-field);
+  color: var(--jp-ui-font-color2);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.jp-DeviceBridgeSettings-baudToggle svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.jp-DeviceBridgeSettings-baudToggle:focus,
+.jp-DeviceBridgeSettings-baudToggle.jp-mod-styled:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.jp-DeviceBridgeSettings-baud:hover .jp-DeviceBridgeSettings-baudToggle {
+  background: var(--db-field-hover);
+  color: var(--jp-ui-font-color0);
+}
+
+.jp-DeviceBridgeSettings-baud:focus-within {
+  outline: 2px solid var(--jp-brand-color2);
+  outline-offset: 1px;
+}
+
+.jp-DeviceBridgeSettings-baud:focus-within .jp-DeviceBridgePanel-input,
+.jp-DeviceBridgeSettings-baud:focus-within .jp-DeviceBridgeSettings-baudToggle {
+  border-color: var(--jp-brand-color1);
+}
+
+.jp-DeviceBridgeSettings-baud:focus-within .jp-DeviceBridgeSettings-baudToggle {
+  color: var(--jp-brand-color1);
+}
+
+/* The rate list is narrower than the field and ends above the footer actions.
+   The cap needs !important: Lumino writes an inline max-height before it
+   attaches the menu. */
+.jp-DeviceBridgeSettings-baudMenu {
+  box-sizing: border-box;
+  width: 232px;
+  max-height: 168px !important;
+}
+
+/* The Save-as dialog shares the token layer; its one field gets the same
+   13px label and 28px control as the grid. */
+.jp-DeviceBridgeSettings > .jp-DeviceBridgePanel-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jp-DeviceBridgeSettings
+  > .jp-DeviceBridgePanel-field
+  .jp-DeviceBridgePanel-fieldLabel {
+  flex: 1 1 50%;
+  min-width: 0;
+  color: var(--jp-ui-font-color0);
+  font-size: var(--jp-ui-font-size1);
+}
+
+/* Footer: four 28px buttons, 8px apart, right aligned, 12px of air. */
 button.jp-Dialog-button.jp-DeviceBridgeSettings-button {
   height: 28px;
   min-height: 28px;
   padding: 0 12px;
-  line-height: 28px;
+  border-radius: var(--jp-border-radius);
   font-size: 12.5px;
+
+  /* 28 px border-box less the 1 px top and bottom borders. */
+  line-height: 26px;
 }
 
 .jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button) {
@@ -560,12 +751,58 @@ button.jp-Dialog-button.jp-DeviceBridgeSettings-button {
 .jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button)
   .jp-Dialog-footerButtons {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
 
 .jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button) button.jp-Dialog-button {
   margin-right: 0;
+}
+
+/* Save is the only filled button. */
+button.jp-Dialog-button.jp-DeviceBridgeSettings-primary {
+  padding: 0 18px;
+  border: 1px solid var(--jp-brand-color1);
+  background: var(--jp-brand-color1);
+  color: var(--jp-ui-inverse-font-color0);
+  font-weight: 600;
+}
+
+/* Cancel and Save as... are secondary surface buttons. */
+button.jp-Dialog-button.jp-DeviceBridgeSettings-secondary {
+  border: 1px solid var(--jp-border-color2);
+  background: var(--db-secondary);
+  color: var(--jp-ui-font-color0);
+}
+
+button.jp-Dialog-button.jp-DeviceBridgeSettings-secondary:hover {
+  background: var(--db-secondary-hover);
+}
+
+button.jp-Dialog-button.jp-DeviceBridgeSettings-danger:hover {
+  background: var(--db-danger-hover);
+}
+
+/* Delete config keeps the error colour in its text and border, unfilled, and
+   stands apart at the far left. The footer prefix lifts the selector over the
+   reset of the footer, which sets margin-right 0 with three class selectors. */
+.jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button)
+  button.jp-Dialog-button.jp-DeviceBridgeSettings-danger {
+  margin-right: auto;
+  border: 1px solid var(--db-danger-border);
+  background: transparent;
+  color: var(--jp-error-color1);
+}
+
+/* No ring while the pointer works the dialog; the keyboard gets one. */
+button.jp-Dialog-button.jp-DeviceBridgeSettings-button:focus {
+  outline: none;
+}
+
+button.jp-Dialog-button.jp-DeviceBridgeSettings-button:focus-visible {
+  outline: 2px solid var(--jp-brand-color2);
+  outline-offset: 1px;
 }
 
 /* Footer: the round trip between the browser and the server, on the panel's own

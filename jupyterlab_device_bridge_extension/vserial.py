@@ -14,6 +14,7 @@ import errno
 import fcntl
 import logging
 import os
+import re
 import select
 import stat
 import struct
@@ -30,6 +31,7 @@ _TERMIOS2 = struct.Struct("4IB19s2I")
 _TCGETS2, _TCSETS2 = 0x802C542A, 0x402C542B
 _BOTHER = 0o010000  # c_cflag: the speed is the number in the speed fields
 RUN_DIR = "/run/devices"  # the device directory of a server whose setting names none
+DEVICE_NAME_RE = re.compile(r"(?:tty|usb)-[a-z0-9-]{1,60}")  # the name of a serial or a USB device
 
 
 class DeviceDirError(OSError):
@@ -121,22 +123,27 @@ def lock_dir(path: str) -> int | None:
     return fd
 
 
-def remove_left(device_dir: str, shim_dir: str) -> None:
-    """Remove what a server that ended without its exit hook left in a device directory.
+def remove_left(device_dir: str, shim_dir: str, keep: set[str]) -> None:
+    """Remove every device entry of a device directory that is not in `keep`.
 
-    That is every symlink to a pty slave (a target under `/dev/pts/`) in the device
-    directory and every socket in its shim directory. Any other symlink, a directory
-    and a regular file stay, and so does the entry of the shim directory itself. Call
-    it only while this process holds the lock of `lock_dir`:
-    otherwise the symlinks and sockets can be those of the live server that holds it.
+    A device entry is a symlink in the device directory that leads to a pty slave (a
+    target under `/dev/pts/`) or that has the name of a device (`tty-*`, `usb-*`) with
+    any target, and a socket in its shim directory. Any other symlink, a directory and
+    a regular file stay, and so does the entry of the shim directory itself. Call it
+    only while this process holds the lock of `lock_dir`: otherwise the entries can be
+    those of the live server that holds it.
+
+    Args:
+        keep: The paths of the entries of the devices this server has a record of.
 
     Raises:
         OSError: An entry cannot be read or removed.
     """
     for name in os.listdir(device_dir):
         path = os.path.join(device_dir, name)
-        # The bridge makes no other link than one to a pty slave (`_open_pty`).
-        if path != shim_dir and os.path.islink(path) and os.readlink(path).startswith("/dev/pts/"):
+        if path in keep or path == shim_dir or not os.path.islink(path):
+            continue
+        if DEVICE_NAME_RE.fullmatch(name) or os.readlink(path).startswith("/dev/pts/"):
             os.unlink(path)
     if not os.path.lexists(shim_dir):
         return
@@ -145,7 +152,7 @@ def remove_left(device_dir: str, shim_dir: str) -> None:
         ensure_dir(shim_dir)
         for name in os.listdir(shim_dir):
             path = os.path.join(shim_dir, name)
-            if stat.S_ISSOCK(os.lstat(path).st_mode):
+            if path not in keep and stat.S_ISSOCK(os.lstat(path).st_mode):
                 os.unlink(path)
 
 

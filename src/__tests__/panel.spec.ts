@@ -493,9 +493,13 @@ function choose(
   node.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-/** The Custom badge of the open Settings dialog. */
-const badge = (root: ParentNode): HTMLElement =>
-  one(root, '[data-setting-badge="custom"]');
+/** The baud rate group of the open Settings dialog: the input and its list button. */
+const baudGroup = (root: ParentNode): HTMLElement =>
+  one(root, '[data-setting-baud]');
+
+/** The button of that group that opens the list of the standard rates. */
+const baudToggle = (root: ParentNode): HTMLButtonElement =>
+  one<HTMLButtonElement>(root, '.jp-DeviceBridgeSettings-baudToggle');
 
 /** Click Settings in the row of a serial port and return the dialog it opened. */
 async function openSettings(all: ILab, name: string): Promise<IOpenDialog> {
@@ -603,7 +607,7 @@ describe('the stylesheet', () => {
     for (const [, value] of colours) {
       // --jp- are the variables of the themes, --md- the material colours of the lab,
       // --db- this extension's aliases of the theme variables in the Settings token layer.
-      expect(value).toMatch(/var\(--(jp|md|db)-|^none$/);
+      expect(value).toMatch(/var\(--(jp|md|db)-|^none$|^transparent$/);
     }
     // An alias resolves to a theme variable or to a colour-mix over one, never to a literal.
     // The radius tokens are lengths, not colours, and stay out of this check.
@@ -615,11 +619,14 @@ describe('the stylesheet', () => {
     for (const [, value] of aliases) {
       expect(value).toMatch(/^var\(--jp-|^color-mix\(/);
     }
-    // The settings dialog keeps the compact scale of the Manage Sessions popup:
-    // a control of 24 px in the small UI font size.
-    expect(rule('.jp-DeviceBridgePanel-input')).toMatchObject({
-      height: '24px',
-      'font-size': 'var(--jp-ui-font-size0)'
+    // The settings dialog keeps one scale: a control of 28 px in the UI font size.
+    expect(
+      rule(
+        '.jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input, .jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input.jp-mod-styled'
+      )
+    ).toMatchObject({
+      height: '28px',
+      'font-size': 'var(--jp-ui-font-size1)'
     });
     expect(css).toContain('.jp-DeviceBridgePanel ');
     expect(css).toContain('.jp-DeviceBridgeStatus ');
@@ -637,7 +644,8 @@ describe('the stylesheet', () => {
     for (const part of found[0].split('{')[1].split(';')) {
       const [property, ...value] = part.split(':');
       if (value.length > 0) {
-        values[property.trim()] = value.join(':').trim();
+        // The formatter wraps a long value over several lines.
+        values[property.trim()] = value.join(':').replace(/\s+/g, ' ').trim();
       }
     }
     return values;
@@ -756,10 +764,10 @@ describe('the stylesheet', () => {
     const dialog = await openSettings(all, UNO_NAME);
 
     expect(dialog.buttons.map(shown => shown.className)).toEqual([
-      'jp-DeviceBridgeSettings-button',
-      'jp-DeviceBridgeSettings-button',
-      'jp-DeviceBridgeSettings-button',
-      'jp-DeviceBridgeSettings-button'
+      'jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-danger',
+      'jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-secondary',
+      'jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-secondary',
+      'jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-primary'
     ]);
     expect(
       rule('button.jp-Dialog-button.jp-DeviceBridgeSettings-button')
@@ -767,13 +775,172 @@ describe('the stylesheet', () => {
       height: '28px',
       'min-height': '28px',
       padding: '0 12px',
-      'line-height': '28px',
+      'border-radius': 'var(--jp-border-radius)',
+      'line-height': '26px',
       'font-size': '12.5px'
     });
     expect(
       rule('.jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button)')
     ).toMatchObject({ gap: '8px' });
     await dialog.close('Cancel');
+  });
+
+  it('ACC-PANEL-236 Save is the one filled primary button; Cancel and Save as... are secondary and Delete config is an unfilled danger at the far left', async () => {
+    const all = await lab({ ports: [new SimSerialPort(UNO)] });
+    const dialog = await openSettings(all, UNO_NAME);
+    expect(dialog.buttons.map(shown => shown.label)).toEqual([
+      'Delete config',
+      'Cancel',
+      'Save as...',
+      'Save'
+    ]);
+    expect(
+      rule('button.jp-Dialog-button.jp-DeviceBridgeSettings-primary')
+    ).toEqual({
+      padding: '0 18px',
+      border: '1px solid var(--jp-brand-color1)',
+      background: 'var(--jp-brand-color1)',
+      color: 'var(--jp-ui-inverse-font-color0)',
+      'font-weight': '600'
+    });
+    expect(
+      rule('button.jp-Dialog-button.jp-DeviceBridgeSettings-secondary')
+    ).toEqual({
+      border: '1px solid var(--jp-border-color2)',
+      background: 'var(--db-secondary)',
+      color: 'var(--jp-ui-font-color0)'
+    });
+    expect(
+      rule(
+        '.jp-Dialog-footer:has(.jp-DeviceBridgeSettings-button) button.jp-Dialog-button.jp-DeviceBridgeSettings-danger'
+      )
+    ).toEqual({
+      'margin-right': 'auto',
+      border: '1px solid var(--db-danger-border)',
+      background: 'transparent',
+      color: 'var(--jp-error-color1)'
+    });
+    // The buttons draw no ring unless the keyboard focuses them.
+    expect(
+      rule('button.jp-Dialog-button.jp-DeviceBridgeSettings-button:focus')
+    ).toEqual({ outline: 'none' });
+    expect(
+      rule(
+        'button.jp-Dialog-button.jp-DeviceBridgeSettings-button:focus-visible'
+      )
+    ).toEqual({
+      outline: '2px solid var(--jp-brand-color2)',
+      'outline-offset': '1px'
+    });
+    await dialog.close('Cancel');
+  });
+
+  it('ACC-PANEL-232 the stylesheet caps the Serial settings dialog at 680 px, fixes the table at 42/58 columns with 40 px rows, and gives every control 28 px and the full value column', () => {
+    expect(
+      rule('.jp-Dialog-content:has(.jp-DeviceBridgeSettings-table)')
+    ).toEqual({
+      width: 'min(680px, calc(100vw - 32px))',
+      'max-width': 'min(680px, calc(100vw - 32px))',
+      'min-width': 'min(520px, calc(100vw - 32px))'
+    });
+    expect(rule('.jp-DeviceBridgeSettings-table')).toEqual({
+      width: '100%',
+      'table-layout': 'fixed',
+      'border-collapse': 'collapse'
+    });
+    expect(
+      rule(
+        '.jp-DeviceBridgeSettings-table th, .jp-DeviceBridgeSettings-table td'
+      )
+    ).toMatchObject({
+      'box-sizing': 'border-box',
+      height: '40px',
+      padding: '6px 12px'
+    });
+    expect(rule('.jp-DeviceBridgeSettings-table th')).toMatchObject({
+      width: '42%',
+      color: 'var(--jp-ui-font-color2)',
+      'font-size': 'var(--jp-ui-font-size1)',
+      'font-weight': '400'
+    });
+    expect(rule('.jp-DeviceBridgeSettings-table td')).toMatchObject({
+      width: '58%',
+      color: 'var(--jp-ui-font-color0)',
+      'font-size': 'var(--jp-ui-font-size1)'
+    });
+    expect(rule('.jp-DeviceBridgeSettings-field')).toMatchObject({
+      display: 'flex',
+      'align-items': 'center',
+      'min-width': '0'
+    });
+    expect(
+      rule(
+        '.jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input, .jp-DeviceBridgeSettings .jp-DeviceBridgePanel-input.jp-mod-styled'
+      )
+    ).toMatchObject({
+      'box-sizing': 'border-box',
+      flex: '1 1 auto',
+      width: '100%',
+      height: '28px',
+      'min-height': '28px',
+      'font-size': 'var(--jp-ui-font-size1)'
+    });
+    expect(
+      rule(
+        '.jp-DeviceBridgeSettings .jp-DeviceBridgeSettings-field .jp-select-wrapper'
+      )
+    ).toMatchObject({
+      flex: '1 1 auto',
+      width: '100%',
+      'min-width': '0',
+      height: '28px',
+      margin: '0',
+      padding: '0'
+    });
+    // The baud rate is an input joined to a 30 px button in one group.
+    expect(rule('.jp-DeviceBridgeSettings-baud')).toMatchObject({
+      display: 'flex',
+      'min-width': '0',
+      'border-radius': 'var(--jp-border-radius)'
+    });
+    expect(
+      rule(
+        '.jp-DeviceBridgeSettings-baudToggle, .jp-DeviceBridgeSettings-baudToggle.jp-mod-styled'
+      )
+    ).toMatchObject({
+      'box-sizing': 'border-box',
+      flex: '0 0 30px',
+      'min-width': '30px',
+      height: '28px',
+      'line-height': '1',
+      padding: '0'
+    });
+  });
+
+  it('ACC-PANEL-237 the rows carry a 9% hairline and no band fill; labels are muted and values primary at the UI size', () => {
+    expect(css).not.toContain(':nth-child(odd)');
+    expect(css).not.toContain(':nth-child(even)');
+    expect(css).not.toContain('--db-row-odd');
+    expect(css).not.toContain('--db-row-even');
+    expect(
+      rule(
+        '.jp-DeviceBridgeSettings-table tbody tr + tr th, .jp-DeviceBridgeSettings-table tbody tr + tr td'
+      )
+    ).toEqual({ 'box-shadow': 'inset 0 1px 0 var(--db-line)' });
+    // The formatter wraps the mix over several lines; it is one expression.
+    const normal = (value: string): string =>
+      value.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')');
+    const tokens = rule('.jp-Dialog-content:has(.jp-DeviceBridgeSettings)');
+    expect(normal(tokens['--db-line'])).toBe(
+      'color-mix(in srgb, var(--jp-ui-font-color0) 9%, transparent)'
+    );
+    expect(rule('.jp-DeviceBridgeSettings-table th')).toMatchObject({
+      color: 'var(--jp-ui-font-color2)'
+    });
+    expect(rule('.jp-DeviceBridgeSettings-table td')).toMatchObject({
+      color: 'var(--jp-ui-font-color0)',
+      'font-size': 'var(--jp-ui-font-size1)'
+    });
   });
 });
 
@@ -1559,8 +1726,8 @@ describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
 
     expect(dialog.title).toBe(`Serial settings of ${UNO_NAME}`);
     expect(dialog.buttons.map(shown => [shown.label, shown.accept])).toEqual([
-      ['Cancel', false],
       ['Delete config', true],
+      ['Cancel', false],
       ['Save as...', false],
       ['Save', true]
     ]);
@@ -1709,17 +1876,57 @@ describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
     await dialog.close('Cancel');
   });
 
-  it('ACC-PANEL-232 the baud field lists the standard rates in a datalist and the Custom badge follows the value', async () => {
+  it('ACC-PANEL-232 each value cell holds one field wrapper with the control, and the baud rate group sits in its cell', async () => {
+    const all = await labWithConfigs();
+    const dialog = await openSettings(all, UNO_NAME);
+
+    const rows = Array.from(
+      dialog.body.node.querySelectorAll(
+        '.jp-DeviceBridgeSettings-table tbody tr'
+      )
+    );
+    expect(rows).toHaveLength(6);
+    for (const row of rows) {
+      const cell = one(row, 'td');
+      const field = one(cell, '.jp-DeviceBridgeSettings-field');
+      expect(field.parentElement).toBe(cell);
+      expect(field.querySelectorAll('input, select')).toHaveLength(1);
+    }
+    // The input and the list button are the one group in the baud cell.
+    const baud = control(dialog.body.node, 'baudRate');
+    const group = baudGroup(dialog.body.node);
+    const field = baud.closest('.jp-DeviceBridgeSettings-field')!;
+    expect(field.parentElement?.tagName).toBe('TD');
+    expect(group.parentElement).toBe(field);
+    expect(group.querySelectorAll('input')).toHaveLength(1);
+    expect(group.querySelectorAll('button')).toHaveLength(1);
+    // No datalist and no Custom badge remain.
+    expect(dialog.body.node.querySelector('datalist')).toBeNull();
+    expect(dialog.body.node.querySelector('[data-setting-badge]')).toBeNull();
+    await dialog.close('Cancel');
+  });
+
+  it('ACC-PANEL-235 the baud rate is an editable input joined to a button that opens the sixteen standard rates in a menu, and a chosen rate fills the input', async () => {
     const all = await labWithConfigs();
     const dialog = await openSettings(all, UNO_NAME);
     const baud = control(dialog.body.node, 'baudRate') as HTMLInputElement;
-    const list = one(dialog.body.node, `#${baud.getAttribute('list')}`);
-    const mark = badge(dialog.body.node);
+    const group = baudGroup(dialog.body.node);
+    const toggle = baudToggle(dialog.body.node);
 
-    expect(list.tagName).toBe('DATALIST');
-    expect(
-      Array.from(list.querySelectorAll('option'), option => option.value)
-    ).toEqual([
+    expect(group.contains(baud)).toBe(true);
+    expect(group.contains(toggle)).toBe(true);
+    expect(toggle.getAttribute('aria-label')).toBe('Standard baud rates');
+    expect(baud.getAttribute('list')).toBeNull();
+    expect(baud.getAttribute('aria-expanded')).toBe('false');
+
+    // The menu is a widget of the page body, so the dialog cannot clip it.
+    expect(document.body.querySelector('.lm-Menu')).toBeNull();
+    toggle.click();
+    const menu = one(document.body, '.jp-DeviceBridgeSettings-baudMenu');
+    expect(menu.classList.contains('lm-Menu')).toBe(true);
+    expect(baud.getAttribute('aria-expanded')).toBe('true');
+    const items = Array.from(menu.querySelectorAll('li.lm-Menu-item'));
+    expect(items.map(item => item.textContent)).toEqual([
       '300',
       '600',
       '1200',
@@ -1737,21 +1944,21 @@ describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
       '460800',
       '921600'
     ]);
-    // The badge is in the same cell as the field; 115200 is a standard rate.
-    expect(mark.closest('td')).toBe(baud.closest('td'));
-    expect(mark.hidden).toBe(true);
+    expect(items.some(item => item.textContent === 'Custom')).toBe(false);
 
-    choose(dialog.body.node, 'baudRate', '123456');
-    expect(mark.hidden).toBe(false);
+    // Choosing a rate writes it into the input, closes the list and returns focus.
+    pick('device-bridge:baud-rate-9600');
+    expect(baud.value).toBe('9600');
+    expect(document.body.querySelector('.lm-Menu')).toBeNull();
+    expect(document.activeElement).toBe(baud);
+    expect(baud.getAttribute('aria-expanded')).toBe('false');
+    expect(
+      (control(dialog.body.node, 'config') as HTMLSelectElement).value
+    ).toBe('');
 
-    choose(dialog.body.node, 'baudRate', '115200');
-    expect(mark.hidden).toBe(true);
-
-    // A config with a standard rate fills the field and hides the badge again.
-    choose(dialog.body.node, 'baudRate', '123456');
-    choose(dialog.body.node, 'config', 'monitor');
-    expect(mark.hidden).toBe(true);
-    expect(baud.value).toBe('115200');
+    // A typed rate stays as typed; the input is editable at all times.
+    choose(dialog.body.node, 'baudRate', '250000');
+    expect(baud.value).toBe('250000');
     await dialog.close('Cancel');
   });
 
@@ -1780,7 +1987,6 @@ describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
     expect(control(second.body.node, 'baudRate').value).toBe('9600');
     choose(second.body.node, 'config', 'monitor');
     choose(second.body.node, 'baudRate', '250000');
-    expect(badge(second.body.node).hidden).toBe(false);
     expect(control(second.body.node, 'config').value).toBe('');
     await second.close('Save');
 
@@ -1790,7 +1996,6 @@ describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
     // The next dialog shows the typed rate in the one field.
     const third = await openSettings(all, UNO_NAME);
     expect(control(third.body.node, 'baudRate').value).toBe('250000');
-    expect(badge(third.body.node).hidden).toBe(false);
     await third.close('Cancel');
   });
 
@@ -1802,18 +2007,21 @@ describe('DeviceBridgePanel: the Settings dialog of a serial row', () => {
       dialog.buttons.map(shown => [shown.label, buttonClass(shown)])
     ).toEqual([
       [
-        'Cancel',
-        'jp-Dialog-button jp-mod-reject jp-DeviceBridgeSettings-button'
+        'Delete config',
+        'jp-Dialog-button jp-mod-accept jp-mod-warn jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-danger'
       ],
       [
-        'Delete config',
-        'jp-Dialog-button jp-mod-accept jp-mod-warn jp-DeviceBridgeSettings-button'
+        'Cancel',
+        'jp-Dialog-button jp-mod-reject jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-secondary'
       ],
       [
         'Save as...',
-        'jp-Dialog-button jp-mod-reject jp-DeviceBridgeSettings-button'
+        'jp-Dialog-button jp-mod-reject jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-secondary'
       ],
-      ['Save', 'jp-Dialog-button jp-mod-accept jp-DeviceBridgeSettings-button']
+      [
+        'Save',
+        'jp-Dialog-button jp-mod-accept jp-DeviceBridgeSettings-button jp-DeviceBridgeSettings-primary'
+      ]
     ]);
     // The lab's warn button keeps the accept flag, so an accent button is an accept
     // button without the warning class.

@@ -19,7 +19,7 @@ from .test_cli import cli_run, lab  # noqa: F401 - fixtures
 from .test_client import attach_serial
 from .test_manager import record
 
-# The pio of the firmware environment for AVR boards (resources/envs/firmware-avr.py).
+# The pio of the firmware environment for AVR boards (firmware-avr.py of the copier embedded project template).
 FIRMWARE_AVR = os.path.expanduser("~/.cache/conda/envs/firmware-avr")
 PIO = shutil.which("pio") or next(
     (path for path in [os.path.join(FIRMWARE_AVR, "bin", "pio")] if os.access(path, os.X_OK)), None)

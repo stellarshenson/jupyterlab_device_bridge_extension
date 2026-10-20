@@ -95,7 +95,7 @@ Verify each one that your design depends on.
 
 You have no board, and headless Chrome has no ports. Simulate devices at the browser interface (`navigator.serial`, `navigator.usb`) in Jest and in the Galata tests, and run the whole path against them: a serial device that echoes and records its open parameters and control lines, and a USB device that answers control and bulk transfers. Where an upload tool is installed, a simulated bootloader that lets the real tool complete an upload is the strongest check.
 
-The firmware environment installers are `resources/envs/firmware-avr.py`, `firmware-stm32.py` and `firmware-esp.py` in this repository (conda environments of 2 to 5 GB, none installed now). Install one only if a test needs its tool. Do not install with apt.
+The firmware environment installers are `firmware-avr.py`, `firmware-stm32.py` and `firmware-esp.py` in the copier embedded project template at https://github.com/stellarshenson/copier-embedded-project, under `template/resources/envs` (conda environments of 2 to 5 GB, none installed now); this extension ships none. Install one only if a test needs its tool. Do not install with apt.
 
 Every criterion that needs a physical board gets the test tag `MANUAL` and stays open for the user. Do not state that anything works with hardware.
 

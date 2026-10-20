@@ -944,7 +944,7 @@ test.describe('Devices panel', () => {
     await saveSettings(page, 'Cancel');
   });
 
-  test('ACC-PANEL-232 the Settings dialog renders a table of six settings, and typing 250000 shows Custom while 115200 hides it', async ({
+  test('ACC-PANEL-235 the baud rate is an editable field joined to a button that lists the sixteen standard rates, and choosing one writes it into the field', async ({
     page
   }) => {
     const port = simSerial();
@@ -954,30 +954,87 @@ test.describe('Devices panel', () => {
     await openSettings(page, portRow);
 
     const dialog = settingsDialog(page);
-    const rows = dialog.locator('table tbody tr');
-    await expect(rows).toHaveCount(6);
-    await expect(rows.locator('th')).toHaveText([
-      'Config',
-      'Baud rate',
-      'Data bits',
-      'Parity',
-      'Stop bits',
-      'When a program opens the port'
-    ]);
-    // Every value cell holds exactly one control.
-    for (let index = 0; index < 6; index++) {
-      await expect(rows.nth(index).locator('td')).toHaveCount(1);
-      await expect(rows.nth(index).locator('td input, td select')).toHaveCount(
-        1
-      );
-    }
-
     const baud = settingsField(page, 'baudRate');
-    const custom = dialog.locator('[data-setting-badge="custom"]');
-    await expect(custom).toBeHidden();
+    const group = dialog.locator('[data-setting-baud]');
+    const toggle = group.locator('button');
+    await expect(baud).toHaveValue('115200');
+    await expect(group.locator('input')).toHaveCount(1);
+    await expect(toggle).toHaveCount(1);
+    await expect(toggle).toHaveAttribute('aria-label', 'Standard baud rates');
 
+    // The input and the button sit on one line as one joined control.
+    const inputBox = await baud.boundingBox();
+    const toggleBox = await toggle.boundingBox();
+    expect(inputBox).not.toBeNull();
+    expect(toggleBox).not.toBeNull();
+    expect(Math.abs(inputBox!.y - toggleBox!.y)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(inputBox!.height - toggleBox!.height)).toBeLessThanOrEqual(
+      0.5
+    );
+    expect(inputBox!.x + inputBox!.width).toBeCloseTo(toggleBox!.x, 1);
+
+    // The button opens the list of the sixteen rates in the page body, so the
+    // dialog body, which clips its overflow, cannot clip it.
+    await toggle.click();
+    const menu = page.locator('.jp-DeviceBridgeSettings-baudMenu');
+    await expect(menu).toBeVisible();
+
+    // The list is capped at 168 px, opens at the left edge of the field and
+    // ends above the footer actions.
+    const menuBox = await menu.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox!.height).toBeLessThanOrEqual(168);
+    const groupBox = await group.boundingBox();
+    expect(groupBox).not.toBeNull();
+    expect(Math.abs(menuBox!.x - groupBox!.x)).toBeLessThanOrEqual(1);
+    const footerTop = Math.min(
+      ...(await dialog
+        .locator('.jp-DeviceBridgeSettings-button')
+        .evaluateAll(nodes =>
+          nodes.map(node => node.getBoundingClientRect().top)
+        ))
+    );
+    expect(menuBox!.y + menuBox!.height).toBeLessThan(footerTop);
+
+    const items = menu.locator('.lm-Menu-item[data-command]');
+    await expect(items).toHaveCount(16);
+    await expect(items.first()).toHaveText('300');
+    await expect(items.last()).toHaveText('921600');
+    await expect(
+      menu.locator('.lm-Menu-itemLabel', { hasText: /^Custom$/ })
+    ).toHaveCount(0);
+
+    // Choosing 9600 writes it into the field, closes the list and returns focus.
+    await menu
+      .locator('.lm-Menu-item[data-command="device-bridge:baud-rate-9600"]')
+      .click();
+    await expect(menu).toHaveCount(0);
+    await expect(baud).toHaveValue('9600');
+    expect(
+      await page.evaluate(() =>
+        document.activeElement?.getAttribute('data-setting-field')
+      )
+    ).toBe('baudRate');
+
+    // At a narrow viewport the list is bounded by the field it belongs to, so
+    // it stays inside the dialog.
+    await page.setViewportSize({ width: 300, height: 1200 });
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    const narrowGroupBox = await group.boundingBox();
+    const narrowMenuBox = await menu.boundingBox();
+    expect(narrowGroupBox).not.toBeNull();
+    expect(narrowMenuBox).not.toBeNull();
+    expect(narrowMenuBox!.width).toBeLessThanOrEqual(narrowGroupBox!.width + 1);
+    await menu
+      .locator('.lm-Menu-item[data-command="device-bridge:baud-rate-9600"]')
+      .click();
+    await expect(menu).toHaveCount(0);
+    await page.setViewportSize({ width: 1600, height: 1200 });
+
+    // The field stays editable at all times: 250000 is kept as typed and saved.
     await baud.fill('250000');
-    await expect(custom).toBeVisible();
+    await expect(baud).toHaveValue('250000');
     await saveSettings(page);
     await expect(field(portRow, 'baud')).toHaveText('250000', {
       timeout: ROUND_TRIP
@@ -985,9 +1042,227 @@ test.describe('Devices panel', () => {
 
     await openSettings(page, portRow);
     await expect(baud).toHaveValue('250000');
-    await expect(custom).toBeVisible();
-    await baud.fill('115200');
-    await expect(custom).toBeHidden();
+    await saveSettings(page, 'Cancel');
+  });
+
+  test('ACC-PANEL-232 the settings dialog is 680 px wide with six 342.56 px controls of 28 px in 40 px rows and four 28 px footer buttons', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await page.setViewportSize({ width: 1600, height: 1200 });
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    await openSettings(page, row(page, port.name));
+
+    const dialog = settingsDialog(page);
+    const content = dialog.locator('.jp-Dialog-content');
+    const contentBox = await content.boundingBox();
+    expect(contentBox).not.toBeNull();
+    expect(contentBox!.width).toBeCloseTo(680, 1);
+
+    // The width cap follows the viewport: 100vw - 32 px below 712 px.
+    await page.setViewportSize({ width: 600, height: 1200 });
+    await expect
+      .poll(async () => (await content.boundingBox())?.width ?? 0)
+      .toBeCloseTo(568, 1);
+
+    // At 300 px the footer wraps: each button lies inside the footer row and
+    // neither its text nor its height overflows the button.
+    await page.setViewportSize({ width: 300, height: 1200 });
+    const footer = dialog.locator('.jp-Dialog-footerButtons');
+    await expect
+      .poll(async () => (await footer.boundingBox())?.width ?? 0)
+      .toBeLessThan(300);
+    const footerBox = await footer.boundingBox();
+    expect(footerBox).not.toBeNull();
+    const footerButtons = dialog.locator('.jp-DeviceBridgeSettings-button');
+    await expect(footerButtons).toHaveCount(4);
+    const wrapped = await footerButtons.evaluateAll(nodes =>
+      nodes.map(node => {
+        const box = node.getBoundingClientRect();
+        return {
+          left: box.left,
+          right: box.right,
+          top: box.top,
+          bottom: box.bottom,
+          overflowsWidth: node.scrollWidth - node.clientWidth,
+          overflowsHeight: node.scrollHeight - node.clientHeight
+        };
+      })
+    );
+    for (const box of wrapped) {
+      expect(box.left).toBeGreaterThanOrEqual(footerBox!.x - 0.5);
+      expect(box.right).toBeLessThanOrEqual(
+        footerBox!.x + footerBox!.width + 0.5
+      );
+      expect(box.top).toBeGreaterThanOrEqual(footerBox!.y - 0.5);
+      expect(box.bottom).toBeLessThanOrEqual(
+        footerBox!.y + footerBox!.height + 0.5
+      );
+      expect(box.overflowsWidth).toBeLessThanOrEqual(1);
+      expect(box.overflowsHeight).toBeLessThanOrEqual(1);
+    }
+
+    await page.setViewportSize({ width: 1600, height: 1200 });
+    await expect
+      .poll(async () => (await content.boundingBox())?.width ?? 0)
+      .toBeCloseTo(680, 1);
+
+    // Six controls of one width and one height, with right edges in one line.
+    // The baud rate is the joined group, not its narrower input.
+    const controls = dialog.locator(
+      '[data-setting-field]:not([data-setting-field="baudRate"]), [data-setting-baud]'
+    );
+    await expect(controls).toHaveCount(6);
+    const boxes = await controls.evaluateAll(nodes =>
+      nodes.map(node => {
+        const box = node.getBoundingClientRect();
+        return { width: box.width, height: box.height, right: box.right };
+      })
+    );
+    for (const box of boxes) {
+      expect(Math.abs(box.width - 342.56)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(box.height - 28)).toBeLessThanOrEqual(0.5);
+    }
+    const rights = boxes.map(box => box.right);
+    expect(Math.max(...rights) - Math.min(...rights)).toBeLessThanOrEqual(0.5);
+    const table = await dialog.locator('table').boundingBox();
+    expect(table).not.toBeNull();
+    for (const right of rights) {
+      // The value cell has 12 px of padding on its right edge.
+      expect(
+        Math.abs(table!.x + table!.width - right - 12)
+      ).toBeLessThanOrEqual(0.5);
+    }
+
+    // Six rows of 40 px and four footer buttons of 28 px.
+    const rows = dialog.locator('table tbody tr');
+    await expect(rows).toHaveCount(6);
+    const rowHeights = await rows.evaluateAll(nodes =>
+      nodes.map(node => node.getBoundingClientRect().height)
+    );
+    for (const height of rowHeights) {
+      expect(Math.abs(height - 40)).toBeLessThanOrEqual(0.5);
+    }
+    const buttons = dialog.locator('.jp-DeviceBridgeSettings-button');
+    await expect(buttons).toHaveCount(4);
+    const buttonHeights = await buttons.evaluateAll(nodes =>
+      nodes.map(node => node.getBoundingClientRect().height)
+    );
+    for (const height of buttonHeights) {
+      expect(Math.abs(height - 28)).toBeLessThanOrEqual(0.5);
+    }
+
+    // The baud rate is one editable text field joined to the list button; the
+    // group ends on the same line as the other controls.
+    const baud = settingsField(page, 'baudRate');
+    await expect(baud).toHaveValue('115200');
+    expect(await baud.evaluate(node => node.tagName)).toBe('INPUT');
+    expect(await baud.getAttribute('inputmode')).toBe('numeric');
+    expect(await baud.getAttribute('list')).toBeNull();
+    const group = dialog.locator('[data-setting-baud]');
+    await expect(group.locator('input')).toHaveCount(1);
+    await expect(group.locator('button')).toHaveCount(1);
+    const groupBox = await group.boundingBox();
+    expect(groupBox).not.toBeNull();
+    expect(groupBox!.width).toBeCloseTo(342.56, 1);
+    expect(groupBox!.height).toBeCloseTo(28, 1);
+    expect(
+      Math.abs(groupBox!.x + groupBox!.width - Math.max(...rights))
+    ).toBeLessThanOrEqual(0.5);
+    await expect(dialog.locator('datalist')).toHaveCount(0);
+    await expect(dialog.locator('[data-setting-badge]')).toHaveCount(0);
+    await saveSettings(page, 'Cancel');
+  });
+
+  test('ACC-PANEL-237 settings rows have equal backgrounds and a 1 px hairline, with muted labels and 13 px primary values', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    await openSettings(page, row(page, port.name));
+
+    const dialog = settingsDialog(page);
+    const rows = dialog.locator('table tbody tr');
+    await expect(rows).toHaveCount(6);
+
+    // No band fill: every row has the one background.
+    const backgrounds = await rows.evaluateAll(nodes =>
+      nodes.map(node => getComputedStyle(node).backgroundColor)
+    );
+    expect(new Set(backgrounds).size).toBe(1);
+
+    // The line sits on the cells of the row; the first row has none above it,
+    // every later row carries a 1 px inset line.
+    const labels = dialog.locator('table tbody tr th');
+    await expect(labels).toHaveCount(6);
+    const shadows = await labels.evaluateAll(nodes =>
+      nodes.map(node => getComputedStyle(node).boxShadow)
+    );
+    expect(shadows[0]).toBe('none');
+    for (const shadow of shadows.slice(1)) {
+      expect(shadow).toContain('inset');
+      expect(shadow).toMatch(/0px 1px 0px 0px/);
+    }
+
+    // The line is 9% of the UI text colour, and the tokens give the row surface.
+    const line = await page.evaluate(() => {
+      const cell = document.querySelector('table tbody tr + tr th')!;
+      const probe = document.createElement('div');
+      probe.style.background =
+        'color-mix(in srgb, var(--jp-ui-font-color0) 9%, transparent)';
+      document.body.append(probe);
+      const expected = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { expected, shadow: getComputedStyle(cell).boxShadow };
+    });
+    /** The four values of a CSS colour, channels 0 to 255, from rgb() or color(srgb). */
+    const channels = (value: string): number[] => {
+      const found = value.match(/[\d.]+/g)!.map(Number);
+      if (/^color\(/.test(value)) {
+        return [...found.slice(0, 3).map(part => part * 255), found[3]];
+      }
+      return found.slice(0, 4);
+    };
+    const shadowColour = line.shadow.match(/rgba?\([^)]*\)|color\([^)]*\)/);
+    expect(shadowColour).not.toBeNull();
+    const expected = channels(line.expected);
+    const shown = channels(shadowColour![0]);
+    for (let index = 0; index < 3; index++) {
+      expect(Math.abs(shown[index] - expected[index])).toBeLessThanOrEqual(1);
+    }
+    expect(Math.abs(shown[3] - expected[3])).toBeLessThanOrEqual(0.01);
+
+    // Labels use the muted UI colour; values and controls the primary one at 13 px.
+    const styles = await dialog.evaluate(node => {
+      const probe = document.createElement('div');
+      document.body.append(probe);
+      const read = (name: string): string => {
+        probe.style.color = `var(${name})`;
+        return getComputedStyle(probe).color;
+      };
+      const muted = read('--jp-ui-font-color2');
+      const primary = read('--jp-ui-font-color0');
+      probe.remove();
+      const label = getComputedStyle(node.querySelector('tbody th')!);
+      const value = getComputedStyle(node.querySelector('tbody td')!);
+      const control = getComputedStyle(
+        node.querySelector('[data-setting-field="dataBits"]')!
+      );
+      return {
+        muted,
+        primary,
+        label: label.color,
+        value: value.color,
+        control: control.color,
+        fontSize: control.fontSize
+      };
+    });
+    expect(styles.label).toBe(styles.muted);
+    expect(styles.value).toBe(styles.primary);
+    expect(styles.control).toBe(styles.primary);
+    expect(styles.fontSize).toBe('13px');
     await saveSettings(page, 'Cancel');
   });
 
@@ -1008,6 +1283,125 @@ test.describe('Devices panel', () => {
       expect(box).not.toBeNull();
       expect(box!.height).toBeLessThanOrEqual(30);
     }
+  });
+
+  test('ACC-PANEL-236 Save is the only filled button, Cancel and Save as... are secondary, and Delete config is an unfilled danger at the far left', async ({
+    page
+  }) => {
+    const port = simSerial();
+    await openLab(page, { serial: [port] });
+    await addSerial(page, port);
+    await openSettings(page, row(page, port.name));
+    const dialog = settingsDialog(page);
+    const remove = settingsButton(page, 'Delete config');
+    const cancel = settingsButton(page, 'Cancel');
+    const saveAs = settingsButton(page, 'Save as...');
+    const save = settingsButton(page, 'Save');
+
+    await expect(remove).toHaveClass(/jp-DeviceBridgeSettings-danger/);
+    await expect(cancel).toHaveClass(/jp-DeviceBridgeSettings-secondary/);
+    await expect(saveAs).toHaveClass(/jp-DeviceBridgeSettings-secondary/);
+    await expect(save).toHaveClass(/jp-DeviceBridgeSettings-primary/);
+
+    // Delete config is at the far left; the other three form the right group.
+    const [removeBox, cancelBox, saveAsBox, saveBox] = await Promise.all(
+      [remove, cancel, saveAs, save].map(button => button.boundingBox())
+    );
+    for (const box of [removeBox, cancelBox, saveAsBox, saveBox]) {
+      expect(box).not.toBeNull();
+    }
+    expect(removeBox!.x).toBeLessThan(cancelBox!.x);
+    expect(removeBox!.x + removeBox!.width).toBeLessThanOrEqual(cancelBox!.x);
+    expect(cancelBox!.x).toBeLessThan(saveAsBox!.x);
+    expect(saveAsBox!.x).toBeLessThan(saveBox!.x);
+    // Delete config stands apart at the far left, while the other three keep
+    // their 8 px gaps.
+    expect(cancelBox!.x - (removeBox!.x + removeBox!.width)).toBeGreaterThan(
+      32
+    );
+    expect(saveAsBox!.x - (cancelBox!.x + cancelBox!.width)).toBeCloseTo(8, 0);
+    expect(saveBox!.x - (saveAsBox!.x + saveAsBox!.width)).toBeCloseTo(8, 0);
+
+    // The dialog opens on the Config control, so none of the four footer
+    // buttons carries a focus ring at open.
+    const outlines = await page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.jp-Dialog-button.jp-DeviceBridgeSettings-button'
+        )
+      ).map(button => getComputedStyle(button).outlineStyle)
+    );
+    expect(outlines).toEqual(['none', 'none', 'none', 'none']);
+
+    const colours = await page.evaluate(() => {
+      const probe = document.createElement('div');
+      document.body.append(probe);
+      const read = (name: string): string => {
+        probe.style.color = `var(${name})`;
+        return getComputedStyle(probe).color;
+      };
+      const brand = read('--jp-brand-color1');
+      const error = read('--jp-error-color1');
+      const border = read('--jp-border-color2');
+      probe.remove();
+      const find = (label: string): HTMLElement =>
+        Array.from(
+          document.querySelectorAll<HTMLElement>('.jp-Dialog-button')
+        ).find(button => button.textContent?.trim() === label)!;
+      const style = (label: string) => {
+        const shown = getComputedStyle(find(label));
+        return {
+          background: shown.backgroundColor,
+          color: shown.color,
+          border: shown.borderTopColor,
+          outline: shown.outlineStyle
+        };
+      };
+      // No permanent focus ring: leave no button focused while the styles are read.
+      (document.activeElement as HTMLElement | null)?.blur();
+      return {
+        brand,
+        error,
+        border,
+        save: style('Save'),
+        cancel: style('Cancel'),
+        saveAs: style('Save as...'),
+        remove: style('Delete config')
+      };
+    });
+    /** The values of an rgb() or color(srgb) colour, channels 0 to 255. */
+    const numbers = (value: string): number[] => {
+      const found = value.match(/[\d.]+/g)!.map(Number);
+      return /^color\(/.test(value)
+        ? [...found.slice(0, 3).map(part => part * 255), found[3] ?? 1]
+        : found.slice(0, 4);
+    };
+    expect(colours.save.background).toBe(colours.brand);
+    expect(colours.cancel.background).toBe(colours.saveAs.background);
+    expect(colours.cancel.background).not.toBe(colours.brand);
+    expect(colours.cancel.border).toBe(colours.border);
+    expect(colours.saveAs.border).toBe(colours.border);
+    expect(colours.remove.background).toBe('rgba(0, 0, 0, 0)');
+    expect(colours.remove.color).toBe(colours.error);
+    // The border is 45% of the error colour over the border colour.
+    const borderNumbers = numbers(colours.border);
+    const expectedBorder = numbers(colours.error).map(
+      (part, index) => part * 0.45 + borderNumbers[index] * 0.55
+    );
+    numbers(colours.remove.border).forEach((part, index) => {
+      if (index < 3) {
+        expect(Math.abs(part - expectedBorder[index])).toBeLessThanOrEqual(1);
+      }
+    });
+    for (const style of [
+      colours.save,
+      colours.cancel,
+      colours.saveAs,
+      colours.remove
+    ]) {
+      expect(style.outline).toBe('none');
+    }
+    await saveSettings(page, 'Cancel');
   });
 
   test('ACC-PANEL-222 the rendered Settings dialog has one accent button, Save; Delete config carries the warning class and Cancel and Save as... are secondary', async ({

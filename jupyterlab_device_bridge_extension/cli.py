@@ -316,7 +316,9 @@ def cmd_terminal(bridge: DeviceBridgeClient, args: argparse.Namespace) -> int:
 
     # The theme is chosen before the app starts: the app owns the terminal after that.
     app = terminal_app.SerialTerminal(bridge, record, baud, tui_theme.pick_theme())
-    app.run()
+    # The mouse is left to the outer terminal: the lab's xterm.js then selects text and
+    # owns the clipboard, and Ctrl+C with no selection still reaches the app.
+    app.run(mouse=False)
     return app.return_code or 0
 
 
@@ -644,18 +646,26 @@ keys (the bottom row of the app lists them too):
   Ctrl+O  settings: baud rate, data bits, parity, stop bits, the line ending and
           text or hex for the typed line; Enter applies, Esc cancels
   Ctrl+X  text/hex: show the traffic as text or as hex digits
-  Ctrl+P  pause: stop the scrolling of the traffic, and start it again
+  Ctrl+P  pause: hold the traffic view; new lines show at the next Ctrl+P
   Ctrl+L  clear: empty the traffic view
-  F2      DTR on/off
-  F3      RTS on/off
-  F4      break of 0.25 s
-  F6      pulse DTR: the action pulse-dtr
-  F7      pulse RTS: the action pulse-rts
-  F8      ESP bootloader: the action esp-bootloader
-  F10     1200 baud touch: the action touch-1200
-  Ctrl+C  send 0x03 to the port; it does not quit
+  PgUp    scroll up: show earlier lines of the traffic view
+  PgDn    scroll down: show later lines of the traffic view
+  Up      line up: scroll the traffic view up one line; the mouse wheel sends this
+          key
+  Down    line down: scroll the traffic view down one line; the mouse wheel sends
+          this key
+  Ctrl+C  send 0x03: with no text selected, send the byte 0x03; with text selected
+          the lab terminal copies it
   Ctrl+Y  keys: a list of every key with what it does; Esc or Ctrl+Y closes it
   Enter   send the typed line
+
+Select text with the mouse and copy it as in any other terminal of the lab: the
+lab terminal (xterm.js) owns the selection and the clipboard, so Ctrl+C copies
+the selected text and sends no byte, and Ctrl+V pastes the first line of the
+clipboard into the send field. Enter then sends that line. While the view is not
+paused it returns to the end at each new line: on a port that keeps sending,
+press Ctrl+P before you scroll back or select text, and Ctrl+P again to follow
+the traffic.
 
 The baud rate is the port's unless --baud is given. The command refuses, with
 exit status 1, when another program holds the device, and names that program.

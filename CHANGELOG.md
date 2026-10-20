@@ -2,6 +2,31 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.62] - 2026-10-20
+
+The serial terminal is a plain serial terminal with select, copy and paste, the agent skill documents any device in one reference format, and a starting device bridge removes the stale devices of its folder. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Added
+
+- Device references in the agent skill: `references/device-reference.md` gives one format for any device, with sections for the device protocol and code and the host protocol and code, and the procedure an agent follows to research a device, download its datasheets and save the reference under `references/devices/` of a project made from the copier embedded project template
+- Worked example `references/devices/turmo-usb-monitor.md`: the TURMO 3.5 inch USB screen, its protocol, its traps and recovery, and the host programs `turmo.py`, `gpu_status.py` and `dashboard.html`
+- Stale device sweep: when the server starts and each time a lab tab connects, the device folder loses every `tty-*` or `usb-*` link, link to a pty and shim socket that belongs to no device of the bridge; the entries of the devices the panel lists stay
+- Serial terminal: the mouse wheel, Up and Down scroll the traffic view one line, PgUp and PgDn one page
+- The serial terminal tab is named Serial Terminal and carries the device icon
+
+### Changed
+
+- The serial terminal leaves the mouse to the lab terminal: a selection copies with Ctrl+C, Ctrl+V pastes the first line of the clipboard into the send field, and Ctrl+C with no selection still sends `0x03`. The board keys F2 to F10 are gone; the CLI keeps the line, break and run commands
+- Ctrl+P holds the traffic view; lines that arrive while it is paused are kept and shown at the next Ctrl+P
+- Settings dialog: the baud rate is an editable field joined to a button that lists the sixteen standard rates; **Save** is the only filled button, **Delete config** sits at the far left in the error colour, and rows are separated by hairlines
+- The firmware environment installers are no longer in this repository or the wheel; they are in the template of the copier embedded project, and the skill, the README and a missing-tool probe name it there
+- The next step of a probe whose tool is missing re-runs the probe after the installer
+
+### Fixed
+
+- The settings dialog controls had ragged widths because JupyterLab wraps each select in a shrink-wrapping wrapper (DEF-PANEL-27)
+- A paused traffic view moved one line for each arriving line once it held 5000 lines (DEF-TERM-29)
+
 ## [1.0.35] - 2026-10-18
 
 The Devices panel gets a settings dialog that reads as a table, a help tab on the lab's own Markdown viewer, byte counters that change unit, and a server discovery that identifies the lab hosting the command. The extension is tested against simulated devices in the browser; no test used a physical board.

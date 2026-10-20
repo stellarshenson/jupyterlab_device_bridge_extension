@@ -17,9 +17,10 @@ import sys
 import tomllib
 
 import pytest
+from textual.events import Paste
 from textual.widgets import Input, RadioButton, RadioSet, RichLog, Static
 
-from jupyterlab_device_bridge_extension import __version__, tui_theme
+from jupyterlab_device_bridge_extension import __version__, terminal_app, tui_theme
 from jupyterlab_device_bridge_extension.client import DeviceBridgeClient
 from jupyterlab_device_bridge_extension.terminal_app import KEY_HELP, KeysScreen, SerialTerminal, SettingsScreen
 from jupyterlab_device_bridge_extension.tests.fake_tab import SERIAL_NAME
@@ -149,8 +150,39 @@ async def test_acc_term_166_the_view_lists_both_directions_with_time_and_switche
         await pilot.press("ctrl+q")
 
 
+async def test_acc_term_166_a_paused_view_holds_its_place_past_keep_lines(terminal, monkeypatch):
+    """ACC-TERM-166 with the view full at KEEP_LINES lines, ^p and PgUp hold the view while lines arrive; ^p again shows the last KEEP_LINES lines and follows the end (DEF-TERM-29-PAUSE-TRIM)."""
+    monkeypatch.setattr(terminal_app, "KEEP_LINES", 60)
+    tab, app = await terminal()
+
+    async def send(numbers):
+        for n in numbers:
+            await tab.port_sends(SERIAL_NAME, f"line {n:03d}\n".encode())
+            await tab.until(lambda: app._rx == (n + 1) * 9)
+
+    async with app.run_test(size=SIZE) as pilot:
+        await held(tab, app)
+        log = app.query_one("#traffic", RichLog)
+        await send(range(60))
+        await tab.until(lambda: len(view(app)) == 60 and view(app)[-1][1] == "line 059")
+        await pilot.press("ctrl+p")
+        await pilot.press("pageup")
+        await pilot.pause(0.2)
+        assert not log.is_vertical_scroll_end
+        before = (log.scroll_y, log.lines[int(log.scroll_y)].text)
+        await send(range(60, 70))
+        await pilot.pause(0.3)
+        assert (log.scroll_y, log.lines[int(log.scroll_y)].text) == before
+
+        await pilot.press("ctrl+p")
+        await pilot.pause(0.3)
+        assert [body for _, body, _ in view(app)] == [f"line {n:03d}" for n in range(10, 70)]
+        assert log.is_vertical_scroll_end
+        await pilot.press("ctrl+q")
+
+
 async def test_acc_term_167_the_header_shows_the_device_its_settings_lines_counts_and_version(terminal):
-    """ACC-TERM-167 the header shows name, path, settings, DTR, RTS, RX and TX counts and the version, and each value follows a change: baud 9600 and DTR off."""
+    """ACC-TERM-167 the header shows name, path, settings, DTR, RTS, RX and TX counts and the version, and each value follows a change: baud 9600 and DTR off from the port record."""
     tab, app = await terminal()
     async with app.run_test(size=SIZE) as pilot:
         await held(tab, app)
@@ -160,7 +192,9 @@ async def test_acc_term_167_the_header_shows_the_device_its_settings_lines_count
         assert text_of(app, "#hdr-version") == f"v{__version__}"
 
         await choose(pilot, baud="9600")
-        await pilot.press("f2")
+        # The terminal has no key for DTR: the change comes from the bridge, as an agent's
+        # signal call does, and the header follows the record on its next read.
+        await asyncio.to_thread(app._device.signals, dtr=False)
         await tab.port_sends(SERIAL_NAME, b"12345\n")
         await type_line(pilot, "ab")
         await tab.until(lambda: " · 9600 8N1 · DTR off RTS - · RX 6 TX 3" in text_of(app, "#hdr-title"))
@@ -210,45 +244,55 @@ async def test_acc_term_168_the_settings_screen_works_from_the_keyboard_alone(te
         await pilot.press("ctrl+q")
 
 
-async def test_acc_term_169_keys_set_the_control_lines_send_a_break_and_run_the_actions(terminal):
-    """ACC-TERM-169 F2 and F3 set DTR and RTS off and on, F4 sends a break, F6 F7 F8 F10 run the four actions, and the footer lists every key."""
+async def test_acc_term_240_keys_the_terminal_binds_no_board_action_key(terminal, monkeypatch):
+    """ACC-TERM-240 the app binds no F2, F3, F4, F6, F7, F8 or F10 and none of their actions; pressing each sends no byte, calls neither signals nor action and changes nothing; the key line and the key help name only terminal keys; PgUp and PgDn scroll the traffic view."""
+    board_keys = {"f2", "f3", "f4", "f6", "f7", "f8", "f10"}
+    board_actions = {"line('dtr')", "line('rts')", "brk",
+                     "run('pulse-dtr')", "run('pulse-rts')", "run('esp-bootloader')", "run('touch-1200')"}
+    assert not board_keys & {binding.key for binding in SerialTerminal.BINDINGS}
+    assert not board_actions & {binding.action for binding in SerialTerminal.BINDINGS}
+
     tab, app = await terminal()
     async with app.run_test(size=SIZE) as pilot:
         await held(tab, app)
-
-        def signals():
-            return [{line: event[line] for line in ("dtr", "rts", "brk") if line in event}
-                    for event in tab.got("serial-signals")]
-
-        await pilot.press("f2")
-        await tab.until(lambda: signals() == [{"dtr": False}])
-        await tab.until(lambda: "DTR off" in text_of(app, "#hdr-title"))
-        await pilot.press("f2")
-        await tab.until(lambda: signals()[1:] == [{"dtr": True}])
-        await tab.until(lambda: "DTR on" in text_of(app, "#hdr-title"))
-        await pilot.press("f3")
-        await tab.until(lambda: signals()[2:] == [{"rts": False}])
-        await tab.until(lambda: "RTS off" in text_of(app, "#hdr-title"))
-        await pilot.press("f4")
-        await tab.until(lambda: signals()[3:] == [{"brk": True}, {"brk": False}])
-
-        for key, action in (("f6", "pulse-dtr"), ("f7", "pulse-rts"),
-                            ("f8", "esp-bootloader"), ("f10", "touch-1200")):
+        before = (text_of(app, "#hdr-title"), text_of(app, "#message"), len(view(app)))
+        for key in ("f2", "f3", "f4", "f6", "f7", "f8", "f10"):
             await pilot.press(key)
-            await tab.until(lambda: tab.got("serial-action")
-                            and tab.got("serial-action")[-1]["action"] == action)
-            await tab.until(lambda: text_of(app, "#message") == f"{action} done")
+        await pilot.pause(0.3)
+        assert tab.got("serial-signals") == []
+        assert tab.got("serial-action") == []
+        assert tab.written(SERIAL_NAME) == b""
+        assert (text_of(app, "#hdr-title"), text_of(app, "#message"), len(view(app))) == before
 
         keys = text_of(app, "#keys")
         for label in ("^q quit", "esc quit", "^o settings", "^x text/hex", "^p pause", "^l clear",
-                      "F2 DTR on/off", "F3 RTS on/off", "F4 break", "F6 pulse DTR", "F7 pulse RTS",
-                      "F8 ESP bootloader", "F10 1200 baud touch", "^c send 0x03"):
+                      "PgUp scroll up", "PgDn scroll down", "^c send 0x03", "^y keys"):
             assert label in keys
+        for label in ("F2", "F3", "F4", "F6", "F7", "F8", "F10",
+                      "DTR on/off", "RTS on/off", "break", "pulse DTR", "pulse RTS",
+                      "ESP bootloader", "1200 baud touch"):
+            assert label not in keys
+
+        await pilot.press("ctrl+y")
+        rows = str(app.screen.query_one("#keys-list", Static).render()).split("\n")
+        assert [row.split()[0] for row in rows[1:]] == [binding.key_display for binding in SerialTerminal.BINDINGS]
+        assert not any(row.split()[0] in ("F2", "F3", "F4", "F6", "F7", "F8", "F10") for row in rows)
+        assert not any(text in str(app.screen.query_one("#keys-list", Static).render())
+                       for text in ("DTR", "RTS", "break", "pulse-dtr", "pulse-rts",
+                                    "esp-bootloader", "touch-1200"))
+        await pilot.press("escape")
+
+        scrolled = []
+        log = app.query_one("#traffic", RichLog)
+        monkeypatch.setattr(log, "scroll_page_up", lambda: scrolled.append("up"))
+        monkeypatch.setattr(log, "scroll_page_down", lambda: scrolled.append("down"))
+        await pilot.press("pageup", "pagedown")
+        assert scrolled == ["up", "down"]
         await pilot.press("ctrl+q")
 
 
 async def test_acc_term_198_ctrl_y_opens_the_key_help_with_every_key(terminal):
-    """ACC-TERM-198 Ctrl+Y opens a screen that lists Enter and every key of the terminal with what it does; while it shows, F2 does nothing; Esc closes it, Ctrl+Y opens and closes it again, and the key line names ^y keys."""
+    """ACC-TERM-198 Ctrl+Y opens a screen that lists Enter and every key of the terminal with what it does; while it shows, Ctrl+X does nothing and no F-key row is there; Esc closes it, Ctrl+Y opens and closes it again, and the key line names ^y keys."""
     tab, app = await terminal()
     async with app.run_test(size=SIZE) as pilot:
         await held(tab, app)
@@ -264,12 +308,14 @@ async def test_acc_term_198_ctrl_y_opens_the_key_help_with_every_key(terminal):
         assert rows[0].split() ==["Enter", "send", "the", "typed", "line,", "with", "the", "line", "ending",
                                    "of", "the", "settings"]
         assert [row.split()[0] for row in rows[1:]] == [binding.key_display for binding in SerialTerminal.BINDINGS]
+        assert not any(row.split()[0] in ("F2", "F3", "F4", "F6", "F7", "F8", "F10") for row in rows)
         for row, binding in zip(rows[1:], SerialTerminal.BINDINGS):
             assert row.split(None, 1)[1] == KEY_HELP[binding.action]
         assert str(app.screen.query_one("#keys-hint", Static).render()) == "Esc or ^y closes this list"
 
-        await pilot.press("f2")
+        await pilot.press("ctrl+x")
         await pilot.pause(0.3)
+        assert app._hex_view is False, "the traffic view did not switch while the help shows"
         assert tab.got("serial-signals") == []
         await pilot.press("escape")
         assert not isinstance(app.screen, KeysScreen)
@@ -277,6 +323,32 @@ async def test_acc_term_198_ctrl_y_opens_the_key_help_with_every_key(terminal):
         assert isinstance(app.screen, KeysScreen)
         await pilot.press("ctrl+y")
         assert not isinstance(app.screen, KeysScreen)
+        await pilot.press("ctrl+q")
+
+
+async def test_acc_term_255_wheel_up_and_down_scroll_the_traffic_view_one_line(terminal):
+    """ACC-TERM-255-WHEEL Up and Down, the keys the lab terminal sends for a mouse wheel step, scroll the traffic view one line each while the send field has the focus; the key line names both keys."""
+    tab, app = await terminal()
+    async with app.run_test(size=SIZE) as pilot:
+        await held(tab, app)
+        log = app.query_one("#traffic", RichLog)
+        await tab.port_sends(SERIAL_NAME, b"".join(b"line %d\n" % number for number in range(200)))
+        await tab.until(lambda: len(view(app)) == 200)
+        await pilot.pause(0.2)
+        end = log.scroll_y
+        assert end == log.max_scroll_y > 0
+        assert isinstance(app.focused, Input)
+
+        await pilot.press("up", "up", "up")
+        await pilot.pause(0.2)
+        assert log.scroll_y == end - 3
+        await pilot.press("down")
+        await pilot.pause(0.2)
+        assert log.scroll_y == end - 2
+        assert app.query_one("#send", Input).value == ""
+
+        keys = text_of(app, "#keys")
+        assert "Up line up" in keys and "Down line down" in keys
         await pilot.press("ctrl+q")
 
 
@@ -326,6 +398,21 @@ async def test_acc_term_170_hex_mode_sends_hex_digits_and_refuses_other_input(te
         await tab.until(lambda: tab.written(SERIAL_NAME) == b"AB")
         await asyncio.sleep(0.3)
         assert tab.written(SERIAL_NAME) == b"AB", "41 4G sent nothing"
+        await pilot.press("ctrl+q")
+
+
+async def test_acc_term_244_paste_a_paste_event_fills_the_send_field_and_enter_sends_it(terminal):
+    """ACC-TERM-244 a Textual Paste event inserts its first line into the send field, and Enter sends that text to the port with the chosen line ending."""
+    tab, app = await terminal()
+    async with app.run_test(size=SIZE) as pilot:
+        await held(tab, app)
+        await choose(pilot, ending="CRLF")
+        app.query_one("#send", Input).post_message(Paste("pasted line\nsecond line"))
+        await pilot.pause()
+        assert app.query_one("#send", Input).value == "pasted line"
+        await pilot.press("enter")
+        await tab.until(lambda: tab.written(SERIAL_NAME) == b"pasted line\r\n")
+        assert app.query_one("#send", Input).value == ""
         await pilot.press("ctrl+q")
 
 
@@ -394,6 +481,18 @@ async def test_acc_term_172_quit_closes_the_device_path_and_the_record_has_no_ho
     await tab.until(lambda: record(tab)["holder"] is None)
 
 
+async def test_acc_term_243_interrupt_ctrl_c_with_no_selection_sends_0x03_and_the_app_stays_open(terminal):
+    """ACC-TERM-243-INTERRUPT with no text selected Ctrl+C sends the byte 0x03 to the pty and the app stays open."""
+    tab, app = await terminal()
+    async with app.run_test(size=SIZE) as pilot:
+        await held(tab, app)
+        await pilot.press("ctrl+c")
+        await tab.until(lambda: tab.written(SERIAL_NAME) == b"\x03")
+        assert app.is_running
+        await pilot.press("ctrl+q")
+    assert app.return_code == 0
+
+
 @pytest.mark.parametrize("reason", ["removed", "detach"])
 async def test_acc_term_173_a_removed_port_leaves_the_app_open_with_removed_in_rose(terminal, reason):
     """ACC-TERM-173 when the tab releases the port the app stays open, the status line reads removed in rose, and a typed line is not sent."""
@@ -416,14 +515,15 @@ async def test_acc_term_173_a_removed_port_leaves_the_app_open_with_removed_in_r
 
 
 async def test_acc_term_173_a_forgotten_port_whose_pty_is_gone_leaves_the_app_open(terminal):
-    """ACC-TERM-173 when the port is forgotten the bridge removes the pty: the read fails, the app stays open, reads removed and raises nothing."""
+    """ACC-TERM-173 when the port is forgotten the bridge removes the pty: the read fails, the app stays open, reads removed and raises nothing; a settings change then names the refused bridge call."""
     tab, app = await terminal()
     async with app.run_test(size=SIZE) as pilot:
         await held(tab, app)
         await tab.release(SERIAL_NAME, "forget")
         await tab.until(lambda: text_of(app, "#state").startswith("removed"))
         await tab.until(lambda: "the device path failed" in text_of(app, "#state"))
-        await pilot.press("f2")
+        # Parity alone does not touch the path, so the refused call is the bridge's own.
+        await choose(pilot, parity="even")
         await tab.until(lambda: text_of(app, "#message").startswith("refused: "))
         assert app.is_running and app.return_code is None
         await pilot.press("ctrl+q")

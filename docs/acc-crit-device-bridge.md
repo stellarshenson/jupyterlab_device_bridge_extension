@@ -149,11 +149,34 @@ Attach a port, its virtual serial device, bytes both ways, baud rate, tool open 
   - log: 2026-10-12T20:00:38Z @kj closed
 - [x] `ACC-SERIAL-152` **Devices left by an earlier run are removed** - HIGH; a server that starts removes from its device directory the virtual serial devices that an earlier server left there when it ended without its exit hook: every link to a pty slave and every shim socket; a directory that another live server holds is left as it is
   - related: DEF-SERIAL-5, DEF-SERIAL-10 - the defects that this removal fixed
+  - related: ACC-SERIAL-251-STARTSWEEP, ACC-SERIAL-252-TABSWEEP, ACC-SERIAL-253-SWEEPPANEL - the wider removal
   - evidence: make test on build 0.6.24 (logs/launch-make-test-4.log), 439 pytest tests pass: the 6 tests test_acc_serial_152_* in test_manager.py pass: link and socket of a killed server are removed at start, other symlinks, files and a locked directory stay; they carried the id ACC-SEC-97 before
   - test: pytest test_manager.py: a directory with the link and the socket of a killed server holds neither after a new manager; with the lock held by another process nothing is removed and the log says why
   - test-tags: UNIT
   - log: 2026-10-13T10:15:29Z @kj added
   - log: 2026-10-13T10:18:07Z @kj closed
+  - log: 2026-10-19T17:12:12Z @kj states less than ACC-SERIAL-251-STARTSWEEP, ACC-SERIAL-252-TABSWEEP and ACC-SERIAL-253-SWEEPPANEL: removes only links to /dev/pts and shim sockets, only at server start, never at a tab connect; related, not reopened
+- [x] `ACC-SERIAL-251-STARTSWEEP` **Stale devices are removed at server start** - HIGH; a server that starts and holds its device directory lock removes every device entry no record accounts for: symlinks to a pty slave, symlinks named tty-* or usb-* with any target, sockets in .shim; files, directories, .shim and other symlinks stay; with the lock refused nothing is removed
+  - evidence: verify: make test green (logs/stale-verify-make-test.log, 609 pytest passed); test_acc_serial_251_* pass: seeded pts, tty-*, usb-* links and .shim socket removed at start, others stay, locked folder untouched; Galata stale.spec.ts ACC-SERIAL-251-STARTSWEEP passed; red with the start sweep disabled or the lock check removed
+  - related: ACC-SERIAL-152 - the start-up removal this widens
+  - test: pytest test_manager.py test_acc_serial_<N>_*: seeded dangling tty-*, tty-* to /dev/ttyS0, usb-*, pts link and shim socket are gone after a new manager, other entries stay; Galata stale.spec.ts: a second lab over a seeded folder removes them at start, keeps the rest, shows a new port's row and link
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-19T17:11:38Z @kj added
+  - log: 2026-10-19T18:53:07Z @kj closed
+- [x] `ACC-SERIAL-252-TABSWEEP` **Stale devices are removed when a lab tab connects** - HIGH; when a lab tab's device bridge connects (hello after a page load or reconnect) and the server holds the directory lock, every device entry no record accounts for is removed; every device the panel lists keeps its link and shim socket; a removal error is logged, the tab still welcomed
+  - evidence: verify: test_acc_serial_252_* pass in make test: hello removes entries placed while running, known links and shim sockets stay, failed removal logged and tab welcomed; Galata stale.spec.ts ACC-SERIAL-252-TABSWEEP passed; red with the hello sweep disabled or known links or shim sockets dropped from keep
+  - related: ACC-SERIAL-152 - the start-up removal this widens
+  - test: pytest test_manager.py test_acc_serial_<N>_*: entries placed while running are gone after manager.connect, known devices keep link and socket, a failing removal logs and the tab gets welcome; Galata stale.spec.ts: attach a simulated port, seed entries, page.reload, stale entries go, every path in GET devices stays
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-19T17:11:58Z @kj added
+  - log: 2026-10-19T18:53:07Z @kj closed
+- [x] `ACC-SERIAL-253-SWEEPPANEL` **Devices panel shows no removed stale device and keeps known ones** - HIGH; the Devices panel lists no row for a stale device entry that was removed, and a device attached in the panel keeps its row, its owner and its device entry through a page reload
+  - evidence: verify: test_acc_serial_253_* passes in make test: after reload the table holds only the attached port, link and shim kept; Galata stale.spec.ts ACC-SERIAL-253-SWEEPPANEL passed: no row for a seeded name, port row owner this, link kept; red with the hello sweep disabled or known links dropped
+  - related: ACC-SERIAL-152 - the start-up removal this widens
+  - test: pytest test_manager.py test_acc_serial_<N>_*: after a sweep the table has no record for a removed entry and keeps the attached device; Galata stale.spec.ts: after page.reload no panel row names a seeded stale entry, the attached simulated port's row stays attached with its link in DEVICE_DIR
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-19T17:11:58Z @kj added
+  - log: 2026-10-19T18:53:07Z @kj closed
 
 ## Serial settings `PROF`
 
@@ -1009,6 +1032,7 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - log: 2026-10-18T00:27:25Z @kj edited text "the devices panel footer that shows Round trip sets no background of its own and no separator line above it, so the text sits on the panel's background; it keeps its muted colour and small size" -> "the devices panel footer that shows Round trip sets no background of its own and no separator line above it; the label and the round-trip value both use the same muted colour, and the text is small"; test "jest panel.spec.ts: the footer rule declares no background and no border" -> "jest panel.spec.ts: the footer rule declares no background and no border, and the round-trip value carries the footer's muted colour"
   - log: 2026-10-18T03:19:24Z @kj closed
 - [x] `ACC-PANEL-220` **compact settings dialog controls** - LOW; the serial settings dialog main controls are compact: inputs 24px high, 8px side padding, 4px radius, 11px font; field gap 8px; form gap 6px; labels 11px; the bottom action buttons keep their own size
+  - overridden-by: ACC-PANEL-232
   - evidence: make test 1.0.22: Jest 271 passed, including the extended ACC-PANEL-73 stylesheet assertion (24px input height, 11px font, 6px form gap, 8px field gap)
   - test: jest panel.spec.ts ACC-PANEL-73: the settings input is 24px high with an 11px font
   - test-tags: UNIT
@@ -1078,14 +1102,26 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - log: 2026-10-18T00:29:10Z @kj added
   - log: 2026-10-18T00:29:31Z @kj edited text "the RX and TX byte counters show whole bytes below 10 KB, kilobytes with one decimal from 10 KB to under 1 MB, and megabytes with one decimal from 1 MB; 1000 KB reads as 1 MB" -> "the RX and TX counters show a number and its unit: byte or bytes below 10 KB, KB with one decimal from 10 KB to under 1 MB, MB with one decimal from 1 MB; 1000 KB reads as 1 MB; KB and MB are uppercase after a space"; test "jest panel.spec.ts: counters at 9999, 10000 and 1000000 bytes read bytes, KB and MB; galata panel.spec.ts: a stream past 10 KB shows KB" -> "jest panel.spec.ts: counters at 9999, 10000 and 1000000 bytes read 9999 bytes, 10.0 KB and 1.0 MB; galata panel.spec.ts: a stream past 10 KB shows KB"
   - log: 2026-10-18T03:56:27Z @kj closed
-- [x] `ACC-PANEL-232` **Settings dialog as a shaded table with one editable baud control** - MEDIUM; the settings dialog is a table with alternating shaded rows, one setting per row; each value cell holds one control of one width and height; baud rate is one editable field listing the standard rates 300 to 921600, accepting a typed value and marking it Custom when not standard
-  - evidence: jest panel.spec.ts ACC-PANEL-232 tests and galata panel.spec.ts:702 passed in the 1.0.34 gate; Jest 295 and Galata 98/98 green, logs/galata-1.0.34.log
+- [x] `ACC-PANEL-232` **Settings dialog is a compact table with one editable baud control** - MEDIUM; at a 1600 px viewport six controls 342.56 px wide and 28 px high with equal right edges; dialog 680 px, max-width min(680px, 100vw - 32px); six 40 px rows; four 28 px footer buttons.
+  - evidence: Galata panel.spec.ts:1048 green 2026-10-18 at 1.0.47, full suite 101/101: dialog 680 px, six 342.5625 x 28 px controls with equal right edges, 40 px rows, four 28 px buttons; make test green: Jest 299, pytest 597 passed 1 skipped, auth gate.
   - overrides: ACC-PANEL-221
-  - test: jest panel.spec.ts: the settings body is a table with six rows and one control per row, the baud field lists the standard rates and shows Custom for 123456; galata panel.spec.ts: the dialog renders the table and typing 123456 shows Custom
-  - test-tags: UNIT, FUNCTIONAL
+  - related: DEF-PANEL-27
+  - overrides: ACC-PANEL-220 - the 28 px controls and 13 px type replace the 24 px and 11 px metrics
+  - test: galata panel.spec.ts 'ACC-PANEL-232 the settings dialog is 680 px wide with six 342.56 px controls of 28 px in 40 px rows and four 28 px footer buttons': at a 1600 px viewport with 115200 baud measure .jp-Dialog-content, the six [data-setting-field] boxes and the four .jp-Dialog-button boxes
+  - test-tags: FUNCTIONAL
   - mechanism: 2026-10-18T13:04:11Z @kj the settings body builds a tr per setting with th and td; the baud input carries a datalist of standard rates and a Custom badge; an edit sets the config selection to Custom
   - log: 2026-10-18T13:04:11Z @kj added
   - log: 2026-10-18T13:46:08Z @kj closed
+  - log: 2026-10-18T15:19:44Z @kj reopened: the approved variant A layout adds measured widths, heights and row heights that the 1.0.34 evidence does not cover; evidence retired: jest panel.spec.ts ACC-PANEL-232 tests and galata panel.spec.ts:702 passed in the 1.0.34 gate; Jest 295 and Galata 98/98 green, logs/galata-1.0.34.log
+  - log: 2026-10-18T15:19:46Z @kj amended title "Settings dialog as a shaded table with one editable baud control" -> "Settings dialog is a compact table with one editable baud control"; text "the settings dialog is a table with alternating shaded rows, one setting per row; each value cell holds one control of one width and height; baud rate is one editable field listing the standard rates 300 to 921600, accepting a typed value and marking it Custom when not standard" -> "at 1600 px viewport dialog content 680 px wide, max-width min(680px, 100vw - 32px); six [data-setting-field] controls 342.56 px wide, 28 px high, right edges within 0.5 px; six 40 px rows; four 28 px footer buttons; baud rate one editable field listing 300 to 921600 with a Custom badge"
+  - log: 2026-10-18T15:19:49Z @kj edited test "jest panel.spec.ts: the settings body is a table with six rows and one control per row, the baud field lists the standard rates and shows Custom for 123456; galata panel.spec.ts: the dialog renders the table and typing 123456 shows Custom" -> "galata panel.spec.ts 'ACC-PANEL-232 the settings dialog is 680 px wide with six 342.56 px controls of 28 px in 40 px rows and four 28 px footer buttons': at a 1600 px viewport measure .jp-Dialog-content, the six [data-setting-field] boxes and the four .jp-Dialog-button boxes"; test-tags "UNIT, FUNCTIONAL" -> "FUNCTIONAL"
+  - log: 2026-10-18T15:20:18Z @kj amended text "at 1600 px viewport dialog content 680 px wide, max-width min(680px, 100vw - 32px); six [data-setting-field] controls 342.56 px wide, 28 px high, right edges within 0.5 px; six 40 px rows; four 28 px footer buttons; baud rate one editable field listing 300 to 921600 with a Custom badge" -> "at standard baud rate six [data-setting-field] controls 342.56 px wide and 28 px high, right edges within 0.5 px; content 680 px wide, max-width min(680px, 100vw - 32px); six 40 px rows; four 28 px footer buttons; baud rate one editable field listing 300 to 921600 with a Custom badge"
+  - log: 2026-10-18T15:20:18Z @kj edited test "galata panel.spec.ts 'ACC-PANEL-232 the settings dialog is 680 px wide with six 342.56 px controls of 28 px in 40 px rows and four 28 px footer buttons': at a 1600 px viewport measure .jp-Dialog-content, the six [data-setting-field] boxes and the four .jp-Dialog-button boxes" -> "galata panel.spec.ts 'ACC-PANEL-232 the settings dialog is 680 px wide with six 342.56 px controls of 28 px in 40 px rows and four 28 px footer buttons': at a 1600 px viewport with 115200 baud measure .jp-Dialog-content, the six [data-setting-field] boxes and the four .jp-Dialog-button boxes"
+  - log: 2026-10-18T16:34:03Z @kj amended text "at standard baud rate six [data-setting-field] controls 342.56 px wide and 28 px high, right edges within 0.5 px; content 680 px wide, max-width min(680px, 100vw - 32px); six 40 px rows; four 28 px footer buttons; baud rate one editable field listing 300 to 921600 with a Custom badge" -> "MEDIUM; at a 1600 px viewport six [data-setting-field] controls are 342.56 px wide and 28 px high with equal right edges; dialog 680 px wide, max-width min(680px, 100vw - 32px); six 40 px rows; four 28 px buttons; baud one editable field, 300 to 921600, typed rate shows Custom."
+  - log: 2026-10-18T16:34:03Z @kj closed
+  - log: 2026-10-18T18:51:27Z @kj amended text "at a 1600 px viewport six [data-setting-field] controls are 342.56 px wide and 28 px high with equal right edges; dialog 680 px wide, max-width min(680px, 100vw - 32px); six 40 px rows; four 28 px buttons; baud one editable field, 300 to 921600, typed rate shows Custom." -> "MEDIUM; at a 1600 px viewport six controls 342.56 px wide and 28 px high with equal right edges; dialog 680 px, max-width min(680px, 100vw - 32px); six 40 px rows; four 28 px footer buttons."
+  - log: 2026-10-18T18:51:27Z @kj reopened: the approved preview page replaces the baud control and the row surface; the geometry is measured again; evidence retired: Galata panel.spec.ts:947 and :994 green 2026-10-18 at 1.0.37, full suite 100/100; dialog 680 px, six 342.56 x 28 px controls with equal right edges, 40 px rows, four 28 px buttons, 300 x 1200 footer step; make test green: Jest 298, pytest 597 passed 1 skipped, auth gate.
+  - log: 2026-10-18T21:04:54Z @kj closed
 - [x] `ACC-PANEL-233` **Slim dialog buttons** - LOW; the four buttons of the settings dialog are slim: 28 px high with 12 px side padding and 12.5 px text, 8 px apart in the footer
   - evidence: jest panel.spec.ts ACC-PANEL-233 test and galata panel.spec.ts:720 passed in the 1.0.34 gate; Jest 295 and Galata 98/98 green, logs/galata-1.0.34.log
   - test: jest panel.spec.ts: the stylesheet gives the dialog buttons 28 px height and 12 px padding; galata panel.spec.ts: each button bounding box is at most 30 px high
@@ -1093,6 +1129,35 @@ Device list, buttons, status bar item, commands, optional Devices menu
   - mechanism: 2026-10-18T13:04:12Z @kj the dialog buttons carry a jp-DeviceBridgeSettings-button class; the stylesheet sets height 28px, padding 0 12px, font-size 12.5px and the footer gap 8px
   - log: 2026-10-18T13:04:12Z @kj added
   - log: 2026-10-18T13:46:08Z @kj closed
+- [x] `ACC-PANEL-234` **Settings rows have subtle banding** - LOW; odd and even row backgrounds differ by 6 per RGB channel in the stock dark theme and 7 in the stock light theme; the target is 6 with a tolerance of 5 to 8; both bands are color-mix of --jp-ui-font-color0 over --jp-layout-color1, no literal colour
+  - evidence: Galata panel.spec.ts:1119 green 2026-10-18 at 1.0.37 in the full 100/100 suite; odd and even bands equal the color-mix of the live tokens, per-channel delta 6.66 stock dark and 6.7 stock light, inside 5 to 8; make test green.
+  - related: DEF-PANEL-27 - the settings dialog defect this fixes
+  - overridden-by: ACC-PANEL-237
+  - test: galata panel.spec.ts 'ACC-PANEL-234 odd and even settings rows differ by 6 per channel in stock dark and 7 in stock light': open the dialog in each stock theme and parse the resolved row background colours
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-18T15:19:51Z @kj added
+  - log: 2026-10-18T16:34:03Z @kj closed
+- [x] `ACC-PANEL-235` **Editable baud rate field with a standard rate list** - MEDIUM; the baud rate control is an editable text input joined to a button with a down arrow; the button opens a list of the sixteen standard rates 300 to 921600; choosing one writes it into the input; the input stays editable; no Custom badge and no Custom entry.
+  - evidence: Galata panel.spec.ts:947 green at 1.0.47, full suite 101/101: the arrow opens one list of sixteen rates, no Custom entry; 9600 writes the input; 250000 is kept; the menu is 232 x 168 at 1600 px and at most the field width at 300 px; make test green.
+  - related: ACC-PANEL-232 - the geometry of the same dialog
+  - test: galata panel.spec.ts: open the rate list with the button, assert sixteen rates and no Custom entry, choose 9600 and read the input, type 250000 and read it back
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-18T18:51:30Z @kj added
+  - log: 2026-10-18T21:04:54Z @kj closed
+- [x] `ACC-PANEL-236` **Save is the only filled button** - MEDIUM; Save is the only filled primary button; Cancel and Save as... are secondary surface buttons; Delete config is a secondary destructive at the far left with the error colour in its text and border, never a filled red block; no permanent focus ring.
+  - evidence: Galata panel.spec.ts:1288 green at 1.0.47, full suite 101/101: Save the only filled primary, Cancel and Save as secondary, Delete config transparent with error text and border at the far left, and all four buttons outline-free at open; make test green.
+  - related: ACC-PANEL-232 - the geometry of the same dialog
+  - test: galata panel.spec.ts: assert the computed styles of Save, Cancel, Save as... and Delete config and that Delete config is leftmost; assert the unfocused buttons carry no focus ring
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-18T18:51:30Z @kj added
+  - log: 2026-10-18T21:04:54Z @kj closed
+- [x] `ACC-PANEL-237` **Settings rows are separated by hairlines** - LOW; settings rows are separated by a hairline of color-mix 9% of the UI text colour over the dialog background, with no alternating band fill; labels use the muted UI text colour, values the primary colour at 13 px.
+  - evidence: Galata panel.spec.ts:1178 green at 1.0.47, full suite 101/101: all six rows share one background, five 9 percent hairlines between rows, muted labels and 13 px values; make test green.
+  - overrides: ACC-PANEL-234 - the approved surface uses hairlines in place of banded rows
+  - test: galata panel.spec.ts: assert adjacent row backgrounds are equal and a 1 px hairline separates the rows
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-18T18:51:30Z @kj added
+  - log: 2026-10-18T21:04:54Z @kj closed
 
 ## Serial terminal `TERM`
 
@@ -1197,6 +1262,7 @@ A terminal in the lab on one attached port
   - log: 2026-10-14T18:05:57Z @kj added; reason: names the four fields and three effects
   - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
 - [x] `ACC-TERM-169` **Control lines from the terminal** - HIGH; keys of the terminal set DTR and RTS on and off, send a break, and run the actions pulse-dtr, pulse-rts, esp-bootloader and touch-1200; the footer lists the keys
+  - overridden-by: DEF-TERM-28-KEYS
   - evidence: pytest 169 pass: DTR, RTS, break and the four actions reach the fake tab, footer lists 14 keys; red with ^g mapped wrong; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
   - test: pytest run_test: press the DTR key, assert the fake tab got dtr false; press the reset key, assert the pulse-dtr sequence
   - test-tags: UNIT
@@ -1247,6 +1313,80 @@ A terminal in the lab on one attached port
   - log: 2026-10-17T09:29:28Z @kj amended text "Ctrl+/ in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+/ closes it and the terminal goes on; the key line names ^/; F1 stays unused, because the browser takes it" -> "Ctrl+Y in jupyterlab-device terminal opens a screen that lists every key of the terminal with what it does; Esc or Ctrl+Y closes it and the terminal goes on; the key line names ^y; F1 and Ctrl+/ stay unused: the browser takes F1, and the terminal of the lab sends no byte for Ctrl+/"; reason: Ctrl+/ was filed first; xterm.js of the lab sends no byte for it, so the key moves to Ctrl+Y, the one free control letter
   - log: 2026-10-17T09:29:28Z @kj edited test "pytest Textual pilot: ctrl+underscore opens the screen with every binding, Esc closes it; galata: Control+/ in the lab terminal shows the screen" -> "pytest Textual pilot: ctrl+y opens the screen with every binding, Esc closes it; galata: Control+y in the lab terminal shows the screen"
   - log: 2026-10-17T10:36:20Z @kj closed; reason: the named tests passed in the pytest, code-change and Galata runs of the banner work
+- [x] `ACC-TERM-239-SERIAL-TAB` **Serial terminal tab names itself and carries the device icon** - MEDIUM; The terminal tab opened by the Serial Terminal command and by the Terminal button of a serial row is named Serial Terminal and carries the device icon, so it can be told apart from a shell terminal; the device shell keeps its own tab.
+  - evidence: index.spec.ts: the serial terminal command sets the widget title to 'Serial Terminal' with deviceIcon, and a later 'Terminal 1' assignment plus title-changed emit is reverted; removing the title-changed hook reddens it; Galata terminal.spec.ts asserts the tab label; Jest 300, pytest 595, Galata 101/101 at 1.0.51
+  - test: index.spec.ts: the mocked basic-terminal launch returns a widget; after the serial terminal command its title.label is 'Serial Terminal' and its title.icon is deviceIcon, and the device shell leaves the title unchanged; Galata terminal.spec.ts asserts the tab label.
+  - test-tags: UNIT, E2E
+  - log: 2026-10-19T14:37:46Z @kj added
+  - log: 2026-10-19T15:35:45Z @kj closed
+- [x] `ACC-TERM-240-KEYS` **Serial terminal binds no board action key** - HIGH; the serial terminal binds no key to DTR, RTS, break, pulse-dtr, pulse-rts, esp-bootloader or touch-1200; F2, F3, F4, F6, F7, F8 and F10 send no byte and call neither signals nor action; the key line and the key help list only terminal keys
+  - evidence: pytest test_acc_term_240_keys_the_terminal_binds_no_board_action_key PASSED in make test (595 passed, 1 skipped); red with an F2 binding restored
+  - related: DEF-TERM-28-KEYS - the defect this closes
+  - related: ACC-TERM-169 - the superseded control-line criterion
+  - test: pytest test_terminal_app.py: assert SerialTerminal.BINDINGS has no f2, f3, f4, f6, f7, f8 or f10; press each in the Textual pilot, assert the fake tab got no serial-signals and no serial-action and the port wrote nothing; assert the #keys line and the key help have no board action row
+  - test-tags: UNIT
+  - mechanism: 2026-10-19T14:44:01Z @kj the terminal keeps only the keys a person needs to read and send bytes; every board action stays in the bridge API, the panel and the CLI
+  - log: 2026-10-19T14:44:01Z @kj added
+  - log: 2026-10-19T15:14:02Z @kj closed
+- [x] `ACC-TERM-241-API` **Board actions stay in the bridge API and CLI** - HIGH; the bridge API and the CLI keep the signals and action calls: DeviceBridgeClient.serial().signals sets DTR, RTS and the break; the CLI `jupyterlab-device signals` sets DTR and RTS, and `jupyterlab-device action` runs pulse-dtr, pulse-rts, esp-bootloader and touch-1200
+  - evidence: pytest test_acc_term_241_the_bridge_api_and_the_cli_keep_the_signals_and_action_calls PASSED; API signals brk tested in test_manager.py and test_routes.py; make test 595 passed, 1 skipped
+  - related: DEF-TERM-28-KEYS - the scope guard for the terminal change
+  - related: ACC-TERM-240-KEYS - the removal this keeps outside the bridge API
+  - test: pytest test_cli.py: signals --dtr 0 --rts 1 reaches the fake tab as serial-signals dtr false rts true; action esp-bootloader reaches it as serial-action esp-bootloader
+  - test-tags: UNIT
+  - mechanism: 2026-10-19T14:44:01Z @kj the change is confined to terminal_app.py; DeviceBridgeClient and cli.py keep the signals and action calls
+  - log: 2026-10-19T14:44:01Z @kj added
+  - log: 2026-10-19T15:14:02Z @kj closed
+  - log: 2026-10-19T15:14:53Z @kj amended text "the bridge API and the CLI keep the signals and action calls: jupyterlab-device signals sets DTR and RTS and sends a break, and jupyterlab-device action runs pulse-dtr, pulse-rts, esp-bootloader and touch-1200" -> "the bridge API and the CLI keep the signals and action calls: DeviceBridgeClient.serial().signals sets DTR, RTS and the break; the CLI `jupyterlab-device signals` sets DTR and RTS, and `jupyterlab-device action` runs pulse-dtr, pulse-rts, esp-bootloader and touch-1200"; reason: the CLI never had a break option; the break is the signals call brk of the bridge API, which the terminal used; the criterion now states what exists and is tested
+  - log: 2026-10-19T15:14:55Z @kj edited evidence "pytest test_acc_term_241_the_bridge_api_and_the_cli_keep_the_signals_and_action_calls PASSED (signals and action reach the fake tab); make test 595 passed, 1 skipped" -> "pytest test_acc_term_241_the_bridge_api_and_the_cli_keep_the_signals_and_action_calls PASSED; API signals brk tested in test_manager.py and test_routes.py; make test 595 passed, 1 skipped"
+- [x] `ACC-TERM-242-COPY` **Ctrl+C copies a selection and sends no byte** - HIGH; with a mouse selection in the lab terminal, Ctrl+C copies the selected text to the clipboard and the port receives no byte
+  - evidence: galata terminal-app.spec.ts ACC-TERM-242-COPY passed (3 passed); pytest test_acc_term_242_copy_cmd_terminal_runs_the_app_with_the_mouse_left_to_the_terminal passed; red with mouse=True (clipboard empty)
+  - related: DEF-TERM-28-KEYS - the terminal simplification this belongs to
+  - related: ACC-TERM-243-INTERRUPT - the same key with no selection
+  - related: ACC-TERM-172 - the quit criterion whose test already sends 0x03
+  - test: galata terminal-app.spec.ts: send a known line, drag over it in the lab terminal, press Control+C, assert the clipboard holds the selected text and the simulated port received no byte; pytest test_cli.py: cmd_terminal runs the app with mouse=False
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-19T14:44:02Z @kj cmd_terminal runs app.run(mouse=False), so the lab's xterm.js owns the mouse and its selection; JupyterLab's key handler consumes Ctrl+C when the terminal has a selection and xterm's copy handler copies it; the app does not use the Textual clipboard, and the lab's bundled xterm has no OSC 52 handler
+  - log: 2026-10-19T14:44:02Z @kj added
+  - log: 2026-10-19T15:14:04Z @kj closed
+- [x] `ACC-TERM-243-INTERRUPT` **Ctrl+C with no selection sends 0x03** - HIGH; with no text selected in the lab terminal, Ctrl+C reaches the serial terminal and sends the byte 0x03 to the port
+  - evidence: pytest test_acc_term_243_interrupt_ctrl_c_with_no_selection_sends_0x03_and_the_app_stays_open passed; galata ACC-TERM-242-COPY asserts no-selection Ctrl+C sends 0x03 (3 passed)
+  - related: DEF-TERM-28-KEYS - the terminal simplification this belongs to
+  - related: ACC-TERM-242-COPY - the same key with a selection
+  - related: ACC-TERM-172 - the quit criterion whose test already sends 0x03
+  - test: pytest test_terminal_app.py: press ctrl+c with no selection, assert the pty read 0x03 and the app stays open; galata: Control+C with no selection reaches the port
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-10-19T14:44:02Z @kj the app keeps ctrl+c as a priority binding to action_interrupt; with no selection the key reaches the pty and the app sends 0x03
+  - log: 2026-10-19T14:44:02Z @kj added
+  - log: 2026-10-19T15:14:04Z @kj closed
+- [x] `ACC-TERM-244-PASTE` **Ctrl+V pastes into the send field and Enter sends it** - HIGH; with the lab terminal's pasteWithCtrlV at its default true, Ctrl+V inserts the first line of the clipboard text into the send field, and Enter sends that line to the port with the chosen line ending
+  - evidence: pytest test_acc_term_244_paste_a_paste_event_fills_the_send_field_and_enter_sends_it passed; galata ACC-TERM-242-COPY covers Ctrl+V and Enter (3 passed)
+  - related: DEF-TERM-28-KEYS - the terminal simplification this belongs to
+  - related: ACC-TERM-242-COPY - the other half of the clipboard flow
+  - related: ACC-TERM-170 - Enter sends the typed line with the chosen line ending
+  - test: galata terminal-app.spec.ts: write a known text to the clipboard, press Control+V in the lab terminal and assert the send field holds it; press Enter and assert the simulated port received the text with the chosen line ending
+  - test-tags: FUNCTIONAL
+  - mechanism: 2026-10-19T14:44:02Z @kj the lab terminal's pasteWithCtrlV defaults true; its paste event inserts the clipboard text into the pty, Textual turns the bracketed paste into a Paste event, the send field takes the text, and Enter sends it with the chosen line ending
+  - log: 2026-10-19T14:44:02Z @kj added
+  - log: 2026-10-19T15:14:05Z @kj closed
+  - log: 2026-10-19T22:49:06Z @kj amended text "with the lab terminal's pasteWithCtrlV at its default true, Ctrl+V inserts the clipboard text into the send field, and Enter sends that text to the port with the chosen line ending" -> "with the lab terminal's pasteWithCtrlV at its default true, Ctrl+V inserts the first line of the clipboard text into the send field, and Enter sends that line to the port with the chosen line ending"
+- [-] `ACC-TERM-254-HOLD` **Traffic view holds its place while scrolled up** - HIGH; while the traffic view is scrolled up, a line that arrives is appended and the view keeps its place; while the view is at the end and auto scroll is on, the view follows each new line
+  - related: ACC-TERM-242-COPY - the mouse stays with the lab terminal
+  - related: ACC-TERM-240-KEYS - the key line and key help list only terminal keys
+  - test: pytest test_terminal_app.py pilot: scroll #traffic up, feed RX lines, scroll_y stays; at the end, a new line moves scroll_y to max_scroll_y
+  - test-tags: UNIT
+  - log: 2026-10-19T19:15:38Z @kj added
+  - log: 2026-10-19T20:06:46Z @kj closed
+  - log: 2026-10-19T22:49:06Z @kj rejected: reverted in review round 2; holding the view by its end position stopped it following after Ctrl+P resume, after PgDn and after a terminal resize; HEAD model kept, Ctrl+P holds the view; deferred as R2-HOLD; evidence retired: verify round 1 of review-delta-e4c6ba1: pytest test_terminal_app.py::test_acc_term_254_hold_a_scrolled_up_view_keeps_its_place_when_a_line_arrives passed in make test (611 passed, 1 skipped); red with scroll_end=True and with the pre-change write call in _add (assert 168 == 134), green after restore (pytest)
+- [x] `ACC-TERM-255-WHEEL` **Mouse wheel and Up and Down scroll the traffic view** - HIGH; the mouse wheel over the serial terminal, and the Up and Down keys, scroll the traffic view one line per step; the lab terminal sends a wheel step as an Up or Down key because the app leaves the mouse to the terminal, so selection and copy stay with the lab terminal; the key help says so
+  - evidence: verify round 1 of review-delta-e4c6ba1: pytest test_acc_term_255_wheel_up_and_down_scroll_the_traffic_view_one_line passed in make test; Galata terminal-app.spec.ts ACC-TERM-255-WHEEL passed (4/4, suite 105/105); with the Up/Down bindings removed the pilot failed (assert 166 == 166 - 3) and the Galata test on the repository source failed (pytest, galata)
+  - related: ACC-TERM-242-COPY - the mouse stays with the lab terminal
+  - related: ACC-TERM-240-KEYS - the key line and key help list only terminal keys
+  - test: pytest test_terminal_app.py pilot: press up and down, #traffic scroll_y changes by one line each; galata terminal-app.spec.ts: a wheel event over the lab terminal moves the traffic view
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-19T19:15:39Z @kj added; reason: the body names the wheel path through the lab terminal
+  - log: 2026-10-19T20:06:55Z @kj closed
+  - log: 2026-10-19T22:49:06Z @kj review round 2 revert of the hold: the pytest pilot test_acc_term_255_wheel_up_and_down_scroll_the_traffic_view_one_line no longer asserts the hold after a received line
 
 ## Command line and agent documents `CLI`
 
@@ -1332,6 +1472,7 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - log: 2026-10-12T16:36:19Z @kj added
   - log: 2026-10-12T17:04:16Z @kj closed
 - [x] `ACC-CLI-126` **Skill covers the firmware installers** - MEDIUM; the wheel installs the four files of resources/envs in envs/ beside the installed skill, identical to the repository's, the three installers executable; one rule of the skill names the three installers and both folders and tells the agent to ask the user before running one
+  - overridden-by: ACC-CLI-238
   - evidence: pytest test_agent_skill.py on build 0.6.19: both ACC-CLI-126 tests pass, 351 pytest tests pass; each test failed under a temporary change (ask sentence removed, executable bit removed, one byte added); wheel 0.6.19 lists the four files under the skill's envs/, installers mode 755
   - test: pytest test_agent_skill.py: the shared-data entry, the installed files against resources/envs, the executable bit, the rule of the skill
   - test-tags: UNIT
@@ -1403,6 +1544,7 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - evidence: pytest pass: four resources/envs copies equal the originals, README names PlatformIO for firmware-avr; red with a changed version; build 0.6.32: Jest 264, pytest 523 passed 1 skipped (logs/final0630-test-2.log), Galata 81 passed (logs/final0630-galata.log)
   - related: ACC-CLI-126 - the wheel ships these copies beside the skill
   - related: ACC-SHIM-178 - the selector must carry PLATFORMIO_CORE_DIR, a conda env var of firmware-avr
+  - overridden-by: ACC-CLI-238
   - test: pytest test_agent_skill.py: each copy byte-equal to its source when the copier embedded project template exists, skipped otherwise; README names PlatformIO for firmware-avr
   - test-tags: UNIT
   - log: 2026-10-14T19:11:07Z @kj added
@@ -1470,6 +1612,7 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-17T20:16:39Z @kj added
   - log: 2026-10-17T22:53:11Z @kj closed: probe group proven at 1.0.21
+  - log: 2026-10-19T19:15:43Z @kj the next step of a missing tool now re-runs the probe; the text needs no change
 - [x] `ACC-CLI-212` **probe names the next step** - HIGH; every probe failure prints exactly one next: line naming a command the parser accepts; text and --json agree; a detached device names reattach and the config apply; several attached devices refuse and list their names
   - evidence: make test 1.0.21: five test_acc_cli_212_* tests pass, each failure path parsed by the real parser
   - test: pytest test_cli.py: every failure path asserted to hold one next: line that parses
@@ -1507,6 +1650,53 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - mechanism: 2026-10-18T02:40:35Z @kj _ancestor_pids walks /proc/<pid>/stat from os.getpid() to 1; _server_list looks for the record whose pid is in that set before the prefix and one-record rules
   - log: 2026-10-18T02:40:35Z @kj added
   - log: 2026-10-18T02:52:48Z @kj closed
+- [x] `ACC-CLI-238` **No environment installers in the extension** - MEDIUM; the repository, the build and the wheel carry no environment installers or resources/envs; the agent skill and the docs point to the copier embedded project template at https://github.com/stellarshenson/copier-embedded-project for them; the Makefile has no installer sync.
+  - evidence: independent verify PASSED; make install 1.0.49 wheel and installed skill carry no envs; resources/ removed; Makefile has no sync-envs; skill, README, docs/design.md, docs/brief.md, .claude/CLAUDE.md name the copier embedded project template; make test: Jest 299, pytest 592 passed 1 skipped, auth gate green
+  - overrides: ACC-CLI-126
+  - overrides: ACC-CLI-187
+  - test: pytest test_agent_skill.py: no envs files in the repository or the built wheel; the skill and README name the copier embedded project template URL
+  - test-tags: UNIT
+  - log: 2026-10-19T12:54:48Z @kj added
+  - log: 2026-10-19T13:24:59Z @kj closed
+- [x] `ACC-CLI-245-TURMO-DOC` **TURMO reference in the uniform format** - MEDIUM; references/devices/turmo-usb-monitor.md is the worked example of the uniform device reference: the sections Identity, Connection, Device protocol, Device code, Host protocol, Host code, Traps and recovery, Observed and untested, Sources in that order; Device code says the panel runs closed vendor firmware UsbPCMonitor that is not available; Observed and untested states as fact only what was observed on the unit on 2026-10-19; Sources lists the datasheets by part, URL and target file name
+  - evidence: 2026-10-19 make test exit 0 (Jest 300/300, pytest 604 passed 1 skipped): test_acc_cli_245_turmo_reference_has_the_uniform_sections_and_the_observed_facts passed, nine headings in order, UsbPCMonitor not available, dated observations, wrap fix untested, datasheets by part, URL and file; verify round 3 found no statement presented as observed that is not
+  - test: pytest test_agent_skill.py: the nine headings appear in order; 1a86:5722, the 307234 bytes, the power cycle and UsbPCMonitor are present; the wrap fix is stated as untested; RESET appears in no host code default path; no path into tmp/
+  - test-tags: UNIT
+  - log: 2026-10-19T16:54:19Z @kj added; reason: the criterion lists the required sections of the file
+  - log: 2026-10-19T17:01:45Z @kj edited title "TURMO reference is the model device description" -> "TURMO reference in the uniform format"; text "references/turmo-usb-monitor.md opens by saying it is the model for describing a device to an agent, with the sections in order and the rule that only behaviour observed on the unit is stated as fact; it then holds for the TURMO: identity and how to recognise it in jupyterlab-device list, the bridge path and serial settings, the protocol (packets, bitmap, byte order, what is acknowledged), the howto (strict send, render a web page to a frame), traps and recovery (desync, power cycle, no second program on the pty, RESET not dependable), observed versus untested, the example program, the sources" -> "references/devices/turmo-usb-monitor.md is the worked example of the uniform device reference: the sections Identity, Connection, Device protocol, Device code, Host protocol, Host code, Traps and recovery, Observed and untested, Sources in that order; Device code says the panel runs closed vendor firmware UsbPCMonitor that is not available; Observed and untested states as fact only what was observed on the unit on 2026-10-19; Sources lists the datasheets by part, URL and target file name"; test "pytest test_agent_skill.py: the file opens with the model statement and the observed-only rule, and its headings appear in that order; 1a86:5722, the 307234 bytes and the power cycle are present; the wrap fix is stated as untested" -> "pytest test_agent_skill.py: the nine headings appear in order; 1a86:5722, the 307234 bytes, the power cycle and UsbPCMonitor are present; the wrap fix is stated as untested; RESET appears in no host code default path; no path into tmp/"; reason: reworded to the uniform format of device-reference.md, which replaced the earlier shape where the file opened as the model description
+  - log: 2026-10-19T18:17:09Z @kj closed
+- [x] `ACC-CLI-246-TURMO-SHIP` **SKILL.md points at both reference files and they ship** - MEDIUM; SKILL.md names references/device-reference.md and references/devices/turmo-usb-monitor.md and stays under 30 lines; the installed copies of both files under share/jupyter/agents/skills/jupyterlab-device-bridge-extension match the repository copies after make install
+  - evidence: 2026-10-19 make test exit 0: test_acc_cli_246_the_skill_names_both_reference_files_and_the_install_carries_them passed; all 6 skill files under /opt/conda/share/jupyter/agents/skills/jupyterlab-device-bridge-extension cmp equal to the repository
+  - test: pytest test_agent_skill.py: SKILL.md has under 30 lines and names both files; after make install each installed file equals the repository file byte for byte
+  - test-tags: UNIT
+  - log: 2026-10-19T16:54:19Z @kj added
+  - log: 2026-10-19T17:01:45Z @kj edited title "SKILL.md points at the TURMO reference and it ships" -> "SKILL.md points at both reference files and they ship"; text "SKILL.md names references/turmo-usb-monitor.md in its References line and stays under 30 lines; the installed copy of the file under share/jupyter/agents/skills/jupyterlab-device-bridge-extension matches the repository copy after make install" -> "SKILL.md names references/device-reference.md and references/devices/turmo-usb-monitor.md and stays under 30 lines; the installed copies of both files under share/jupyter/agents/skills/jupyterlab-device-bridge-extension match the repository copies after make install"; test "pytest test_agent_skill.py: SKILL.md has under 30 lines and names the file; after make install the installed file equals the repository file byte for byte" -> "pytest test_agent_skill.py: SKILL.md has under 30 lines and names both files; after make install each installed file equals the repository file byte for byte"; reason: the skill now ships two files: the format and procedure, and the TURMO example
+  - log: 2026-10-19T18:17:09Z @kj closed
+- [x] `ACC-CLI-247-TURMO-PROGRAM` **TURMO host code blocks build the exact bytes** - MEDIUM; the Host code section of the TURMO reference holds turmo.py on the standard library only (packet builders, RGB565, strict send over a file descriptor, HELLO with a timeout, a small CLI), gpu_status.py (nvidia-smi sample, dashboard page rendered at 2x and downscaled, --device PATH, --dry-run --out PNG) and dashboard.html as code blocks with the commands that run them
+  - evidence: 2026-10-19 make test exit 0: the four test_acc_cli_247 tests passed (exact packets and RGB565, 124 writes and 307234 bytes read back unchanged through os.openpty, stop after unanswered HELLO, gpu_status and dashboard blocks); mutations DISPLAY_BITMAP 0xC4 and the header merged into the first pixel write made them fail (123 == 124)
+  - test: pytest test_agent_skill.py: the turmo.py block is extracted and run; it builds the exact HELLO and bitmap header bytes and RGB565 little-endian pixels, and its strict send writes every command alone, the header alone and 120 chunks of 2560 bytes, read back from a pty pair from os.openpty
+  - test-tags: UNIT
+  - log: 2026-10-19T16:54:25Z @kj added; reason: the criterion lists the three code blocks the file must hold
+  - log: 2026-10-19T17:01:45Z @kj edited title "TURMO reference holds a runnable example program" -> "TURMO host code blocks build the exact bytes"; text "the file holds the example program as code blocks: a protocol module on the standard library only (packet builders, RGB565, strict send over a file descriptor, HELLO with a timeout), the GPU status program (nvidia-smi sample, the dashboard page rendered to a 320 x 480 frame, the send, a render-only mode) and the dashboard page" -> "the Host code section of the TURMO reference holds turmo.py on the standard library only (packet builders, RGB565, strict send over a file descriptor, HELLO with a timeout, a small CLI), gpu_status.py (nvidia-smi sample, dashboard page rendered at 2x and downscaled, --device PATH, --dry-run --out PNG) and dashboard.html as code blocks with the commands that run them"; test "pytest test_agent_skill.py: the protocol block is extracted from the file and run; it builds the exact HELLO and bitmap header bytes and RGB565 little-endian pixels, and its strict send writes every command alone, the header alone and 120 chunks of 2560 bytes, read back from a pty pair from os.openpty" -> "pytest test_agent_skill.py: the turmo.py block is extracted and run; it builds the exact HELLO and bitmap header bytes and RGB565 little-endian pixels, and its strict send writes every command alone, the header alone and 120 chunks of 2560 bytes, read back from a pty pair from os.openpty"; reason: reworded to the Host code section of the uniform format and the named files turmo.py, gpu_status.py and dashboard.html
+  - log: 2026-10-19T18:17:09Z @kj closed
+- [x] `ACC-CLI-248-REF-FORMAT` **device-reference.md states the uniform format** - MEDIUM; references/device-reference.md states the sections of a device reference in order: Identity, Connection, Device protocol, Device code, Host protocol, Host code, Traps and recovery, Observed and untested, Sources; for each it says what it holds, with Device protocol and Device code covering the device side and Host protocol and Host code the host side
+  - evidence: 2026-10-19 make test exit 0: test_acc_cli_248_device_reference_states_the_nine_sections_in_order passed, the nine sections in order each with what it holds and its side
+  - test: pytest test_agent_skill.py: the nine section names appear in that order in device-reference.md, each with a line on what it holds
+  - test-tags: UNIT
+  - log: 2026-10-19T17:01:54Z @kj added; reason: the format is the contract every device reference follows
+  - log: 2026-10-19T18:17:09Z @kj closed
+- [x] `ACC-CLI-249-REF-PROCEDURE` **device-reference.md holds the research procedure** - MEDIUM; references/device-reference.md holds the procedure for any device: identify it from jupyterlab-device list; look for an existing reference in the project first; research with web lookups only after the user agrees; probe with harmless reads or a handshake first and never send reset, erase or write commands before the protocol is known; download the datasheets of its parts into references/datasheets/<part>-<document>.pdf, never execute them, cite them; write the file; ask the user to confirm what the device did
+  - evidence: 2026-10-19 make test exit 0: test_acc_cli_249_device_reference_holds_the_research_procedure_in_order passed, the eight procedure steps in order with consent before web lookups, no reset or erase before the protocol is known and references/datasheets/<part>-<document>.pdf
+  - test: pytest test_agent_skill.py: the procedure steps appear in order, including jupyterlab-device list, the user's agreement before web lookups, no reset or erase before the protocol is known, references/datasheets/<part>-<document>.pdf and the user confirmation
+  - test-tags: UNIT
+  - log: 2026-10-19T17:01:54Z @kj added; reason: the steps let an agent document a device safely without a board known to it
+  - log: 2026-10-19T18:17:09Z @kj closed
+- [x] `ACC-CLI-250-REF-SAVE` **device reference save rule** - MEDIUM; a reference is saved to references/devices/<device>.md of a project made from the copier embedded project template, recognised by its .copier-answers.yml naming that template; in a folder that is not such a project the agent asks the user to create one with copier copy https://github.com/stellarshenson/copier-embedded-project <dir> and writes nothing elsewhere; in a project from the template without references/ the agent asks the user before it makes the folder
+  - evidence: 2026-10-19 make test exit 0: test_acc_cli_250_device_reference_saves_only_into_a_copier_embedded_project passed, references/devices/<device>.md, .copier-answers.yml, the exact copier copy command, nothing written elsewhere, ask before making references/
+  - test: pytest test_agent_skill.py: device-reference.md names references/devices/<device>.md, .copier-answers.yml, the exact copier copy command, writes nothing elsewhere, and asks before making references/
+  - test-tags: UNIT
+  - log: 2026-10-19T17:01:54Z @kj added; reason: the reference belongs to the user's embedded project, not to the extension
+  - log: 2026-10-19T18:17:10Z @kj closed
 
 ## Grants, authentication and ownership `SEC`
 

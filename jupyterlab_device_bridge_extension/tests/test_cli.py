@@ -71,14 +71,14 @@ os.execv = record
 raise SystemExit(cli.main(sys.argv[1:]))
 """
 
-# The CLI with the run of the terminal app replaced: it prints the path and the baud rate
-# that the app would open and exits 0.
+# The CLI with the run of the terminal app replaced: it prints the path, the baud rate
+# and the keywords that the app would run with, and exits 0.
 APP_RECORDED = """
 import json, sys
 from jupyterlab_device_bridge_extension import cli, terminal_app
 
-def record(app):
-    print(json.dumps([app.path, app.baud]))
+def record(app, **kwargs):
+    print(json.dumps([app.path, app.baud, kwargs]))
 
 terminal_app.SerialTerminal.run = record
 cli._on_a_terminal = lambda: True  # the pipes of the test stand for a terminal
@@ -721,8 +721,8 @@ async def test_acc_mon_43_monitor_write_sends_the_bytes_to_the_port(cli_run, fak
     assert len(tab.got("serial-write")) == 3
 
 
-async def test_cli_signals_and_action_reach_the_port(cli_run, fake_tab):
-    """`signals` sets the named control lines of the port and `action` runs one action (docs/design.md, CLI table)."""
+async def test_acc_term_241_the_bridge_api_and_the_cli_keep_the_signals_and_action_calls(cli_run, fake_tab):
+    """ACC-TERM-241 the CLI keeps `signals`, which sets DTR and RTS, and `action`, which runs pulse-dtr, pulse-rts, esp-bootloader and touch-1200: the calls reach the port."""
     tab, _ = await attach_serial(fake_tab)
 
     assert await cli_run("signals", SERIAL_NAME, "--dtr", "0", "--rts", "1") == Outcome(0, b"", "")
@@ -740,12 +740,12 @@ async def test_cli_signals_and_action_reach_the_port(cli_run, fake_tab):
 
 
 async def test_acc_term_165_terminal_starts_the_textual_app_on_the_device_path(cli_run, fake_tab):
-    """ACC-TERM-165 `terminal` starts the extension's Textual app on the device's path at the port's baud rate; pyserial and textual are dependencies of the wheel."""
+    """ACC-TERM-165 `terminal` starts the extension's Textual app on the device's path at the port's baud rate, with the mouse left to the terminal; pyserial and textual are dependencies of the wheel."""
     _, path = await attach_serial(fake_tab)
 
     outcome = await cli_run.app_recorded("terminal", SERIAL_NAME)
 
-    assert (outcome.status, json.loads(outcome.out), outcome.err) == (0, [path, 115200], "")
+    assert (outcome.status, json.loads(outcome.out), outcome.err) == (0, [path, 115200, {"mouse": False}], "")
     for package in ("pyserial", "textual"):
         assert any(requirement.startswith(f"{package}>=") for requirement in project()["dependencies"])
 
@@ -803,8 +803,8 @@ async def test_acc_term_109_terminal_uses_the_port_baud_or_the_flag(cli_run, fak
     configured = await cli_run.app_recorded("terminal", SERIAL_NAME)
     flag = await cli_run.app_recorded("terminal", SERIAL_NAME, "--baud", "57600")
 
-    assert json.loads(configured.out) == [path, 9600]
-    assert json.loads(flag.out) == [path, 57600]
+    assert json.loads(configured.out) == [path, 9600, {"mouse": False}]
+    assert json.loads(flag.out) == [path, 57600, {"mouse": False}]
 
 
 async def test_acc_term_110_terminal_refuses_a_device_another_program_holds(cli_run, fake_tab, tool):
@@ -841,14 +841,42 @@ def test_acc_term_174_terminal_help_lists_the_keys_and_says_that_the_command_is_
     text = PARSERS[("terminal",)].format_help()
     words = " ".join(text.split())  # the help text breaks its lines
 
+    shown = {"escape": "Esc", "pageup": "PgUp", "pagedown": "PgDn"}
     for binding in terminal_app.SerialTerminal.BINDINGS:
-        key = "Esc" if binding.key == "escape" else binding.key.replace("ctrl+", "Ctrl+").title()
+        key = shown.get(binding.key) or binding.key.replace("ctrl+", "Ctrl+").title()
         assert re.search(rf"^  {re.escape(key)} +{re.escape(binding.description)}\b", text, re.MULTILINE), (
             f"`terminal --help` has no line for {key} ({binding.description})")
     assert re.search(r"^  Enter +send the typed line", text, re.MULTILINE)
     assert "for a person at a terminal, not for a script or an agent" in words
     assert "An agent reads with `jupyterlab-device monitor read` and writes with `jupyterlab-device monitor write`" in words
     assert "miniterm" not in text
+
+
+def test_acc_term_242_copy_cmd_terminal_runs_the_app_with_the_mouse_left_to_the_terminal(monkeypatch):
+    """ACC-TERM-242-COPY cmd_terminal runs the serial terminal with mouse=False, so the lab's xterm.js owns the mouse, the selection and the clipboard, and Ctrl+C with no selection still reaches the app."""
+    from jupyterlab_device_bridge_extension import terminal_app
+
+    class FakeSerial:
+        def record(self):
+            return {"name": SERIAL_NAME, "path": "/dev/null", "holder": None, "state": "attached",
+                    "settings": {"baudRate": 115200, "dataBits": 8, "parity": "none", "stopBits": 1},
+                    "signals": {}}
+
+    class FakeBridge:
+        def serial(self, name):
+            return FakeSerial()
+
+    calls = []
+
+    def run(app, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(terminal_app.SerialTerminal, "run", run)
+    monkeypatch.setattr(tui_theme, "pick_theme", lambda: "stellars-tech-dark")
+    monkeypatch.setattr(cli, "_on_a_terminal", lambda: True)
+
+    assert cli.cmd_terminal(FakeBridge(), argparse.Namespace(device=SERIAL_NAME, baud=None)) == 0
+    assert calls == [{"mouse": False}]
 
 
 # ------------------------------------------------------------------------------- run
@@ -2246,7 +2274,7 @@ async def test_acc_cli_211_the_tool_probe_starts_its_uploader_through_run(
 
 async def test_acc_cli_211_a_tool_probe_that_does_not_identify_the_board_exits_1(
         cli_run, fake_tab, probe_tools):
-    """ACC-CLI-211 a signature that is not an ATmega328P and an avrdude that reads no signature each exit 1 with one conclusion and one parsable next step; a tool that is not on PATH exits 1 and its next step names the installer script in envs."""
+    """ACC-CLI-211 a signature that is not an ATmega328P and an avrdude that reads no signature each exit 1 with one conclusion and one parsable next step; a tool that is not on PATH exits 1, its conclusion names the installer script in template/resources/envs of the copier embedded project template, and its next step runs the probe again."""
     await attach_serial(fake_tab)
 
     missing = await cli_run("probe", "avr", SERIAL_NAME)
@@ -2261,8 +2289,11 @@ async def test_acc_cli_211_a_tool_probe_that_does_not_identify_the_board_exits_1
         assert len(outcome.out.decode().splitlines()) == 2
         probe_parsed(probe_next(outcome))
     assert "avrdude is not on PATH" in missing.out.decode().splitlines()[0]
-    assert "firmware-avr.py" in probe_next(missing)
-    assert "envs" in probe_next(missing)
+    assert "firmware-avr.py" in missing.out.decode().splitlines()[0]
+    assert "template/resources/envs" in missing.out.decode().splitlines()[0]
+    assert probe_next(missing) == f"{cli.PROG} probe avr {SERIAL_NAME}"
+    assert ("https://github.com/stellarshenson/copier-embedded-project"
+            in missing.out.decode().splitlines()[0])
     assert "signature deadbe" in wrong.out.decode().splitlines()[0]
     assert "read no signature" in silent.out.decode().splitlines()[0]
     document = json.loads(wrong_json.out)

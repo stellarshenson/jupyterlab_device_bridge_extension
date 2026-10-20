@@ -19,6 +19,7 @@ import { ISettingRegistry } from '@jupyterlab/settingregistry';
 import { IStatusBar } from '@jupyterlab/statusbar';
 
 import { MenuSvg } from '@jupyterlab/ui-components';
+import type { LabIcon } from '@jupyterlab/ui-components';
 
 import { Menu, Widget } from '@lumino/widgets';
 
@@ -31,6 +32,7 @@ import { DeviceBridgePanel, PANEL_ID, requestedDevice } from './panel';
 import { DeviceBridgeStatus } from './status';
 /* eslint-enable jupyter/prefer-lazy-imports */
 import { HELP_MARKDOWN } from './help';
+import { deviceIcon } from './icons';
 import type { IDeviceTable, ISerialDefaults } from './protocol';
 
 const PLUGIN_ID = 'jupyterlab_device_bridge_extension:plugin';
@@ -329,9 +331,13 @@ const plugin: JupyterFrontEndPlugin<void> = {
      * line for the user to run. Where the command refuses the launch, show its reason.
      *
      * @param words The words of the command line after the program `jupyterlab-device`
+     * @param tab The identity of the tab of the terminal, when it gets one
      * @returns A promise that ends when the launch ended; it never rejects
      */
-    const runInTerminal = async (...words: string[]): Promise<void> => {
+    const runInTerminal = async (
+      words: string[],
+      tab?: { label: string; icon: LabIcon; caption?: string }
+    ): Promise<void> => {
       const line = [CLI, ...words].join(' ');
       if (!serviceManager.terminals.isAvailable()) {
         Notification.emit(
@@ -351,10 +357,28 @@ const plugin: JupyterFrontEndPlugin<void> = {
       }
       try {
         // A closed tab ends the program, so the serial terminal frees the port.
-        await commands.execute(BASIC_TERMINAL_LAUNCH, {
+        const widget: any = await commands.execute(BASIC_TERMINAL_LAUNCH, {
           argv: ['/bin/bash', '-c', LAUNCH_SCRIPT, CLI, ...words],
           shutdownOnClose: true
         });
+        if (tab && widget?.title) {
+          const applyTab = (): void => {
+            if (widget.title.label !== tab.label) {
+              widget.title.label = tab.label;
+            }
+            if (widget.title.icon !== tab.icon) {
+              widget.title.icon = tab.icon;
+            }
+            if (
+              tab.caption !== undefined &&
+              widget.title.caption !== tab.caption
+            ) {
+              widget.title.caption = tab.caption;
+            }
+          };
+          applyTab();
+          widget.title.changed?.connect(applyTab);
+        }
       } catch (reason) {
         // The lab shows a rejected command to nobody. The reason has any length, so
         // a text over the limit is cut and ends with three dots.
@@ -414,14 +438,18 @@ const plugin: JupyterFrontEndPlugin<void> = {
         }
         port = choice.value;
       }
-      await runInTerminal('terminal', port);
+      await runInTerminal(['terminal', port], {
+        label: 'Serial Terminal',
+        icon: deviceIcon,
+        caption: `Serial terminal on ${port}`
+      });
     };
 
     /**
      * Start a device shell, `jupyterlab-device shell`, in a terminal of the lab. The
      * server lists that shell as a run.
      */
-    const startRun = (): Promise<void> => runInTerminal('shell');
+    const startRun = (): Promise<void> => runInTerminal(['shell']);
 
     /** Open the dialog that says how to connect a tool to an attached device. */
     const showRunInfo = (): void => {

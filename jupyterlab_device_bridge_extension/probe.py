@@ -17,7 +17,6 @@ import subprocess
 import sys
 import time
 
-from . import banner
 from .client import DeviceBridgeClient, DeviceBridgeError
 
 PROG = "jupyterlab-device"
@@ -39,6 +38,8 @@ MIN_READABLE = 3
 ATMEGA328P = "1e950f"
 TOOLS = {"avr": "avrdude", "stm32": "stm32flash", "esp": "esptool"}
 INSTALLERS = {"avr": "firmware-avr.py", "stm32": "firmware-stm32.py", "esp": "firmware-esp.py"}
+# The template of the copier embedded project, which holds the installers.
+TEMPLATE_URL = "https://github.com/stellarshenson/copier-embedded-project"
 # The Python module that `run` is: a child found through the interpreter of this
 # command, so a PATH without the console script still starts the same CLI.
 RUN = [sys.executable, "-m", "jupyterlab_device_bridge_extension.cli", "run"]
@@ -151,16 +152,16 @@ def _upload_command(probe: str, record: dict) -> str:
 
 
 def _installer(probe: str) -> str:
-    """The installer script in envs beside the agent skill, which makes the tool available."""
-    return str(banner.skill_folder() / "envs" / INSTALLERS[probe])
+    """The installer of the tool in the copier embedded project template."""
+    return f"template/resources/envs/{INSTALLERS[probe]}"
 
 
 def _missing_tool(record: dict, probe: str) -> dict:
     tool = TOOLS[probe]
     installer = _installer(probe)
-    next_command = f"{PROG} run --device {record['name']} -- {installer}"
-    conclusion = (f"{record['name']}: {tool} is not on PATH; install it with {installer}, "
-                  "the script in envs beside the agent skill")
+    next_command = f"{PROG} probe {probe} {record['name']}"
+    conclusion = (f"{record['name']}: {tool} is not on PATH; install it with {installer} "
+                  f"in a clone of the copier embedded project template at {TEMPLATE_URL}")
     return _failed(record["name"], probe, conclusion, next_command,
                    {"tool": tool, "installer": installer})
 
@@ -377,8 +378,10 @@ at that rate, and restores the settings record and the open state of the port be
 it returns. probe avr reads the AVR signature with avrdude, probe stm32 reads the
 device id with stm32flash, and probe esp reads the chip with esptool. A tool probe
 starts its tool under `jupyterlab-device run --device`, so the tool gets the preload
-shim. A tool that is not on PATH is a failure whose next step names the installer
-script in envs beside the agent skill.
+shim. A tool that is not on PATH is a failure whose conclusion names the installer
+script in template/resources/envs of the copier embedded project template at
+https://github.com/stellarshenson/copier-embedded-project, and the next step runs the
+probe again.
 
 Exit status: 0 identified, 1 not identified, 2 wrong arguments. `--json` prints one
 document with the fields device, probe, identified, conclusion, next and details;

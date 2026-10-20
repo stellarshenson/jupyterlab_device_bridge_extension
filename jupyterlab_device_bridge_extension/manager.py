@@ -298,8 +298,9 @@ class DeviceManager:
     Args:
         device_dir: Directory of the virtual serial devices; made when the first
             serial port is claimed. The manager asks for its lock, and with the lock
-            removes what a killed server left in it: at once when the directory
-            exists, else at that first claim.
+            removes every device entry in it that no record accounts for: at once when
+            the directory exists, else at that first claim, and again whenever a tab
+            connects.
         monitor_bytes: Size of the monitor buffer of each serial port.
         log: The server's logger.
         settings_path: File of the user-saved serial settings; the Jupyter data
@@ -349,6 +350,11 @@ class DeviceManager:
         """Register the tab that said `hello`; send it the welcome, the table, the requests and the runs."""
         if not isinstance(tab_id, str) or not 0 < len(tab_id) <= 64:
             raise ValueError("hello without a tabId of 1 to 64 characters")
+        try:
+            self._sweep()
+        except OSError as error:
+            self.log.error("device-bridge: the stale device entries in %s are not removed: %s",
+                           self.device_dir, error)
         if tab_id in self.tabs:
             # The tab reconnected before its old socket closed.
             self.disconnect(self.tabs[tab_id])
@@ -948,7 +954,8 @@ class DeviceManager:
 
         Raises:
             OSError: The directory is refused or cannot be made, and the next call tries
-                again; or an entry cannot be removed, and no call tries that again.
+                again; or an entry cannot be removed, and the next tab that connects
+                tries that again.
         """
         if self._dir_lock_tried:
             return
@@ -960,7 +967,23 @@ class DeviceManager:
                 "is removed; give this server its own directory with the setting "
                 "DeviceBridge.device_dir", self.device_dir)
             return
-        remove_left(self.device_dir, self.shim_dir)
+        self._sweep()
+
+    def _sweep(self) -> None:
+        """Remove every device entry of the device directory that no record accounts for.
+
+        Only while this server holds the lock: otherwise the entries can be those of the
+        live server that holds it. The records are those of the device table, attached
+        and detached.
+
+        Raises:
+            OSError: An entry cannot be read or removed.
+        """
+        if self._dir_lock is None:
+            return
+        keep = {device.shim.path for device in self.serial.values()}
+        keep.update(os.path.join(self.device_dir, name) for name in (*self.serial, *self.usb))
+        remove_left(self.device_dir, self.shim_dir, keep)
 
     def close(self) -> None:
         """Remove every virtual serial device and shim socket, then unlock the device directory.

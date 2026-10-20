@@ -149,6 +149,12 @@ What the user sees and clicks in the lab
   - log: 2026-10-14T18:07:38Z @kj Star Colonel keeps the two-click confirm of Stop and Forget, it is destructive; fix only the label colour: strong contrast on the red fill, same font weight
   - log: 2026-10-14T18:09:18Z @kj Star Colonel: the label of the armed button is drawn at 100 percent opacity, no transparent text colour
   - log: 2026-10-16T09:24:22Z @kj closed; reason: evidence names the test, the mutation and the gate run
+- [x] `DEF-PANEL-27` **serial settings dialog is not compact and uniform** - MAJOR; the Serial settings dialog reads as a loose row of mismatched controls, not the compact table approved as variant A; controls differ in width per row (Config 250, baud 344, Data bits 70, action 344 at screen scale) and rows sit far apart; cause under investigation; style/base.css, src/panel.ts
+  - evidence: Fixed in 1.0.37: the jp-select-wrapper is the full-width flex item; fixed 42/58 table at 680 px, six 342.56 x 28 px controls, 40 px rows, delta-6 bands, footer wraps under 452 px; Jest 298, pytest 597 passed 1 skipped, auth gate, Galata 100/100; review last round SHIP, empty plan.
+  - repro: open the Devices panel and click Settings on an attached serial port
+  - test-tags: FUNCTIONAL
+  - log: 2026-10-18T14:46:19Z @kj added
+  - log: 2026-10-18T16:34:03Z @kj closed: fixed
 
 ## Command line and agent documents `CLI`
 
@@ -238,4 +244,25 @@ USB descriptors and the operations on a USB device
   - log: 2026-10-17T16:24:58Z @kj added
   - log: 2026-10-17T16:41:34Z @kj edited test-tags "UNIT" -> "UNIT, FUNCTIONAL"
   - log: 2026-10-17T16:49:30Z @kj closed
+
+## Serial terminal `TERM`
+
+The terminal app of jupyterlab-device terminal: its keys, its selection and its clipboard
+
+- [x] `DEF-TERM-28-KEYS` **Serial terminal carries board-specific action keys** - MAJOR; the serial terminal binds F2 DTR, F3 RTS, F4 break, F6 pulse-dtr, F7 pulse-rts, F8 esp-bootloader and F10 touch-1200 and its keys help lists them; a serial terminal must not carry board-specific actions; cause: the terminal was built with the bridge's board controls; fix: remove the bindings, key help rows and methods from the terminal; the bridge API and CLI keep the actions; `jupyterlab_device_bridge_extension/terminal_app.py`
+  - evidence: board bindings, KEY_HELP rows and action_line/action_brk/_break/action_run removed from terminal_app.py; pytest test_acc_term_240_keys_the_terminal_binds_no_board_action_key passed and red with an F2 binding restored; make test 595 passed, 1 skipped
+  - overrides: ACC-TERM-169
+  - repro: jupyterlab-device terminal on an attached port, press F8: esp-bootloader runs and the key help lists the board actions
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-10-19T14:43:50Z @kj added; reason: the user pressed F8, saw esp-bootloader run and reported the terminal is only supposed to be a serial terminal
+  - log: 2026-10-19T15:14:08Z @kj closed
+- [x] `DEF-TERM-29-PAUSE-TRIM` **Paused traffic view moves once it holds KEEP_LINES lines** - MAJOR; with #traffic at KEEP_LINES (5000) lines, a view paused with Ctrl+P moves one line for each arriving line, so scrolling back or selecting on a port that keeps sending fails; jupyterlab_device_bridge_extension/terminal_app.py SerialTerminal._add, SerialTerminal.action_pause
+  - evidence: pytest test_terminal_app.py::test_acc_term_166_a_paused_view_holds_its_place_past_keep_lines red without the fix (top line 'line 000' became 'line 010'; without the resume _redraw view ended at line 059), green with it; make test 611 passed, 1 skipped; Galata 105 passed
+  - related: ACC-TERM-244-PASTE
+  - related: ACC-TERM-166
+  - repro: pytest jupyterlab_device_bridge_extension/tests/test_terminal_app.py::test_acc_term_166_a_paused_view_holds_its_place_past_keep_lines: KEEP_LINES 60, fill, Ctrl+P, PgUp, 10 more lines: top line moves
+  - test-tags: UNIT
+  - root-cause: 2026-10-19T23:25:31Z @kj RichLog.write trims the oldest strips past max_lines and leaves scroll_y (Textual 8.2.8 _rich_log.py:262-265), and action_pause only clears auto_scroll
+  - log: 2026-10-19T23:25:31Z @kj added
+  - log: 2026-10-19T23:41:55Z @kj closed
 

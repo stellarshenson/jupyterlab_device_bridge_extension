@@ -59,6 +59,19 @@ async function terminalApp(page: Page, port: ISimSerial): Promise<void> {
     .toBe('jupyterlab-devi');
 }
 
+/**
+ * Wait until the tab of the serial terminal app is visible in the dock tab bar, titled
+ * Serial Terminal, with the icon of the device bridge in it.
+ */
+async function expectSerialTerminalTab(page: Page): Promise<void> {
+  const tab = page
+    .locator('.lm-DockPanel-tabBar .lm-TabBar-tab')
+    .filter({ hasText: 'Serial Terminal' });
+  await expect(tab).toHaveCount(1);
+  await expect(tab).toBeVisible();
+  await expect(tab.locator('.lm-TabBar-tabIcon svg')).toHaveCount(1);
+}
+
 test.describe('serial terminal', () => {
   test('ACC-TERM-74 the serial terminal command opens a lab terminal with the terminal program on the virtual device, and the output of the port appears in it', async ({
     page
@@ -70,6 +83,7 @@ test.describe('serial terminal', () => {
 
     await execute(page, OPEN_TERMINAL);
     await terminalApp(page, port);
+    await expectSerialTerminalTab(page);
     expect(await terminalText(page)).not.toContain(line);
     await simSend(page, port.id, bytes(`${line}\r\n`));
 
@@ -110,6 +124,7 @@ test.describe('serial terminal', () => {
     await action(row(page, port.name), 'terminal').click();
 
     await terminalApp(page, port);
+    await expectSerialTerminalTab(page);
     await expect(page.locator('.jp-Terminal')).toHaveCount(1);
     // The lab typed no command line: the first row is the header of the app, and no
     // line holds the command line.

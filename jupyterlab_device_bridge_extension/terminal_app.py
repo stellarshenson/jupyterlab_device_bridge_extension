@@ -3,8 +3,8 @@
 The app opens the virtual serial device with pyserial, as every serial tool does, so the
 bridge shows it as the holder and runs the action on open of the port's settings. One
 thread reads the port and one writes to it, in the order the user sent the bytes. The
-serial settings, the control lines and the actions go through the REST API of the bridge
-(`DeviceBridgeClient`): a pty refuses the DTR, RTS and parity calls of a tool.
+serial settings go through the REST API of the bridge (`DeviceBridgeClient`): a pty
+refuses the parity calls of a tool.
 
 Every call to the bridge runs in a thread, so the app never waits for the server on the
 event loop. In the tests that loop also runs the server.
@@ -15,7 +15,6 @@ import collections
 import os
 import queue
 import threading
-import time
 from datetime import datetime
 
 import serial
@@ -43,8 +42,6 @@ READ_S = 0.05
 LINE_BYTES = 256
 # Lines kept for the view; a switch between text and hex draws them again.
 KEEP_LINES = 5000
-# How long a break holds the line.
-BREAK_S = 0.25
 LINE_ENDINGS = {"none": b"", "LF": b"\n", "CR": b"\r", "CRLF": b"\r\n"}
 DATA_BITS = (7, 8)
 PARITIES = ("none", "even", "odd")
@@ -195,16 +192,13 @@ KEY_HELP = {
     "quit": "quit; the device path is closed and the port is free for another program",
     "settings": "the serial settings: baud rate, data bits, parity, stop bits, line ending, text or hex",
     "hex_view": "show the lines as text or as hex digits",
-    "pause": "stop the view from scrolling; press again to scroll on",
+    "pause": "hold the view; new lines are kept and shown at the next ^p",
     "clear": "remove every line from the view",
-    "line('dtr')": "set DTR off, or on when it is off",
-    "line('rts')": "set RTS off, or on when it is off",
-    "brk": f"send a break: the line held for {BREAK_S:g} s",
-    "run('pulse-dtr')": "run the action pulse-dtr of the bridge",
-    "run('pulse-rts')": "run the action pulse-rts of the bridge",
-    "run('esp-bootloader')": "run the action esp-bootloader of the bridge",
-    "run('touch-1200')": "run the action touch-1200 of the bridge",
-    "interrupt": "send the byte 0x03 to the board; the terminal does not quit",
+    "page_up": "scroll the traffic view up",
+    "page_down": "scroll the traffic view down",
+    "line_up": "scroll the traffic view up one line; the mouse wheel sends this key",
+    "line_down": "scroll the traffic view down one line; the mouse wheel sends this key",
+    "interrupt": "send the byte 0x03 when no text is selected; the terminal copies selected text",
     "keys": "show or close this list",
 }
 
@@ -248,16 +242,13 @@ class SerialTerminal(App):
         Binding("ctrl+x", "hex_view", "text/hex", key_display="^x", priority=True),
         Binding("ctrl+p", "pause", "pause", key_display="^p", priority=True),
         Binding("ctrl+l", "clear", "clear", key_display="^l", priority=True),
-        # The board actions are on function keys: the send field keeps its editing keys
-        # (Ctrl+A, E, D, U, K), and F1, F5, F9, F11 and F12 are taken by the browser or the lab.
-        Binding("f2", "line('dtr')", "DTR on/off", key_display="F2", priority=True),
-        Binding("f3", "line('rts')", "RTS on/off", key_display="F3", priority=True),
-        Binding("f4", "brk", "break", key_display="F4", priority=True),
-        Binding("f6", "run('pulse-dtr')", "pulse DTR", key_display="F6", priority=True),
-        Binding("f7", "run('pulse-rts')", "pulse RTS", key_display="F7", priority=True),
-        Binding("f8", "run('esp-bootloader')", "ESP bootloader", key_display="F8", priority=True),
-        Binding("f10", "run('touch-1200')", "1200 baud touch", key_display="F10", priority=True),
-        # Ctrl+C does not quit: it goes to the board, which may run a program it interrupts.
+        Binding("pageup", "page_up", "scroll up", key_display="PgUp", priority=True),
+        Binding("pagedown", "page_down", "scroll down", key_display="PgDn", priority=True),
+        # With mouse reporting off the lab terminal sends a wheel step as Up or Down.
+        Binding("up", "line_up", "line up", key_display="Up"),
+        Binding("down", "line_down", "line down", key_display="Down"),
+        # Ctrl+C does not quit: with no selection it sends 0x03, and with a selection the
+        # outer terminal copies the text and the key never reaches the app.
         Binding("ctrl+c", "interrupt", "send 0x03", key_display="^c", priority=True),
         # The key help is on the one control letter that neither the app, the send field, the
         # browser nor the lab takes; the lab's terminal sends no byte for Ctrl+/.
@@ -375,7 +366,8 @@ class SerialTerminal(App):
     def _add(self, direction: str, data: bytes) -> None:
         entry = (datetime.now().strftime("%H:%M:%S.%f")[:-3], direction, data)
         self._entries.append(entry)
-        self.query_one("#traffic", RichLog).write(self._line(*entry))
+        if not self._paused:
+            self.query_one("#traffic", RichLog).write(self._line(*entry))
         self._show()
 
     def _line(self, stamp: str, direction: str, data: bytes) -> Text:
@@ -518,6 +510,8 @@ class SerialTerminal(App):
     def action_pause(self) -> None:
         self._paused = not self._paused
         self.query_one("#traffic", RichLog).auto_scroll = not self._paused
+        if not self._paused:
+            self._redraw()
         self._say("scrolling paused; ^p resumes" if self._paused else "scrolling resumed")
 
     def action_clear(self) -> None:
@@ -525,21 +519,17 @@ class SerialTerminal(App):
         self.query_one("#traffic", RichLog).clear()
         self._say("view cleared")
 
-    def action_line(self, line: str) -> None:
-        # A line without a reported state is taken as on, so the first press turns it off.
-        value = not self._record["signals"].get(line, True)
-        self._call(f"{line.upper()} {'on' if value else 'off'}", self._device.signals, **{line: value})
+    def action_page_up(self) -> None:
+        self.query_one("#traffic", RichLog).scroll_page_up()
 
-    def action_brk(self) -> None:
-        self._call("break sent", self._break)
+    def action_page_down(self) -> None:
+        self.query_one("#traffic", RichLog).scroll_page_down()
 
-    def _break(self) -> None:
-        self._device.signals(brk=True)
-        time.sleep(BREAK_S)
-        self._device.signals(brk=False)
+    def action_line_up(self) -> None:
+        self.query_one("#traffic", RichLog).scroll_up(animate=False)
 
-    def action_run(self, action: str) -> None:
-        self._call(f"{action} done", self._device.action, action)
+    def action_line_down(self) -> None:
+        self.query_one("#traffic", RichLog).scroll_down(animate=False)
 
     def action_interrupt(self) -> None:
         self._send(b"\x03")
