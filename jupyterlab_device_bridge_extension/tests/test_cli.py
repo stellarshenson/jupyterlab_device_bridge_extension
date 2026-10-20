@@ -23,6 +23,7 @@ import sys
 import termios
 import time
 import tomllib
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
@@ -1076,7 +1077,8 @@ def banner(devices=(NO_DEVICE,), tools=FOR_THREE_TOOLS, skill=SKILL_NOT_FOUND, c
     Args:
         devices: The lines of the Devices section; None for a banner without that section.
         tools: The lines of the Environment section.
-        skill: The lines of the Agent skill section.
+        skill: The lines of the Agent skill section: the name of the skill, its state and the
+            lines under them; one line alone when the section holds only that line.
     """
     width = banner_width(columns)
     if columns < 45:
@@ -1090,10 +1092,11 @@ def banner(devices=(NO_DEVICE,), tools=FOR_THREE_TOOLS, skill=SKILL_NOT_FOUND, c
              rule("Environment", width), *(f"  {line}" for line in tools)]
     if devices is not None:
         lines += [rule("Devices", width), *(f"  {line}" if line.strip() else line for line in devices)]
-    name, state, *under = skill
     lines.append(rule("Agent skill", width))
-    lines += [f"  {name}  {state}"] if 2 + len(name) + 2 + len(state) <= width else [f"  {name}", f"    {state}"]
-    lines += [*(f"  {line}" for line in under), rule("Commands", width)]
+    if len(skill) > 1:
+        name, state, *skill = skill
+        lines += [f"  {name}  {state}"] if 2 + len(name) + 2 + len(state) <= width else [f"  {name}", f"    {state}"]
+    lines += [*(f"  {line}" for line in skill), rule("Commands", width)]
     column = max(len(command) for command, _ in COMMAND_ROWS)
     if all(2 + column + 2 + len(what) <= width for _, what in COMMAND_ROWS):
         lines += [f"  {command:<{column}}  {what}" for command, what in COMMAND_ROWS]
@@ -1790,22 +1793,32 @@ def test_acc_cli_194_skill_state_says_how_an_agent_finds_the_skill(tmp_path):
 
 @pytest.mark.usefixtures("three_upload_tools")
 async def test_acc_cli_194_the_banner_says_where_an_agent_finds_the_skill(cli_run, screen, lab_shell):
-    """ACC-CLI-194 with the folder of the skill linked into ~/.agents/skills of the HOME of the shell the Agent skill section names the skill, says that it is linked there, and has the path of its SKILL.md under the Python prefix; without the link it says that no agent finds it and names `jupyterlab-device help`."""
+    """ACC-CLI-194 without a link in the HOME of the shell the Agent skill section names the skill, says that no agent finds it, has the path of its SKILL.md under the Python prefix and names `jupyterlab-device help`; with the folder of the skill linked into ~/.agents/skills, and with a skill there that names that folder, the section holds the path line only."""
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
     assert status == 0 and plain(displayed) == banner() + "started\n"
 
-    skills = os.path.join(os.environ["HOME"], ".agents", "skills")
-    os.makedirs(skills)
-    os.symlink(SKILL_MD.parent, os.path.join(skills, banner_module.SKILL))
-    linked = Screen()
-    try:
-        status, displayed, _ = await on_a_terminal(cli_run, linked, "shell")
-    finally:
-        os.close(linked.keyboard)
+    async def shell_with(finder):
+        assert banner_module.skill_state(home=Path(os.environ["HOME"]))[1] == finder
+        shown = Screen()
+        try:
+            return await on_a_terminal(cli_run, shown, "shell")
+        finally:
+            os.close(shown.keyboard)
 
-    assert status == 0
-    assert plain(displayed) == banner(skill=(banner_module.SKILL, "✓ linked in ~/.agents/skills", str(SKILL_MD))) + "started\n"
-    assert colour_at(displayed, "✓ linked", 0) == tui_theme.PALETTES["dark"]["mint"]
+    skills = os.path.join(os.environ["HOME"], ".agents", "skills")
+    os.makedirs(os.path.join(skills, "platform"))
+    link = os.path.join(skills, banner_module.SKILL)
+    os.symlink(SKILL_MD.parent, link)
+    linked = await shell_with("linked in ~/.agents/skills")
+    os.unlink(link)
+    with open(os.path.join(skills, "platform", "SKILL.md"), "w") as index:
+        index.write(f"Details: [{SKILL_MD}]({SKILL_MD})\n")
+    listed = await shell_with("listed by ~/.agents/skills/platform")
+
+    for status, displayed, _ in (linked, listed):
+        assert status == 0
+        assert plain(displayed) == banner(skill=(str(SKILL_MD),)) + "started\n"
+        assert colour_at(displayed, str(SKILL_MD), 0) == banner_module.EXTRA["dark"]["device"]
 
 
 def help_section(title):

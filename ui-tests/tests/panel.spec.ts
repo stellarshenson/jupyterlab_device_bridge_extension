@@ -1987,11 +1987,16 @@ test.describe('Device shells', () => {
     expect(
       section(banner, 'Devices').join(' ').split(/\s+/).join(' ').trim()
     ).toBe(devices);
+    // The HOME of the test server is the one of this machine: when an agent finds the
+    // skill the section is the path line alone, else it also says that no agent finds it.
     const skill = section(banner, 'Agent skill');
-    expect(skill[0]).toMatch(/^ {2}jupyterlab-device-bridge-extension\b/);
     expect(skill.join('\n')).toMatch(
       /^ {2}\/\S+\/share\/jupyter\/agents\/skills\/jupyterlab-device-bridge-extension\/SKILL\.md$/m
     );
+    expect(
+      skill.length === 1 || skill.join(' ').includes('○ no agent finds it')
+    ).toBe(true);
+    expect(skill.join('\n')).not.toContain('✓');
     expect(section(banner, 'Commands').join('\n')).toMatch(
       /^ {2}jupyterlab-device help\b/m
     );

@@ -190,11 +190,11 @@ def _skill_lines(width: int) -> list:
     path, finder = skill_state()
     if path is None:
         return _pairs([([(INDENT + SKILL, "text")], [(f"not installed under {sys.prefix}", "amber")])], width, 4)
-    state = [("✓ " + finder, "mint")] if finder else [("○ no agent finds it", "amber")]
-    lines = _pairs([([(INDENT + SKILL, "text")], state)], width, 4) + [[(INDENT + str(path), "device")]]
-    if not finder:
-        lines.append([(INDENT + "jupyterlab-device help names the two commands that link it", "muted")])
-    return lines
+    if finder:
+        return [[(INDENT + str(path), "device")]]
+    return _pairs([([(INDENT + SKILL, "text")], [("○ no agent finds it", "amber")])], width, 4) + [
+        [(INDENT + str(path), "device")],
+        [(INDENT + "jupyterlab-device help names the two commands that link it", "muted")]]
 
 
 def _text(line: list) -> str:

@@ -2,6 +2,14 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.65] - 2026-10-20
+
+The banner of the device shell is shorter when an agent already finds the agent skill. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Changed
+
+- Banner of `jupyterlab-device shell`: when an agent finds the skill, linked in `~/.agents/skills` or `~/.claude/skills` or listed by a skill there such as GalaxaLab's, the Agent skill section shows only the path of its `SKILL.md`; the line with the skill name and `✓ linked in` or `✓ listed by` is gone. When no agent finds the skill, or the wheel did not install it, the section still says so
+
 ## [1.0.62] - 2026-10-20
 
 The serial terminal is a plain serial terminal with select, copy and paste, the agent skill documents any device in one reference format, and a starting device bridge removes the stale devices of its folder. The extension is tested against simulated devices in the browser; no test used a physical board.
