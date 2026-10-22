@@ -366,6 +366,9 @@ def _start_with_shim(bridge: DeviceBridgeClient, command: list[str] | None,
             _say(f"the server (device bridge {status['version']}) does not report the shell command of "
                  "its terminals - restart JupyterLab, so that the server runs the version of this command")
             return 1
+        # The start scripts of the lab's shell print a message of the day; a device shell
+        # prints the banner instead. The value is forced: a caller's value does not win.
+        environment["DISABLE_MOTD"] = "1"
         # The user chooses the environment of the shell when another environment holds an upload
         # tool and a terminal is on standard input and on standard error, where Textual draws.
         found = []

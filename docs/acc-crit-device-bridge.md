@@ -1700,6 +1700,24 @@ The jupyterlab-device CLI, its help, the agent skill, the README
   - test-tags: UNIT
   - log: 2026-10-19T17:01:54Z @kj added; reason: the reference belongs to the user's embedded project, not to the extension
   - log: 2026-10-19T18:17:10Z @kj closed
+- [x] `ACC-CLI-256-BOARD-REFS` **Skill names the board references in the remote copier repository** - MEDIUM; the References section of SKILL.md names the board references in the copier-embedded-project repository at https://github.com/stellarshenson/copier-embedded-project/tree/main/references/boards, one self-contained HTML page per board under `references/boards/<board>/<board>.html`, pinout, buses, power and quick start; SKILL.md stays under 30 lines
+  - evidence: pytest test_acc_cli_256_the_skill_names_the_board_references_in_the_copier_repository passed; make test exit 0: Jest 300 passed, pytest 612 passed 1 skipped, auth gate clean; mutations removing the URL or the per-board path each fail it; logs/skill-board-references-verify-make-test.log, -mutation-url.log, -mutation-path.log
+  - test: pytest test_agent_skill.py: the References section names the board references URL and the per-board HTML path, and SKILL.md has under 30 lines
+  - test-tags: UNIT
+  - log: 2026-10-22T19:19:42Z @kj added
+  - log: 2026-10-22T19:30:48Z @kj closed
+- [x] `ACC-CLI-257-BOARD-SKILL` **Skill names the board-reference skill of the copier project** - MEDIUM; the References section of SKILL.md names the board-reference skill of the copier-embedded-project at https://github.com/stellarshenson/copier-embedded-project/tree/main/.agents/skills/board-reference, which builds one self-contained HTML page per board with its research procedure; SKILL.md stays under 30 lines
+  - evidence: pytest test_acc_cli_257_the_skill_names_the_board_reference_skill_of_the_copier_project passed; make test exit 0: Jest 4 suites 300 passed, pytest 613 passed 1 skipped, auth gate clean; removing the URL from the bullet fails it; installed SKILL.md byte for byte equal; logs/skill-board-reference-skill-verify-make-test.log, -red.log
+  - test: pytest test_agent_skill.py: the References section names the board-reference skill URL, and SKILL.md has under 30 lines
+  - test-tags: UNIT
+  - log: 2026-10-22T19:32:50Z @kj added
+  - log: 2026-10-22T19:42:22Z @kj closed
+- [x] `ACC-CLI-258-MOTD` **Device shell disables the MOTD** - MEDIUM; `jupyterlab-device shell` starts the shell command of the lab's terminals with `DISABLE_MOTD=1` in its environment, forced even when the caller set another value; `jupyterlab-device run` leaves the variable unchanged; a test asserts both
+  - evidence: pytest test_cli.py::test_acc_cli_258_the_device_shell_sets_disable_motd[variable unset] and [variable set to 0] passed: shell saw 1, run kept the unset variable and the caller value 0; make test exit 0: Jest 4 suites 300 passed, pytest 615 passed 1 skipped, auth gate passed; mutation removing the assignment from cli.py failed both (motd empty and 0 against 1) and forcing it for run failed both run assertions, restored code 2 passed; logs/device-shell-motd-verify-make-test.log, -focused-green.log, -mutation.log, -mutation-run-side.log, -restored.log
+  - test: pytest test_cli.py: the reporting shell of the lab prints DISABLE_MOTD=1, and a run of a stand-in program with the variable unset leaves it unset
+  - test-tags: UNIT
+  - log: 2026-10-22T21:12:49Z @kj added
+  - log: 2026-10-22T21:24:18Z @kj closed; reason: the five evidence items the stage names - test id, both sides, counts, mutation, log paths - exceed 50 words when each is named
 
 ## Grants, authentication and ownership `SEC`
 

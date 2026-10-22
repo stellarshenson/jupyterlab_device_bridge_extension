@@ -503,3 +503,23 @@ def test_acc_cli_246_the_skill_names_both_reference_files_and_the_install_carrie
         installed = INSTALLED_REFERENCES / relative
         assert installed.is_file(), f"{installed} is missing - run make install"
         assert installed.read_bytes() == path.read_bytes(), f"the installed {relative} differs - run make install"
+
+
+def test_acc_cli_256_the_skill_names_the_board_references_in_the_copier_repository():
+    """ACC-CLI-256-BOARD-REFS the References line names the board references in the copier-embedded-project repository and their per-board HTML path, inside the under-30-line limit."""
+    skill = REPOSITORY_COPY.read_text(encoding="utf-8")
+    references = skill.split("## References", 1)[1]
+
+    assert f"{TEMPLATE_URL}/tree/main/references/boards" in references
+    assert "`references/boards/<board>/<board>.html`" in references
+    assert len(skill.splitlines()) < 30
+
+
+def test_acc_cli_257_the_skill_names_the_board_reference_skill_of_the_copier_project():
+    """ACC-CLI-257-BOARD-SKILL the References line names the board-reference skill of the copier-embedded-project and that it builds one HTML page per board, inside the under-30-line limit."""
+    skill = REPOSITORY_COPY.read_text(encoding="utf-8")
+    references = skill.split("## References", 1)[1]
+
+    assert f"{TEMPLATE_URL}/tree/main/.agents/skills/board-reference" in references
+    assert "`board-reference`" in references
+    assert len(skill.splitlines()) < 30

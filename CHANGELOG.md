@@ -2,6 +2,15 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.69] - 2026-10-22
+
+The agent skill names the remote board references and the skill that builds them, and the device shell starts the shell without a message of the day. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Changed
+
+- Agent skill: the References bullet of `SKILL.md` names the board references in the copier-embedded-project repository, `references/boards/<board>/<board>.html` at https://github.com/stellarshenson/copier-embedded-project/tree/main/references/boards, and the `board-reference` skill there, `.agents/skills/board-reference/SKILL.md`; the file stays under 30 lines
+- Device shell: `jupyterlab-device shell` starts the shell of the lab's terminals with `DISABLE_MOTD=1`, forced even when the caller set another value; `run` leaves the environment unchanged
+
 ## [1.0.65] - 2026-10-20
 
 The banner of the device shell is shorter when an agent already finds the agent skill. The extension is tested against simulated devices in the browser; no test used a physical board.

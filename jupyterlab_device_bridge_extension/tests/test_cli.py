@@ -1340,6 +1340,7 @@ echo "words $*"
 echo "shim $shim"
 echo "preload $LD_PRELOAD"
 echo "directory $JUPYTERLAB_DEVICE_SHIM_DIR"
+echo "motd ${DISABLE_MOTD-}"
 exit 7
 """
 
@@ -1367,10 +1368,10 @@ async def test_acc_cli_144_shell_becomes_the_shell_command_of_the_lab_terminals_
 
     pid = cli_run.children[-1].pid
     report = dict(line.split(" ", 1) for line in displayed.split("\n")
-                  if line.startswith(("pid ", "words ", "shim ", "preload ", "directory ")))
+                  if line.startswith(("pid ", "words ", "shim ", "preload ", "directory ", "motd ")))
     assert (status, piped) == (7, (None, b""))
     assert report == {"pid": str(pid), "words": "--login", "shim": "yes", "preload": str(shim_build.build()),
-                      "directory": os.path.join(device_dir, ".shim")}
+                      "directory": os.path.join(device_dir, ".shim"), "motd": "1"}
     assert "started" not in displayed, "the program that SHELL names did not start"
     assert registered == [({"pid": pid, "command": ["jupyterlab-device", "shell"]},
                            {"pid": pid, "program": "jupyterlab-device", "command": "jupyterlab-device shell",
@@ -1413,6 +1414,29 @@ async def test_acc_cli_144_shell_starts_nothing_when_the_server_reports_no_shell
     assert outcome.err == (
         f"{cli.PROG}: the server (device bridge 0.6.23) does not report the shell command of its "
         "terminals - restart JupyterLab, so that the server runs the version of this command\n")
+
+
+@pytest.mark.parametrize("value", [None, "0"], ids=["variable unset", "variable set to 0"])
+async def test_acc_cli_258_the_device_shell_sets_disable_motd(
+        value, cli_run, fake_tab, jp_serverapp, screen, tmp_path, monkeypatch):
+    """ACC-CLI-258-MOTD `shell` starts the shell command of the lab's terminals with `DISABLE_MOTD=1`, forced even when the caller set another value; `run` leaves the variable unchanged."""
+    launcher = tmp_path / "launch-shell.sh"
+    launcher.write_text(REPORTING_SHELL)
+    launcher.chmod(0o755)
+    terminal_shell(jp_serverapp, monkeypatch, str(launcher))
+    if value is None:
+        monkeypatch.delenv("DISABLE_MOTD", raising=False)
+    else:
+        monkeypatch.setenv("DISABLE_MOTD", value)
+    await attach_serial(fake_tab)
+
+    status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
+    motd = [line.split(" ", 1)[1] for line in displayed.split("\n") if line.startswith("motd ")]
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--",
+                            "sh", "-c", 'echo "motd ${DISABLE_MOTD-}"')
+
+    assert (status, motd) == (7, ["1"])
+    assert (outcome.status, outcome.out) == (0, f"motd {value or ''}\n".encode())
 
 
 def test_acc_cli_146_the_top_level_help_has_a_line_for_shell():
