@@ -1,1 +1,2 @@
 - 2026-10-17T17:16:04Z @kj acc-crit-device-bridge.md 295245b8 sha256:d4eceb449483e2d3232df85812b1d84657d3a417e2ba0b34bf99f3ec47e3cb22: rename the PROF category to Serial settings now that profiles are saved sets
+- 2026-10-23T13:11:02Z @kj acc-crit-device-bridge.md 6b9953db sha256:7536740e4a70b64453cb19c588e7f944e34048133a76dd8612dd93b7da314b61: remove three hand-written log lines that repeat the pm-tools edit log of the same second, approved by the Star Colonel

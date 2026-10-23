@@ -51,6 +51,10 @@ jest.mock('@jupyterlab/ui-components', () => ({
   LabIcon: class {
     constructor(readonly options: { name: string; svgstr: string }) {}
 
+    get name(): string {
+      return this.options.name;
+    }
+
     element(props: { container: HTMLElement }): HTMLElement {
       props.container.innerHTML = this.options.svgstr;
       return props.container;
@@ -2426,6 +2430,17 @@ describe('plugin: the default serial settings', () => {
     ]);
     expect(all.server.sockets).toHaveLength(1);
     expect(port.opens).toHaveLength(1);
+  });
+});
+
+describe('plugin: the entry of the Settings Editor', () => {
+  it('ACC-PANEL-260-PANEL the schema names the device icon of src/icons.ts as the icon of the Settings Editor entry', () => {
+    const schema = jest.requireActual('../../schema/plugin.json') as Record<
+      string,
+      unknown
+    >;
+
+    expect(schema['jupyter.lab.setting-icon']).toBe(deviceIcon.name);
   });
 });
 

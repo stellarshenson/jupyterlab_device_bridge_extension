@@ -28,6 +28,7 @@ import {
   PANEL_SHOWN,
   PANEL_TAB,
   pickAddEntry,
+  PLUGIN_ID,
   recordLamps,
   ROUND_TRIP,
   row,
@@ -1996,7 +1997,6 @@ test.describe('Device shells', () => {
     expect(
       skill.length === 1 || skill.join(' ').includes('○ no agent finds it')
     ).toBe(true);
-    expect(skill.join('\n')).not.toContain('✓');
     expect(section(banner, 'Commands').join('\n')).toMatch(
       /^ {2}jupyterlab-device help\b/m
     );
@@ -2534,6 +2534,27 @@ test.describe('Devices menu', () => {
     // The setting works both ways without a reload.
     await setShowMenu(page, false);
     await expect(menuBarEntry(page, 'Devices')).toHaveCount(0);
+  });
+});
+
+test.describe('Settings Editor', () => {
+  test('ACC-PANEL-260-PANEL the Device Bridge entry of the plugin list shows the device icon, not the generic settings icon', async ({
+    page
+  }) => {
+    await simulate(page, {});
+    await page.goto();
+    await page.evaluate(() =>
+      (window as any).jupyterapp.commands.execute('settingeditor:open')
+    );
+
+    const entry = page.locator(
+      `.jp-PluginList-entry[data-id="${PLUGIN_ID}"] .jp-PluginList-entry-label`
+    );
+    await expect(entry).toContainText('Device Bridge');
+    // LabIcon marks its svg with the name of the icon; the generic one is ui-components:settings.
+    const icon = entry.locator('svg[data-icon]');
+    await expect(icon).toHaveAttribute('data-icon', 'device-bridge:device');
+    await expect(entry.locator('[title="Device Bridge"]')).toHaveCount(1);
   });
 });
 

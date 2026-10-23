@@ -71,34 +71,31 @@ def skill_folder(prefix: str = sys.prefix) -> Path:
     return Path(prefix) / "share" / "jupyter" / "agents" / "skills" / SKILL
 
 
-def skill_state(prefix: str = sys.prefix, home: Path | None = None) -> tuple[Path | None, str | None]:
-    """Where the agent skill is, and how an agent finds it.
+def skill_state(prefix: str = sys.prefix, home: Path | None = None) -> tuple[Path | None, bool]:
+    """Where the agent skill is, and whether an agent finds it.
 
     Returns:
-        The SKILL.md that the wheel installed under `prefix`, None when it is not there; and
-        `linked in <folder>` or `listed by <skill>`, None when no agent finds it.
+        The SKILL.md that the wheel installed under `prefix`, None when it is not there; and True
+        when a link in ~/.agents/skills or ~/.claude/skills or a skill there that names the folder
+        lets an agent find it.
     """
     folder = skill_folder(prefix)
     if not (folder / "SKILL.md").is_file():
-        return None, None
+        return None, False
     home = Path.home() if home is None else home
     bases = [home / ".agents" / "skills", home / ".claude" / "skills"]
     for base in bases:
         if (base / SKILL / "SKILL.md").is_file():
-            return folder / "SKILL.md", f"linked in {_tilde(base, home)}"
+            return folder / "SKILL.md", True
     # A skill that lists the skills of the installed packages, such as GalaxaLab's, names the path.
     for base in bases:
         for other in sorted(base.glob("*/SKILL.md")):
             try:
                 if str(folder) in other.read_text(errors="replace"):
-                    return folder / "SKILL.md", f"listed by {_tilde(other.parent, home)}"
+                    return folder / "SKILL.md", True
             except OSError:
                 continue
-    return folder / "SKILL.md", None
-
-
-def _tilde(path: Path, home: Path) -> str:
-    return f"~/{path.relative_to(home)}" if path.is_relative_to(home) else str(path)
+    return folder / "SKILL.md", False
 
 
 def render(environment, known_tools: list[str], devices: list[tuple[str, str, str]] | None,
@@ -187,10 +184,10 @@ def _pairs(pairs: list, width: int, indent: int) -> list:
 
 
 def _skill_lines(width: int) -> list:
-    path, finder = skill_state()
+    path, found = skill_state()
     if path is None:
         return _pairs([([(INDENT + SKILL, "text")], [(f"not installed under {sys.prefix}", "amber")])], width, 4)
-    if finder:
+    if found:
         return [[(INDENT + str(path), "device")]]
     return _pairs([([(INDENT + SKILL, "text")], [("○ no agent finds it", "amber")])], width, 4) + [
         [(INDENT + str(path), "device")],

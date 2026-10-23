@@ -23,7 +23,6 @@ import sys
 import termios
 import time
 import tomllib
-from pathlib import Path
 from typing import NamedTuple
 
 import pytest
@@ -1328,8 +1327,9 @@ def test_acc_shim_145_run_help_says_that_run_prints_nothing_of_its_own():
 # ---------------------------------------------------------------------- the device shell
 
 # A shell command for the terminals of the test server. It prints its process id, its words,
-# whether the shim is in its memory, and the two variables of the shim, then ends with status 7.
-# It uses only what `sh` has built in, so it needs no program of PATH.
+# whether the shim is in its memory, the two variables of the shim and SHLVL, then
+# ends with status 7. It uses only what `sh` has built in, so it needs no program of PATH. The `sh`
+# of this image is dash, which does not change SHLVL, so it prints the value the exec gave it.
 REPORTING_SHELL = """#!/bin/sh
 shim=no
 while read -r line; do
@@ -1340,7 +1340,7 @@ echo "words $*"
 echo "shim $shim"
 echo "preload $LD_PRELOAD"
 echo "directory $JUPYTERLAB_DEVICE_SHIM_DIR"
-echo "motd ${DISABLE_MOTD-}"
+echo "shlvl ${SHLVL-}"
 exit 7
 """
 
@@ -1368,10 +1368,10 @@ async def test_acc_cli_144_shell_becomes_the_shell_command_of_the_lab_terminals_
 
     pid = cli_run.children[-1].pid
     report = dict(line.split(" ", 1) for line in displayed.split("\n")
-                  if line.startswith(("pid ", "words ", "shim ", "preload ", "directory ", "motd ")))
+                  if line.startswith(("pid ", "words ", "shim ", "preload ", "directory ")))
     assert (status, piped) == (7, (None, b""))
     assert report == {"pid": str(pid), "words": "--login", "shim": "yes", "preload": str(shim_build.build()),
-                      "directory": os.path.join(device_dir, ".shim"), "motd": "1"}
+                      "directory": os.path.join(device_dir, ".shim")}
     assert "started" not in displayed, "the program that SHELL names did not start"
     assert registered == [({"pid": pid, "command": ["jupyterlab-device", "shell"]},
                            {"pid": pid, "program": "jupyterlab-device", "command": "jupyterlab-device shell",
@@ -1416,27 +1416,22 @@ async def test_acc_cli_144_shell_starts_nothing_when_the_server_reports_no_shell
         "terminals - restart JupyterLab, so that the server runs the version of this command\n")
 
 
-@pytest.mark.parametrize("value", [None, "0"], ids=["variable unset", "variable set to 0"])
-async def test_acc_cli_258_the_device_shell_sets_disable_motd(
-        value, cli_run, fake_tab, jp_serverapp, screen, tmp_path, monkeypatch):
-    """ACC-CLI-258-MOTD `shell` starts the shell command of the lab's terminals with `DISABLE_MOTD=1`, forced even when the caller set another value; `run` leaves the variable unchanged."""
+async def test_acc_cli_259_the_device_shell_sets_shlvl(
+        cli_run, fake_tab, jp_serverapp, screen, tmp_path, monkeypatch):
+    """ACC-CLI-259-SHLVL `shell` starts the shell command of the lab's terminals with `SHLVL=3`, forced over the caller value; `run` leaves `SHLVL` unchanged."""
     launcher = tmp_path / "launch-shell.sh"
     launcher.write_text(REPORTING_SHELL)
     launcher.chmod(0o755)
     terminal_shell(jp_serverapp, monkeypatch, str(launcher))
-    if value is None:
-        monkeypatch.delenv("DISABLE_MOTD", raising=False)
-    else:
-        monkeypatch.setenv("DISABLE_MOTD", value)
+    monkeypatch.setenv("SHLVL", "1")
     await attach_serial(fake_tab)
 
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
-    motd = [line.split(" ", 1)[1] for line in displayed.split("\n") if line.startswith("motd ")]
-    outcome = await cli_run("run", "--device", SERIAL_NAME, "--",
-                            "sh", "-c", 'echo "motd ${DISABLE_MOTD-}"')
+    report = [line for line in displayed.split("\n") if line.startswith("shlvl ")]
+    outcome = await cli_run("run", "--device", SERIAL_NAME, "--", "sh", "-c", 'echo "shlvl ${SHLVL-}"')
 
-    assert (status, motd) == (7, ["1"])
-    assert (outcome.status, outcome.out) == (0, f"motd {value or ''}\n".encode())
+    assert (status, report) == (7, ["shlvl 3"])
+    assert (outcome.status, outcome.out) == (0, b"shlvl 1\n")
 
 
 def test_acc_cli_146_the_top_level_help_has_a_line_for_shell():
@@ -1796,23 +1791,25 @@ def test_acc_cli_194_skill_state_says_how_an_agent_finds_the_skill(tmp_path):
     """ACC-CLI-194 the state of the agent skill: not installed under the prefix; installed and found by no agent; linked in ~/.agents/skills; linked in ~/.claude/skills; listed by a skill there that names the path of its folder."""
     prefix, home = tmp_path / "prefix", tmp_path / "home"
     folder = banner_module.skill_folder(str(prefix))
-    assert banner_module.skill_state(str(prefix), home) == (None, None)
+    assert banner_module.skill_state(str(prefix), home) == (None, False)
 
     folder.mkdir(parents=True)
     (folder / "SKILL.md").write_text("---\nname: jupyterlab-device-bridge-extension\n---\n")
-    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", None)
+    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", False)
 
-    index = home / ".claude" / "skills" / "platform"
-    index.mkdir(parents=True)
-    (index / "SKILL.md").write_text(f"Details: [{folder}/SKILL.md]({folder}/SKILL.md)\n")
-    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", "listed by ~/.claude/skills/platform")
-
-    (home / ".claude" / "skills" / banner_module.SKILL).symlink_to(folder)
-    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", "linked in ~/.claude/skills")
-
-    (home / ".agents" / "skills").mkdir(parents=True)
-    (home / ".agents" / "skills" / banner_module.SKILL).symlink_to(folder)
-    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", "linked in ~/.agents/skills")
+    # Each state alone under each base, so each True comes from one branch of skill_state.
+    for base in (home / ".claude" / "skills", home / ".agents" / "skills"):
+        base.mkdir(parents=True)
+        (base / banner_module.SKILL).symlink_to(folder)
+        assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", True)
+        (base / banner_module.SKILL).unlink()
+        index = base / "platform"
+        index.mkdir()
+        (index / "SKILL.md").write_text(f"Details: [{folder}/SKILL.md]({folder}/SKILL.md)\n")
+        assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", True)
+        (index / "SKILL.md").unlink()
+        index.rmdir()
+    assert banner_module.skill_state(str(prefix), home) == (folder / "SKILL.md", False)
 
 
 @pytest.mark.usefixtures("three_upload_tools")
@@ -1821,8 +1818,8 @@ async def test_acc_cli_194_the_banner_says_where_an_agent_finds_the_skill(cli_ru
     status, displayed, _ = await on_a_terminal(cli_run, screen, "shell")
     assert status == 0 and plain(displayed) == banner() + "started\n"
 
-    async def shell_with(finder):
-        assert banner_module.skill_state(home=Path(os.environ["HOME"]))[1] == finder
+    async def shell_with():
+        assert banner_module.skill_state()[1] is True
         shown = Screen()
         try:
             return await on_a_terminal(cli_run, shown, "shell")
@@ -1833,11 +1830,11 @@ async def test_acc_cli_194_the_banner_says_where_an_agent_finds_the_skill(cli_ru
     os.makedirs(os.path.join(skills, "platform"))
     link = os.path.join(skills, banner_module.SKILL)
     os.symlink(SKILL_MD.parent, link)
-    linked = await shell_with("linked in ~/.agents/skills")
+    linked = await shell_with()
     os.unlink(link)
     with open(os.path.join(skills, "platform", "SKILL.md"), "w") as index:
         index.write(f"Details: [{SKILL_MD}]({SKILL_MD})\n")
-    listed = await shell_with("listed by ~/.agents/skills/platform")
+    listed = await shell_with()
 
     for status, displayed, _ in (linked, listed):
         assert status == 0

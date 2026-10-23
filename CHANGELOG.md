@@ -2,6 +2,18 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.75] - 2026-10-23
+
+The device shell starts the lab's shell without the image's welcome text, and the extension's entry in the Settings Editor shows its own icon. The extension is tested against simulated devices in the browser; no test used a physical board.
+
+### Added
+
+- Settings Editor: the Device Bridge entry in the plugin list of Settings → Settings Editor shows the extension's USB device icon, the icon of the Devices panel tab, in place of the generic settings icon
+
+### Changed
+
+- Device shell: `jupyterlab-device shell` starts the shell of the lab's terminals with `SHLVL=3` in place of `DISABLE_MOTD=1`, which no startup file of the image reads. An interactive fish or bash raises it to 4, and the image's startup files print the welcome text, the message of the day and the GPU table only at `SHLVL` 3 or below. The value is forced over the caller's; `run` leaves the environment unchanged
+
 ## [1.0.69] - 2026-10-22
 
 The agent skill names the remote board references and the skill that builds them, and the device shell starts the shell without a message of the day. The extension is tested against simulated devices in the browser; no test used a physical board.

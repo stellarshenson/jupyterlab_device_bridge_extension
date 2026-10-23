@@ -14,6 +14,8 @@
     ]
   },
   "title": "Device Bridge",
+  "jupyter.lab.setting-icon": "device-bridge:device",
+  "jupyter.lab.setting-icon-label": "Device Bridge",
   "description": "Settings of the device bridge, which gives programs in the container access to serial ports and USB devices of the computer where the browser runs.",
   "type": "object",
   "properties": {
