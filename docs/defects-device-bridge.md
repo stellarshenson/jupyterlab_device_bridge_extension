@@ -76,6 +76,13 @@ The byte path between a tool, the virtual serial device and the port in the brow
   - root-cause: 2026-10-17T22:38:12Z @kj closePort returns before `device.close()` when `entry.opened` is false, so a port the browser still holds open is dropped without closing
   - log: 2026-10-17T22:38:12Z @kj added; reason: the body carries the symptom, the cause, the required cleanup and the file
   - log: 2026-10-17T23:35:58Z @kj closed; reason: the evidence names both regression tests and their run logs
+- [x] `DEF-SERIAL-30-HOLDER-DEVPTS` **Holder scan names a process of another devpts instance** - MEDIUM; with a process in a sandbox that has its own devpts instance holding a pty of the same number, list, status and terminal name that process as the holder of the device, and terminal refuses the device
+  - evidence: pytest test_vserial.py::test_def_serial_30_holder_devpts_a_pty_of_another_instance_is_not_the_holder red without the fix, green with it; a pty in a private devpts instance made with unshare read as /dev/pts/0 and find_holder named it before the fix and the holder of this instance after it; Jest 301, pytest 615, Galata 106 passed
+  - repro: pytest jupyterlab_device_bridge_extension/tests/test_vserial.py -k holder_devpts; live: make test while a bubblewrap Galata run holds a same-numbered pty
+  - test-tags: UNIT
+  - root-cause: 2026-10-30T21:53:11Z @kj find_holder compared the link text of /proc/<pid>/fd, which reads /dev/pts/N for every devpts instance; bubblewrap --dev /dev makes a private instance
+  - log: 2026-10-30T21:53:11Z @kj added
+  - log: 2026-10-30T22:15:37Z @kj closed
 
 ## Preload shim `SHIM`
 

@@ -1,7 +1,7 @@
 # jupyterlab_device_bridge_extension
 
 [![GitHub Actions](https://github.com/stellarshenson/jupyterlab_device_bridge_extension/actions/workflows/build.yml/badge.svg)](https://github.com/stellarshenson/jupyterlab_device_bridge_extension/actions/workflows/build.yml)
-[![npm version](https://img.shields.io/npm/v/jupyterlab_device_bridge_extension.svg)](https://www.npmjs.com/package/jupyterlab_device_bridge_extension)
+[![npm version](https://img.shields.io/npm/v/@stellarshenson/jupyterlab-device-bridge-extension.svg)](https://www.npmjs.com/package/@stellarshenson/jupyterlab-device-bridge-extension)
 [![PyPI version](https://img.shields.io/pypi/v/jupyterlab-device-bridge-extension.svg)](https://pypi.org/project/jupyterlab-device-bridge-extension/)
 [![Total PyPI downloads](https://static.pepy.tech/badge/jupyterlab-device-bridge-extension)](https://pepy.tech/project/jupyterlab-device-bridge-extension)
 [![JupyterLab 4](https://img.shields.io/badge/JupyterLab-4-orange.svg)](https://jupyterlab.readthedocs.io/en/stable/)

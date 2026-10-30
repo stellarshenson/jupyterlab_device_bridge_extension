@@ -35,7 +35,7 @@ import { HELP_MARKDOWN } from './help';
 import { deviceIcon } from './icons';
 import type { IDeviceTable, ISerialDefaults } from './protocol';
 
-const PLUGIN_ID = 'jupyterlab_device_bridge_extension:plugin';
+const PLUGIN_ID = '@stellarshenson/jupyterlab-device-bridge-extension:plugin';
 const STATUS_ID = 'jupyterlab_device_bridge_extension:status';
 const MENU_ID = 'jp-mainmenu-devices';
 const CATEGORY = 'Devices';
@@ -290,7 +290,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
     restorer: ILayoutRestorer | null
   ): Promise<void> => {
     console.log(
-      'JupyterLab extension jupyterlab_device_bridge_extension is activated!'
+      'JupyterLab extension @stellarshenson/jupyterlab-device-bridge-extension is activated!'
     );
     const { commands, shell, serviceManager } = app;
 

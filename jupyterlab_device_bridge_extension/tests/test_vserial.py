@@ -479,6 +479,21 @@ def test_acc_sec_95_a_directory_of_another_user_is_refused():
         ensure_dir("/usr")
 
 
+def test_def_serial_30_holder_devpts_a_pty_of_another_instance_is_not_the_holder(monkeypatch):
+    """DEF-SERIAL-30-HOLDER-DEVPTS a process with a pty of the same name in another devpts instance does not hold the slave; `/proc` shows only the name, so the other instance is played by a second pty read under the name of the first."""
+    master, slave = os.openpty()
+    other_master, other_slave = os.openpty()
+    name, other_name = os.ttyname(slave), os.ttyname(other_slave)
+    os.close(slave)
+    readlink = os.readlink
+    monkeypatch.setattr(os, "readlink", lambda path: name if readlink(path) == other_name else readlink(path))
+    try:
+        assert vserial.find_holder(name) is None
+    finally:
+        for fd in (master, other_master, other_slave):
+            os.close(fd)
+
+
 @pytest.mark.skipif(os.getuid() == 0, reason="the test proves the bridge for an unprivileged user")
 async def test_acc_sec_97_only_symlinks_sockets_and_ptys(serial, device_dir):
     """ACC-SEC-97 as an unprivileged user the bridge makes a pty, a symlink to it and a socket, and nothing else."""

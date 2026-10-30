@@ -34,7 +34,8 @@ export const STATUS_ITEM = '#jupyterlab-device-bridge-status';
 /** The tab of the Devices panel in a sidebar of the lab; absent while the panel is hidden. */
 export const PANEL_TAB = `.jp-SideBar .lm-TabBar-tab[data-id="${PANEL.slice(1)}"]`;
 
-export const PLUGIN_ID = 'jupyterlab_device_bridge_extension:plugin';
+export const PLUGIN_ID =
+  '@stellarshenson/jupyterlab-device-bridge-extension:plugin';
 const SETTINGS_PLUGIN = '@jupyterlab/apputils-extension:settings';
 
 /**

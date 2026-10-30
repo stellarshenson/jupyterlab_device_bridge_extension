@@ -180,7 +180,9 @@ def _holds(pid: int, slave_path: str) -> bool:
     for fd in os.listdir(fd_dir):
         # A descriptor that the process closed meanwhile cannot be read.
         with contextlib.suppress(OSError):
-            if os.readlink(f"{fd_dir}/{fd}") == slave_path:
+            link = f"{fd_dir}/{fd}"
+            # A pty of another devpts instance, as in a bubblewrap sandbox, reads as the same name.
+            if os.readlink(link) == slave_path and os.path.samefile(link, slave_path):
                 return True
     return False
 

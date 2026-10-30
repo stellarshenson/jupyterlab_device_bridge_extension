@@ -44,7 +44,7 @@ class DeviceBridge(Configurable):
 def _jupyter_labextension_paths():
     return [{
         "src": "labextension",
-        "dest": "jupyterlab_device_bridge_extension"
+        "dest": "@stellarshenson/jupyterlab-device-bridge-extension"
     }]
 
 

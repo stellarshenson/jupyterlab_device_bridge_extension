@@ -562,7 +562,9 @@ describe('plugin: commands, palette and panel', () => {
       SHOW_PANEL
     ];
 
-    expect(plugin.id).toBe('jupyterlab_device_bridge_extension:plugin');
+    expect(plugin.id).toBe(
+      '@stellarshenson/jupyterlab-device-bridge-extension:plugin'
+    );
     expect(plugin.autoStart).toBe(true);
     expect(plugin.optional).toEqual([
       'ICommandPalette',
@@ -572,7 +574,7 @@ describe('plugin: commands, palette and panel', () => {
       'ILayoutRestorer'
     ]);
     expect(console.log).toHaveBeenCalledWith(
-      'JupyterLab extension jupyterlab_device_bridge_extension is activated!'
+      'JupyterLab extension @stellarshenson/jupyterlab-device-bridge-extension is activated!'
     );
     expect(ids.map(id => all.commands.hasCommand(id))).toEqual([
       true,

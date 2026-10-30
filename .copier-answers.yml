@@ -8,7 +8,7 @@ has_ai_rules: false
 has_binder: false
 has_settings: true
 kind: frontend-and-server
-labextension_name: jupyterlab_device_bridge_extension
+labextension_name: '@stellarshenson/jupyterlab-device-bridge-extension'
 project_short_description: Bridge serial (COM) ports and USB devices of the browser's
     computer into the JupyterLab container, so terminal programs and AI agents can
     program and read microcontroller boards
