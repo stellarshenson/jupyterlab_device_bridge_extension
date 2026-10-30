@@ -45,8 +45,8 @@ dev = [
     "jupyter-builder>=1.2,<2",
 ]
 test = [
-    "coverage>=7.16,<8",
-    "pytest>=9.1,<10",
+    "coverage>=7.17,<8",
+    "pytest>=9.2,<10",
     "pytest-asyncio>=1.4,<2",
     "pytest-cov>=7.1,<8",
     "pytest-jupyter[server]>=0.11,<1",
