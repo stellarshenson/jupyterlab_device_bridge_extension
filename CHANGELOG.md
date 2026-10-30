@@ -2,6 +2,16 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.0.80] - 2026-10-30
+
+### Changed
+
+- Upgrade to extension template v4.6.5 and Makefile 1.46
+
+### Fixed
+
+- Take the scoped @stellarshenson/jupyterlab-device-bridge-extension npm name
+
 ## [1.0.75] - 2026-10-23
 
 The device shell starts the lab's shell without the image's welcome text, and the extension's entry in the Settings Editor shows its own icon. The extension is tested against simulated devices in the browser; no test used a physical board.
