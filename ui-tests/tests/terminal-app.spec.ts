@@ -283,6 +283,7 @@ test('ACC-TERM-198 in a lab terminal Ctrl+Y opens the key help of the serial ter
     .poll(() => terminalText(page), { timeout: ROUND_TRIP })
     .toContain('Esc or ^y closes this list');
   const help = await terminalText(page);
+  expect(help).toContain('Keys of the serial terminal');
   expect(help).toMatch(/PgUp +scroll the traffic view up/);
   expect(help).toMatch(/PgDn +scroll the traffic view down/);
   expect(help).toMatch(/\^c +send the byte 0x03 when no text is selected/);
