@@ -2300,9 +2300,13 @@ function shippedWorkerText(): string {
   const vm = node<{ runInNewContext(code: string, context: object): void }>(
     'vm'
   );
-  const tsconfig = node<{ compilerOptions: object }>('../../tsconfig.json');
+  // tsc's own reader: tsconfig.json holds a comment, which require refuses
+  const { config } = ts.readConfigFile(
+    `${__dirname}/../../tsconfig.json`,
+    file => fs.readFileSync(file, 'utf8')
+  );
   const { options } = ts.convertCompilerOptionsFromJson(
-    tsconfig.compilerOptions,
+    config.compilerOptions,
     __dirname
   );
   const { outputText } = ts.transpileModule(

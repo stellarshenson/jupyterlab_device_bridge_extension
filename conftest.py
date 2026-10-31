@@ -33,14 +33,14 @@ def settings_file(device_dir):
 
 
 @pytest.fixture
-def jp_server_config(jp_server_config, device_dir, settings_file):
+def jp_server_config(jp_server_config, device_dir, settings_file):  # template-sync: keep
     return {
         "ServerApp": {
             "jpserver_extensions": {"jupyterlab_device_bridge_extension": True},
             # Test against a server which requires authentication on all endpoints
             "allow_unauthenticated_access": False,
         },
-        "DeviceBridge": {"device_dir": device_dir, "settings_file": settings_file},
+        "DeviceBridge": {"device_dir": device_dir, "settings_file": settings_file},  # template-sync: keep
     }
 
 

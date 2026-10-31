@@ -228,6 +228,7 @@ GitHub Actions workflows, and tests that fail only on a runner
   - root-cause: 2026-10-13T10:12:16Z @kj pypiserver keeps at most 102400 bytes of one upload in memory; the README is the long description of the wheel, 48875 characters; with the wheel of 0.6.24 the largest description that passes has 46516
   - log: 2026-10-13T10:12:16Z @kj added
   - log: 2026-10-13T10:30:23Z @kj closed
+  - log: 2026-10-31T16:43:18Z @kj steps_to_skip publish-assets removed from check-release.yml: the before-publish-assets hook in pyproject.toml raises MEMFILE_MAX of pypiserver, so the trial upload runs again
 - [x] `DEF-CI-23` **Three pytest tests fail on the GitHub runner** - MEDIUM; the Build workflow of commit d5e79cf failed: test_acc_shim_176 and test_acc_shim_181 raised KeyError CONDA_EXE, test_acc_term_166 saw the hex line of the first RX message without its 0a
   - evidence: GitHub Actions of commit 2b44f38: Build 38899679456 success (build with pytest, test_isolated, Integration tests, Check Links), Check Release 38899679435 success; local: test_acc_term_166 fails at an 80-column screen with the old view helper and passes with the new one
   - test-tags: CI
