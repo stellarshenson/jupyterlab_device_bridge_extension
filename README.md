@@ -485,7 +485,7 @@ The first version does not have:
 ## Requirements
 
 - JupyterLab >= 4.6 and Jupyter Server >= 2.21
-- Python >= 3.10
+- Python >= 3.12
 - The Jupyter server on Linux: the server extension uses ptys and `/proc`
 - A browser with the Web Serial and WebUSB interfaces; from knowledge these are desktop Chrome and Edge
 - The lab opened over HTTPS or at `localhost`; on a plain `http://` address that is not localhost the browser does not offer these interfaces
