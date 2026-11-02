@@ -180,3 +180,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 59. **Task - Link check ignored the PayPal donate URL** (v1.0.85): the Check Links job of Build went red at Makefile 1.48 commit 222e7c1 on a 403 from the PayPal donate link in `README.md`<br>
     **Result**: The failing step was `check-links@v1`; the job log read `https://www.paypal.com/donate/?hosted_button_id=B4KPBJDLLXTSA: 403: Forbidden`, a bot block on a live page, not a dead link. The URL then joined the `ignore_links` list of `.github/workflows/build.yml`, the same entry five sibling extensions already carry, so the check stays meaningful for every other link. Commit f5b8f89; Build 41436350213 and Check Release 41436350355 green.
+
+60. **Task - Build lifecycle brought to Makefile 1.48** (v1.0.85): the canonical Makefile went to every extension on 2026-11-02<br>
+    **Result**: `Makefile` is 1.48 verbatim, byte-identical to `@utils/jupyterlab-extensions/Makefile`; `mrproper` now also removes `tmp`, `logs`, `.venv`, `graphify-out`, `coverage` and `.pytest_cache`, and `install` and `publish` are `.NOTPARALLEL`. The cleaned tree carries the tag `CHECKPOINT_JUPYTERLAB_4.6.5_UPGRADE_PORTED_1.0.85`. The same day's CI fix added the PayPal donate URL to the Check Links ignore list after the job rejected it with a 403.
