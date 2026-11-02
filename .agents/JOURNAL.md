@@ -177,3 +177,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 58. **Task - Key help test** (v1.0.85): made Galata test ACC-TERM-198 wait for the last line of the key help<br>
     **Result**: The test polled for the title of the help and then read the terminal, while the help still arrived in parts. CI failed once on the `^c` row, with the box ending before it, and passed on a rerun. The test now polls for `Esc or ^y closes this list`, the last line the app writes, and it still asserts the title of the help. It passes 5 of 5 with `--repeat-each 5` against the built wheel. Only the test changes, so this needs no release.
+
+59. **Task - Link check ignored the PayPal donate URL** (v1.0.85): the Check Links job of Build went red at Makefile 1.48 commit 222e7c1 on a 403 from the PayPal donate link in `README.md`<br>
+    **Result**: The failing step was `check-links@v1`; the job log read `https://www.paypal.com/donate/?hosted_button_id=B4KPBJDLLXTSA: 403: Forbidden`, a bot block on a live page, not a dead link. The URL then joined the `ignore_links` list of `.github/workflows/build.yml`, the same entry five sibling extensions already carry, so the check stays meaningful for every other link. Commit f5b8f89; Build 41436350213 and Check Release 41436350355 green.
